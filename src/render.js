@@ -25,12 +25,13 @@ function renderGame(ctx, w, h, t) {
   ctx.textAlign = 'center'; ctx.font = FONT(15);
   G.feed.forEach((f, i) => {
     ctx.globalAlpha = Math.min(1, f.t);
-    const y = (G.opts && G.opts.controls !== false ? 70 : 22) + i * 22;
+    const y = (G.opts && G.opts.controls !== false ? 84 : 22) + (G.mode === 'dm' ? 38 : 0) + i * 22;
     const tw = ctx.measureText(f.text).width + 20;
     ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(w / 2 - tw / 2, y - 15, tw, 21);
     ctx.fillStyle = f.color; ctx.fillText(f.text, w / 2, y);
   });
   ctx.globalAlpha = 1;
+  if (G.mode === 'dm') drawDmBoard(ctx, w);
   if (G.over && G.overT > 0.8) renderResults(ctx, w, h);
 }
 
@@ -61,13 +62,14 @@ function renderView(ctx, vp, p, t) {
   const x0 = cx - 120, x1 = cx + viewW + 120;
   const inX = (a, b) => b >= x0 && a <= x1;
 
-  for (const b of W.backs) if (inX(b.x, b.x + b.w)) drawBack(ctx, b);
+  for (const b of W.backs) if (inX(b.x, b.x + b.w)) { drawBack(ctx, b); if (b.net) drawNet(ctx, b.x + 8, b.y + 6, b.w - 16, Math.min(b.h - 12, 2 * FLOOR_H), b.x, true); }
   for (const tr of W.trees) if (inX(tr.x - 60, tr.x + 60)) drawTrunk(ctx, tr);
   for (const d of W.decor) if (d.type === 'road' && inX(d.x, d.x + d.w)) drawDecor(ctx, d, W);
-  for (const sp of W.hides) if (sp.type !== 'pipe' && inX(sp.x - 40, sp.x + 40)) drawHideBack(ctx, sp);
+  const netHidden = (sp) => sp.net && isDrone && !droneHovering(drone, sp.x, sp.y - 10);
+  for (const sp of W.hides) if (sp.type !== 'pipe' && inX(sp.x - 40, sp.x + 40) && !netHidden(sp)) drawHideBack(ctx, sp);
   drawGround(ctx, W, x0, x1, cy + viewH + 20, theme);
   for (const sp of W.hides) if (sp.type === 'pipe' && inX(sp.x1 - 30, sp.x2 + 30)) drawPipe(ctx, sp);
-  for (const sp of W.hides) if (sp.type !== 'pipe' && inX(sp.x - 40, sp.x + 40)) drawHideFront(ctx, sp);
+  for (const sp of W.hides) if (sp.type !== 'pipe' && inX(sp.x - 40, sp.x + 40) && !netHidden(sp)) { drawHideFront(ctx, sp); if (sp.net) drawNet(ctx, sp.x - 30, sp.y - (sp.type === 'bunker' ? 36 : 16), 60, sp.type === 'bunker' ? 36 : 16, sp.x); }
   for (const d of W.decor) if (d.type !== 'road' && inX(d.x - 20, d.x + 80)) drawDecor(ctx, d, W);
   for (const pd of W.pads) if (inX(pd.x - 60, pd.x + 60)) drawPad(ctx, pd, t);
   for (const sd of solidsNear(W, x0, x1)) drawSolid(ctx, sd, t);
@@ -397,6 +399,22 @@ function drawLadder(ctx, l) {
   ctx.stroke();
 }
 const PICKUP_STYLE = { rifle: ['#3b4a2f', 'АК'], shotgun: ['#5a3d24', 'ДР'], reb: ['#5b3b8a', 'РЕБ'], medkit: ['#e8e8e8', '+'], fuel: ['#a8322d', 'ПАЛ'], armor: ['#4a5568', 'БР'] };
+// маскувальна сітка: зелено-коричнева сітка з «листям»
+function drawNet(ctx, x, y, w, h, seed, light) {
+  ctx.save();
+  ctx.globalAlpha = light ? 0.55 : 0.9;
+  ctx.strokeStyle = '#4b5a2c'; ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  for (let i = 0; i <= w; i += 7) { ctx.moveTo(x + i, y); ctx.lineTo(x + i - 6, y + h); }
+  for (let i = 0; i <= w; i += 7) { ctx.moveTo(x + i, y); ctx.lineTo(x + i + 6, y + h); }
+  ctx.stroke();
+  const n = Math.max(6, (w * h) / 90);
+  for (let i = 0; i < n; i++) {
+    ctx.fillStyle = i % 3 === 0 ? '#6b5a35' : i % 3 === 1 ? '#3f5225' : '#58693a';
+    ctx.fillRect(x + hash(seed + i * 1.3) * w - 3, y + hash(seed + i * 2.7) * h - 2, 6, 4);
+  }
+  ctx.restore();
+}
 function drawMine(ctx, m, t) {
   ctx.fillStyle = '#3f4a25';
   ctx.beginPath(); ctx.ellipse(m.x, m.y - 2, 7, 3.2, 0, 0, 7); ctx.fill();
@@ -505,7 +523,7 @@ function drawRider(ctx, v, h) {
 // ---------- Людина ----------
 function drawHuman(ctx, h, t, alpha) {
   ctx.save();
-  ctx.globalAlpha = alpha;
+  ctx.globalAlpha = h.protT > 0 ? alpha * (0.45 + 0.35 * Math.sin(t * 20)) : alpha; // мерехтить, поки діє захист після відновлення
   ctx.translate(h.x, h.y);
   ctx.scale(h.facing, 1);
   const uni = h.dead ? '#4a4a40' : h.hurtT > 0 ? '#c33' : '#556b2f';
@@ -622,7 +640,7 @@ function drawHumanHud(ctx, vp, p, t) {
   const sc = clamp(vp.h / 320, 0.75, 1.2);
   ctx.save(); ctx.translate(vp.x, vp.y); ctx.scale(sc, sc);
   const vw = vp.w / sc, vh = vp.h / sc;
-  panel(ctx, 8, 8, 230, 146);
+  panel(ctx, 8, 8, 230, 164);
   ctx.textAlign = 'left'; ctx.font = FONT(14); ctx.fillStyle = p.color;
   ctx.fillText(p.name + ' · людина', 16, 26);
   ctx.font = FONT(12, '600');
@@ -631,6 +649,8 @@ function drawHumanHud(ctx, vp, p, t) {
   if (h.alT > 0) { ctx.fillStyle = '#ffd75a'; ctx.fillText('АЛЬОША: ' + Math.ceil(h.alT) + ' с — автонаведення', 16, 145); }
   else if (h.alCharges > 0) { ctx.fillStyle = (t * 3 | 0) % 2 ? '#ffd75a' : '#fff'; ctx.fillText('«Альоша» готовий: [' + c.label('aim') + '+' + c.label('special') + ']', 16, 145); }
   else { ctx.fillStyle = '#aaa'; ctx.fillText('Дрони збито/пережито: ' + Math.min(h.beaten, ALIOSHA_NEED) + ' / ' + ALIOSHA_NEED, 16, 145); }
+  ctx.fillStyle = '#fff';
+  ctx.fillText((G.mode === 'dm' ? 'Рахунок: ' + p.score : 'Життя: ' + '♥'.repeat(Math.max(0, h.lives)) + '♡'.repeat(Math.max(0, HUMAN_LIVES - h.lives))) + '    Сітки: ' + h.nets, 16, 163);
   bar(ctx, 16, 34, 194, 11, h.hp / 100, h.hp > 35 ? '#6fcf97' : '#eb5757');
   bar(ctx, 16, 49, 194, 6, h.stamina, h.exhausted ? '#a66' : '#f2c94c');
   ctx.font = FONT(12, '600'); ctx.fillStyle = '#fff';
@@ -703,7 +723,10 @@ function drawHumanHud(ctx, vp, p, t) {
     panel(ctx, vw / 2 - tw / 2, vh - 40, tw, 28);
     ctx.fillStyle = '#fff'; ctx.fillText(tip, vw / 2, vh - 21);
   }
-  if (h.dead) centerText(ctx, 'ЗАГИНУВ', vw / 2, vh / 2, 34, '#eb5757');
+  if (h.dead && h.respawnT > 0) {
+    centerText(ctx, 'ЗАГИНУВ', vw / 2, vh / 2 - 16, 34, '#eb5757');
+    centerText(ctx, 'Відновлення через ' + Math.ceil(h.respawnT) + ' с — ' + (h.spawn ? 'там, де натягнув сітку' : 'зі старту'), vw / 2, vh / 2 + 20, 16, '#fff');
+  } else if (h.dead) centerText(ctx, 'ЗАГИНУВ', vw / 2, vh / 2, 34, '#eb5757');
   else if (h.saved) centerText(ctx, 'У БЕЗПЕЦІ', vw / 2, vh / 2, 34, '#6fcf97');
   else if (G.time < LAUNCH_DELAY) centerText(ctx, 'Біжи до укриття →  дрони злітають через ' + Math.ceil(LAUNCH_DELAY - G.time), vw / 2, vh * 0.3, 18, '#fff');
   if (h.hurtT > 0) { ctx.fillStyle = 'rgba(200,0,0,' + h.hurtT * 0.6 + ')'; ctx.fillRect(0, 0, vw, vh); }
@@ -766,7 +789,7 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
   ctx.textAlign = 'left'; ctx.font = FONT(14); ctx.fillStyle = p.color;
   ctx.fillText(p.name + ' · FPV-дрон', 16, 26);
   ctx.font = FONT(12, '600'); ctx.fillStyle = '#fff';
-  ctx.fillText('Дрони: ' + (dp.left + (d ? 1 : 0)) + ' / ' + dp.total + '    Старт: №' + G.W.pads[dp.pad].n + ' з ' + G.W.pads.length, 16, 44);
+  ctx.fillText('Дронів витрачено: ' + dp.used + (G.mode === 'dm' ? '   Рахунок: ' + p.score : '') + '    Старт №' + G.W.pads[dp.pad].n + '/' + G.W.pads.length, 16, 44);
   if (d) {
     ctx.fillText('АКБ', 16, 62); bar(ctx, 46, 53, 120, 10, d.battery / DRONE_BATTERY, d.battery > 20 ? '#6fcf97' : '#eb5757');
     ctx.fillStyle = d.landed ? '#8fd' : '#fff';
@@ -837,10 +860,11 @@ function humanControls(h, c) {
   if (h.vehicle) return h.seat === 'driver'
     ? [L('left') + L('right') + ' їхати', L('interact') + ' вийти', L('special') + ' РЕБ']
     : [L('up') + L('down') + ' кут', L('left') + L('right') + ' бік', L('fire') + ' кулемет', L('interact') + ' вийти'];
-  if (h.hidden) return h.hidden.type === 'pipe' ? [L('left') + L('right') + ' повзти', L('interact') + ' вилізти біля краю'] : [L('interact') + '/' + L('up') + ' вилізти', L('special') + ' РЕБ'];
+  if (h.hidden) return h.hidden.type === 'pipe' ? [L('left') + L('right') + ' повзти', L('interact') + ' вилізти біля краю'] : [L('interact') + '/' + L('up') + ' вилізти', L('special') + ' РЕБ'].concat(h.nets > 0 && !h.hidden.net ? [L('aim') + '+' + L('interact') + ' натягнути сітку'] : []);
   const it = [L('left') + L('right') + ' рух', L('up') + ' стрибок', L('down') + ' присісти / лягти (на бігу — кидок)', L('sprint') + ' біг',
     L('aim') + ' позиція', L('fire') + ' вогонь', L('interact') + ' дія', L('special') + ' РЕБ'];
   if (h.alCharges > 0 && h.alT <= 0) it.push(L('aim') + '+' + L('special') + ' Альоша');
+  if (h.nets > 0) it.push(L('aim') + '+' + L('interact') + ' сітка');
   return it;
 }
 function droneControls(d, c) {
@@ -852,12 +876,32 @@ function droneControls(d, c) {
 
 // ---------- Результати ----------
 function renderResults(ctx, w, h) {
-  ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(0, 0, w, h);
-  const win = G.over === 'humans';
-  centerText(ctx, win ? 'ЛЮДИ ВИЖИЛИ' : 'ДРОНИ ПЕРЕМОГЛИ', w / 2, h / 2 - 60, 46, win ? '#6fcf97' : '#eb5757');
-  centerText(ctx, G.overReason, w / 2, h / 2 - 18, 20, '#fff');
-  const saved = G.humans.filter((x) => x.saved).length, dead = G.humans.filter((x) => x.dead).length;
-  centerText(ctx, 'Врятовано: ' + saved + '   Загинуло: ' + dead + '   Дронів запущено: ' + G.stats.dronesUsed + '   Збито: ' + G.stats.shotDown + '   Час: ' + (G.time | 0) + ' с', w / 2, h / 2 + 20, 16, '#ddd');
-  if (G.overT > 2) centerText(ctx, 'Клацніть або натисніть Enter — до лобі', w / 2, h / 2 + 70, 18, '#f2c94c');
+  ctx.fillStyle = 'rgba(10,12,14,0.88)'; ctx.fillRect(0, 0, w, h);
+  const win = G.over === 'humans', draw = G.over === 'draw';
+  centerText(ctx, draw ? 'НІЧИЯ' : win ? 'ЛЮДИ ПЕРЕМОГЛИ' : 'ДРОНИ ПЕРЕМОГЛИ', w / 2, h / 2 - 90, 46, draw ? '#f2c94c' : win ? '#6fcf97' : '#eb5757');
+  centerText(ctx, G.overReason, w / 2, h / 2 - 50, 20, '#fff');
+  const nh = Math.max(1, G.humans.length), deaths = G.stats.deaths;
+  centerText(ctx, 'Дронів витрачено: ' + G.stats.dronesUsed + '   на одну людину: ' + (G.stats.dronesUsed / nh).toFixed(1) +
+    '   на одне вбивство: ' + (deaths ? (G.stats.dronesUsed / deaths).toFixed(1) : '—'), w / 2, h / 2 - 16, 16, '#ddd');
+  centerText(ctx, 'Збито дронів: ' + G.stats.shotDown + '   Смертей людей: ' + deaths + '   Час: ' + fmtTime(G.time), w / 2, h / 2 + 8, 16, '#ddd');
+  // рахунок гравців
+  const rows = G.players.slice().sort((x, y) => y.score - x.score);
+  rows.forEach((p, i) => {
+    const extra = p.role === 'human' ? '  (смертей: ' + p.ent.deaths + (p.ent.saved ? ', в укритті' : '') + ')' : '  (дронів: ' + p.ent.used + ')';
+    centerText(ctx, p.name + ' · ' + (p.role === 'human' ? 'людина' : 'дрон') + ' — ' + p.score + ' оч.' + extra, w / 2, h / 2 + 40 + i * 22, 15, p.color);
+  });
+  if (G.overT > 2) centerText(ctx, 'Клацніть або натисніть Enter — до лобі', w / 2, h / 2 + 50 + rows.length * 22 + 16, 18, '#f2c94c');
+}
+function fmtTime(sec) { sec = Math.max(0, Math.ceil(sec)); return ((sec / 60) | 0) + ':' + String(sec % 60).padStart(2, '0'); }
+// табло дезматчу: час і рахунок команд
+function drawDmBoard(ctx, w) {
+  const sc = teamScores();
+  const txt = 'ДЕЗМАТЧ  ' + fmtTime(G.timeLeft) + '     Люди ' + sc.humans + ' : ' + sc.drones + ' Дрони';
+  ctx.font = FONT(16); ctx.textAlign = 'center';
+  const y = G.opts && G.opts.controls !== false ? 84 : 22;
+  const tw = ctx.measureText(txt).width + 28;
+  ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(w / 2 - tw / 2, y - 18, tw, 28);
+  ctx.fillStyle = G.timeLeft < 30 && (G.time * 2 | 0) % 2 ? '#eb5757' : '#f2c94c';
+  ctx.fillText(txt, w / 2, y + 2);
 }
 
