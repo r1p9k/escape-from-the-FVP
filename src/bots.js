@@ -55,7 +55,7 @@ function thinkHuman(b, s, dt) {
   let threat = null, td = 1e9, hear = 1e9;
   for (const d of G.drones) {
     const dd = dist(d.x, d.y, h.x, h.y - 25);
-    hear = Math.min(hear, dd);
+    if (!d.landed) hear = Math.min(hear, dd); // «ждуна» на землі не чути
     if (dd < td && (droneVisibleToHuman(d, h) || dd < 260)) { td = dd; threat = d; }
   }
   // реакція з затримкою (залежить від складності)
@@ -87,16 +87,19 @@ function thinkHuman(b, s, dt) {
 
   if (h.hidden) {
     const sp = h.hidden;
+    // натягнути маскувальну сітку на свою схованку (і зберегти точку відновлення)
+    if (sp.type !== 'pipe' && !sp.net && h.nets > 0 && !h.hideAnim) { s.aim = true; b.tap(s, 'interact'); return; }
     m.safeT = hear < 600 ? 0 : m.safeT + dt;
+    m.hideT = (m.hideT || 0) + dt;
     if (sp.type === 'pipe') {
       const toRight = sp.x2 > sp.x1;
       if (toRight) s.right = true; else s.left = true;
       if (h.pipeT > 0.9 && m.safeT > 1.2) { b.tap(s, 'interact'); m.hideCd = 4; }
-    } else if (m.safeT > 2.5 || h.smokeT > 0.4) { b.tap(s, 'interact'); m.hideCd = 4; }
+    } else if (m.safeT > 2.5 || h.smokeT > 0.4 || m.hideT > 25) { b.tap(s, 'interact'); m.hideCd = 4; m.hideT = 0; }
     return;
   }
 
-  m.hideCd -= dt; m.noVehT -= dt;
+  m.hideCd -= dt; m.noVehT -= dt; m.hideT = 0;
   let dir = 1;      // куди бігти
   let stop = false; // зупинитися й причаїтися
 
@@ -168,10 +171,11 @@ function wantDrop(b, s, d, type) {
   if (d.payload !== type) b.tap(s, 'interact');
   else b.tap(s, 'special');
 }
-function nearestHideTo(x, y) {
+function nearestHideTo(x, y, d) {
   let best = null, bd = 110;
   for (const sp of G.W.hides) {
     if (sp.ruined) continue;
+    if (sp.net && !droneHovering(d, sp.x, sp.y - 10)) continue; // під сіткою вхід не видно
     const ends = sp.type === 'pipe' ? [[sp.x1, sp.y1], [sp.x2, sp.y2]] : [[sp.x, sp.y]];
     for (const [ex, ey] of ends) { const dd = dist(x, y, ex, ey); if (dd < bd) { bd = dd; best = { x: ex, y: ey }; } }
   }
@@ -240,7 +244,7 @@ function thinkDrone(b, s, dt) {
     }
     // підрив поруч, якщо ціль лежить або ховається за бруствером
     if (dd < 26 || (attack && dd < 46 && lineOfSight(W, d.x, d.y, tx, ty))) b.tap(s, 'fire');
-  } else if (m.last && m.lostT > 1.2 && m.lostT < 16 && dropCount(d, 'smoke') > 0 && (m.smokeAt = m.smokeAt || nearestHideTo(m.last.x, m.last.y))) {
+  } else if (m.last && m.lostT > 1.2 && m.lostT < 16 && dropCount(d, 'smoke') > 0 && (m.smokeAt = m.smokeAt || nearestHideTo(m.last.x, m.last.y, d))) {
     // людина зникла біля схованки — викурити димом
     const e = m.smokeAt, tf = Math.sqrt((2 * 160) / 900);
     gx = e.x - d.vx * 0.8 * tf; gy = e.y - 160;

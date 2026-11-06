@@ -36,6 +36,8 @@ const Lobby = {
   loc: 0,
   len: loadPref('len', 0),           // довжина мапи (індекс у MAP_LENGTHS)
   controls: loadPref('controls', true), // рядок керування згори під час гри
+  mode: loadPref('mode', 'escape'),     // 'escape' — втеча до укриття, 'dm' — дезматч на рахунок
+  dmMin: loadPref('dmMin', 10),         // тривалість дезматчу, хв
   menuFor: -1, // індекс картки з відкритим меню вибору керування
   status() {
     const n = this.slots.length;
@@ -119,6 +121,15 @@ function renderLobbyDOM() {
     '<header><h1>ВТЕЧА ВІД FPV</h1><p>Людина біжить до укриття, дрон не дає їй утекти. 2–4 учасники на одному екрані, можна з ботами.</p></header>' +
     '<h2>Учасники</h2><div class="slots">' + cards + '</div>' +
     '<h2>Локація</h2><div class="locs">' + locs + '</div>' +
+    '<h2>Режим гри</h2><div class="opts">' +
+    '<div class="opt"><span>Режим</span><div class="seg">' +
+    '<button data-act="mode" data-v="escape" class="' + (L.mode === 'escape' ? 'on' : '') + '">🏃 Втеча</button>' +
+    '<button data-act="mode" data-v="dm" class="' + (L.mode === 'dm' ? 'on' : '') + '">⚔️ Дезматч</button></div>' +
+    '<small>' + (L.mode === 'dm'
+      ? 'Безліміт дронів і життів, гра на рахунок: збитий дрон +1, укриття +3 (і знову зі старту), дронщику +3 за вбивство'
+      : 'Добігти до укриття. У людини 3 життя, відновлення там, де натягнула маскувальну сітку. Дронів безліміт') + '</small></div>' +
+    (L.mode === 'dm' ? '<div class="opt"><span>Тривалість дезматчу</span><div class="seg">' + [5, 10, 15, 20, 30].map((m) => '<button data-act="dmMin" data-v="' + m + '" class="' + (L.dmMin === m ? 'on' : '') + '">' + m + ' хв</button>').join('') + '</div></div>' : '') +
+    '</div>' +
     '<h2>Налаштування</h2><div class="opts">' +
     '<div class="opt"><span>Довжина мапи</span><div class="seg">' + MAP_LENGTHS.map((m, k) => '<button data-act="len" data-v="' + k + '" class="' + (L.len === k ? 'on' : '') + '">' + m.name + ' · ' + (m.width / 10 / 1000).toFixed(1) + ' км</button>').join('') + '</div>' +
     '<small>На дуже довгій мапі в одній зі схованок захований бонус «Альоша»</small></div>' +
@@ -138,6 +149,8 @@ function renderLobbyDOM() {
     '<li><b>Бронежилет</b> (знахідка «БР»): вибухи шкодять утричі менше, рятує від прямого влучання дрона — крім влучання в голову. Від міни — лише 15 HP замість 50</li>' +
     '<li><b>«Альоша»</b>: збий або переживи 6 дронів — <b>Позиція + Спец</b> вмикає режим на 10 с: вибухи не шкодять, зброя сама наводиться на дрони, кожен постріл — збитий дрон</li>' +
     '<li>Укриття руйнуються від вибухів: бліндажі, нори, тюки сіна, колоди, блоки, кущі</li>' +
+    '<li><b>Маскувальна сітка</b> (3 шт.): <b>Позиція + Дія</b> біля входу в бліндаж чи нору або в будівлі. Дрон бачить такий вхід, лише коли зависає поруч. Там же — точка відновлення</li>' +
+    '<li><b>3 життя</b>: після смерті через 3 с людина повертається туди, де востаннє натягнула сітку (або на старт)</li>' +
     '<li>Дерева, кущі, окопи, руїни й дим ховають від дрона. 3 с на відкритому — дрон бачить стрілку</li></ul></section>' +
     '<section><h3>🛸 FPV-дрон — не дати людині втекти</h3><ul>' +
     '<li><b>Рух</b> — політ у будь-який бік, <b>Прискорення</b> — форсаж (швидше сідає АКБ)</li>' +
@@ -166,6 +179,8 @@ lobbyEl.addEventListener('click', (e) => {
   else if (act === 'level') L.slots[i].level = +b.dataset.v;
   else if (act === 'loc') L.loc = +b.dataset.v;
   else if (act === 'len') { L.len = +b.dataset.v; savePref('len', L.len); }
+  else if (act === 'mode') { L.mode = b.dataset.v; savePref('mode', L.mode); }
+  else if (act === 'dmMin') { L.dmMin = +b.dataset.v; savePref('dmMin', L.dmMin); }
   else if (act === 'controls') { L.controls = b.dataset.v === '1'; savePref('controls', L.controls); }
   else if (act === 'start') { startGame(); return; }
   Sfx.click();
@@ -177,7 +192,7 @@ window.addEventListener('gamepaddisconnected', () => { if (state === 'lobby') re
 
 function startGame() {
   if (!Lobby.status().ok) return;
-  newGame(Lobby.slots, LOCATIONS[Lobby.loc].id, { len: (MAP_LENGTHS[Lobby.len] || MAP_LENGTHS[0]).id, controls: Lobby.controls });
+  newGame(Lobby.slots, LOCATIONS[Lobby.loc].id, { len: (MAP_LENGTHS[Lobby.len] || MAP_LENGTHS[0]).id, controls: Lobby.controls, mode: Lobby.mode, dmMin: Lobby.dmMin });
   state = 'game'; paused = false;
   lobbyEl.classList.add('hidden');
 }
