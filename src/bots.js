@@ -92,6 +92,16 @@ function thinkHuman(b, s, dt) {
     if (sp.type !== 'pipe' && !sp.net && h.nets > 0 && !h.hideAnim) { s.aim = true; b.tap(s, 'interact'); return; }
     m.safeT = hear < 600 ? 0 : m.safeT + dt;
     m.hideT = (m.hideT || 0) + dt;
+    // з нори — відстрілюватися, визираючи з отвору
+    if (sp.type === 'burrow' && !h.hideAnim && h.weapon && visibleThreat && td < WEAPONS[h.weapon.type].range * (0.55 + 0.3 * L.aim)) {
+      s.aim = true;
+      s.aimAngle = botAim(b, sp.x, sp.y - 7, threat, WEAPONS[h.weapon.type].speed);
+      m.aimT += dt;
+      if (m.aimT > 0.35 - 0.15 * L.react) s.fire = true;
+      m.hideT = 0;
+      return;
+    }
+    m.aimT = 0;
     if (sp.type === 'pipe') {
       const toRight = sp.x2 > sp.x1;
       if (toRight) s.right = true; else s.left = true;

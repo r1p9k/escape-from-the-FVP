@@ -160,6 +160,7 @@ function renderView(ctx, vp, p, t) {
     if (!inX(h.x - 40, h.x + 40) || h.saved) continue;
     if (h.hidden) {
       if (h.hideAnim) drawHideAnim(ctx, h, t);          // заповзає в нору / заходить у бліндаж
+      else if (h.peek && (!isDrone || humanVisibleToDrone(h, drone))) drawPeek(ctx, h, !isDrone);
       else if (!isDrone) drawHiddenMark(ctx, h, t);      // свої бачать, де він сидить
       continue;
     }
@@ -192,10 +193,11 @@ function renderView(ctx, vp, p, t) {
     ctx.beginPath(); ctx.ellipse(bm.x, bm.y, 3.5, 5, Math.atan2(bm.vy, bm.vx) - Math.PI / 2, 0, 7); ctx.fill();
   }
   if (!isDrone) for (const h of G.humans) {
-    if (!h.aiming || h.dead || h.saved || h.hidden) continue;
+    if (!h.aiming || h.dead || h.saved || (h.hidden && !h.peek)) continue;
     if (h.vehicle && h.seat !== 'gunner') continue;
     let mx, my;
-    if (h.vehicle) { const T = VEH[h.vehicle.type]; mx = h.vehicle.x - h.vehicle.dir * T.len * 0.15; my = h.vehicle.y - T.h - 14; }
+    if (h.peek) { const m = burrowMuzzle(h); mx = m.x; my = m.y; }
+    else if (h.vehicle) { const T = VEH[h.vehicle.type]; mx = h.vehicle.x - h.vehicle.dir * T.len * 0.15; my = h.vehicle.y - T.h - 14; }
     else { const m = muzzle(h); mx = m.x; my = m.y; }
     const a = aimWorld(h), L = h.vehicle ? WEAPONS.mg.range : h.weapon ? WEAPONS[h.weapon.type].range : 220;
     ctx.strokeStyle = h.player.color; ctx.globalAlpha = 0.55; ctx.lineWidth = 1.5; ctx.setLineDash([6, 6]);
@@ -577,6 +579,19 @@ function drawHiddenMark(ctx, h, t) {
   ctx.fillStyle = h.player.color; ctx.font = FONT(10); ctx.textAlign = 'center';
   ctx.fillText(h.player.name, sp.x, y - 12);
 }
+// визирає з нори: голова й ствол над отвором
+function drawPeek(ctx, h, label) {
+  const sp = h.hidden, x = sp.x, y = sp.y - 7;
+  if (h.weapon) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(aimWorld(h));
+    ctx.fillStyle = '#222'; ctx.fillRect(2, -1.5, h.weapon.type === 'shotgun' ? 20 : 24, 3.5);
+    ctx.restore();
+  }
+  ctx.fillStyle = '#d9b48f'; ctx.beginPath(); ctx.arc(x - h.facing * 2, y - 3, 5.5, 0, 7); ctx.fill();
+  ctx.fillStyle = '#4a5a32'; ctx.beginPath(); ctx.arc(x - h.facing * 2, y - 4, 7, Math.PI * 0.95, Math.PI * 2.05); ctx.fill();
+  ctx.fillStyle = '#140f0a'; ctx.beginPath(); ctx.ellipse(x, sp.y - 1, 16, 5, 0, 0, Math.PI); ctx.fill();
+  if (label) { ctx.fillStyle = h.player.color; ctx.font = FONT(10); ctx.textAlign = 'center'; ctx.fillText(h.player.name, x, y - 16); }
+}
 function drawPickup(ctx, pk, t, human) {
   if (pk.life != null && pk.life < 8 && (t * 5 | 0) % 2) return; // скоро зникне — блимає
   const [col, txt] = PICKUP_STYLE[pk.type];
@@ -810,7 +825,7 @@ function drawHumanHud(ctx, vp, p, t) {
     bar(ctx, 70, 99, 150, 10, v.fuel / tank, v.fuel / tank > 0.25 ? '#f2c94c' : '#eb5757');
   } else if (h.weapon && !h.vehicle) {
     ctx.fillStyle = h.aiming ? '#6fcf97' : '#ccc';
-    ctx.fillText(h.aiming ? 'ПОЗИЦІЯ ' + Math.round(-h.aimA * 57) + '° · ' + STANCE_ACC[h.stance] : 'Тримай [' + c.label('aim') + '] — позиція', 16, 108);
+    ctx.fillText(h.aiming ? 'ПОЗИЦІЯ ' + Math.round(-h.aimA * 57) + '° · ' + STANCE_ACC[h.peek ? 'burrow' : h.stance] : 'Тримай [' + c.label('aim') + '] — позиція', 16, 108);
   }
   // дим: відлік до отруєння
   if (h.hidden && h.smokeT > 0 && !h.dead) {
@@ -862,6 +877,7 @@ function drawHumanHud(ctx, vp, p, t) {
   // підказки
   let tip = '';
   if (h.vehicle) tip = h.seat === 'driver' ? '[' + c.label('left') + c.label('right') + '] їхати   [' + c.label('interact') + '] вийти' : '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] кулемет  [' + c.label('interact') + '] вийти';
+  else if (h.peek) tip = '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] вогонь з нори';
   else if (h.hidden) tip = h.hidden.type === 'pipe' ? '[' + c.label('left') + c.label('right') + '] повзти трубою   [' + c.label('interact') + '] вилізти (біля краю)' : '[' + c.label('interact') + '] вийти з укриття';
   else if (h.aiming) tip = '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] вогонь';
   else if (!h.dead && !h.saved) {
@@ -1029,7 +1045,7 @@ function humanControls(h, c) {
   if (h.vehicle) return h.seat === 'driver'
     ? [L('left') + L('right') + ' їхати', L('interact') + ' вийти', L('special') + ' РЕБ']
     : [L('up') + L('down') + ' кут', L('left') + L('right') + ' бік', L('fire') + ' кулемет', L('interact') + ' вийти'];
-  if (h.hidden) return h.hidden.type === 'pipe' ? [L('left') + L('right') + ' повзти', L('interact') + ' вилізти біля краю'] : [L('interact') + '/' + L('up') + ' вилізти', L('special') + ' РЕБ'].concat(h.nets > 0 && !h.hidden.net ? [L('aim') + '+' + L('interact') + ' натягнути сітку'] : []);
+  if (h.hidden) return h.hidden.type === 'pipe' ? [L('left') + L('right') + ' повзти', L('interact') + ' вилізти біля краю'] : [L('interact') + '/' + L('up') + ' вилізти', L('special') + ' РЕБ'].concat(h.hidden.type === 'burrow' && h.weapon ? [L('aim') + '+' + L('fire') + ' стріляти з нори'] : []).concat(h.nets > 0 && !h.hidden.net ? [L('aim') + '+' + L('interact') + ' натягнути сітку'] : []);
   const it = [L('left') + L('right') + ' рух', L('up') + ' стрибок', L('down') + ' присісти / лягти (на бігу — кидок)', L('sprint') + ' біг',
     L('aim') + ' позиція', L('fire') + ' вогонь', L('interact') + ' дія', L('special') + ' РЕБ'];
   if (h.alCharges > 0 && h.alT <= 0) it.push(L('aim') + '+' + L('special') + ' Альоша');
