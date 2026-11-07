@@ -21,8 +21,8 @@ const LOCATIONS = [
 ];
 
 const FEATURES = {
-  fields: { tree: 2.2, trench: 1.4, burrow: 1.6, culvert: 1.0, hay: 1.6, bush: 2, vehicle: 1.1, wreck: 0.6, house: 0.6, cache: 0.9, open: 1.2 },
-  forest: { tree: 4.5, trench: 1.8, burrow: 1.4, log: 2, bush: 2.5, vehicle: 0.8, culvert: 0.5, cache: 1, open: 0.5 },
+  fields: { tree: 2.2, trench: 1.4, burrow: 1.6, tunnel: 1.1, hay: 1.6, bush: 2, vehicle: 1.1, wreck: 0.6, house: 0.6, cache: 0.9, open: 1.2 },
+  forest: { tree: 4.5, trench: 1.8, burrow: 1.4, log: 2, bush: 2.5, vehicle: 0.8, tunnel: 0.8, cache: 1, open: 0.5 },
   city: { building: 4.5, rubble: 2.2, wreck: 1.8, sewer: 1.4, block: 1.4, vehicle: 1.0, cache: 1, bush: 0.6, tree: 0.4 },
 };
 
@@ -61,6 +61,27 @@ function dig(W, x0, x1, depth, edge) {
 
 // ---- Окремі елементи ----
 function addSolid(W, s) { W.solids.push(s); return s; }
+
+// ---- Тунелі ----
+const TUN_DEPTH = 52;   // підлога галереї під поверхнею
+const TUN_H = 40;       // висота галереї (людина йде зігнувшись)
+const TUN_K = 1.15;     // нахил спуску (вертикаль на одиницю горизонталі)
+function tunFloor(W, sp, x) { return gAt(W, x) + sp.depth; }
+// геометрія виходу: основа на підлозі галереї, верх на поверхні
+function tunExitGeo(W, sp, e) {
+  e.bx = e.x; e.by = tunFloor(W, sp, e.x);
+  if (e.kind === 'shaft') { e.tx = e.x; e.ty = gAt(W, e.x); }
+  else {
+    let dx = 0;
+    while (dx < 300 && e.by - TUN_K * dx > gAt(W, e.bx + e.dir * dx)) dx += 1;
+    e.tx = e.bx + e.dir * dx; e.ty = gAt(W, e.tx);
+  }
+  e.len = Math.max(10, Math.hypot(e.tx - e.bx, e.ty - e.by));
+  return e;
+}
+function tunExitPos(e, u) { return { x: lerp(e.bx, e.tx, u), y: lerp(e.by, e.ty, u) }; }
+// входи в схованку (для тунелю — верх кожного виходу)
+function hideEnds(sp) { return sp.type === 'pipe' ? sp.exits.map((e) => ({ x: e.tx, y: e.ty, e })) : [{ x: sp.x, y: sp.y }]; }
 
 const F = {
   open() { return rand(150, 350); },
@@ -102,18 +123,21 @@ const F = {
     return 70;
   },
 
-  culvert(W, x) {
-    const len = rand(240, 320);
-    const top = avgGround(W, x, x + len) - 50;
-    flatten(W, x + 70, x + len - 70, top);
-    W.hides.push({ type: 'pipe', x1: x + 20, x2: x + len - 20, depthOff: 6 });
-    W.decor.push({ type: 'road', x: x + 70, w: len - 140 });
-    return len;
+  // виритий тунель: галерея під землею, виходи — похилі спуски або вертикальні лази
+  tunnel(W, x) {
+    const len = rand(200, 380), a = x + 55, b = a + len;
+    flatten(W, x, b + 55);
+    const ex = (px, dir) => ({ x: px, dir, kind: RND() < 0.7 ? 'ramp' : 'shaft' });
+    const exits = [ex(a + 6, -1), ex(b - 6, 1)];
+    if (len > 280 && RND() < 0.4) exits.push({ x: lerp(a, b, rand(0.4, 0.6)), dir: RND() < 0.5 ? -1 : 1, kind: RND() < 0.5 ? 'ramp' : 'shaft' });
+    W.hides.push({ type: 'pipe', style: 'dug', a, b, depth: TUN_DEPTH, exits });
+    return len + 110;
   },
 
+  // каналізація: бетонний колектор глибше, вниз — лазами з люками
   sewer(W, x) {
     const len = rand(360, 660);
-    W.hides.push({ type: 'pipe', x1: x, x2: x + len, depthOff: 46, sewer: true });
+    W.hides.push({ type: 'pipe', style: 'sewer', a: x, b: x + len, depth: 92, exits: [{ x: x + 12, dir: -1, kind: 'shaft' }, { x: x + len - 12, dir: 1, kind: 'shaft' }] });
     return 60;
   },
 
@@ -167,7 +191,7 @@ const F = {
   },
 };
 
-function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25 }); }
+function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25, shovel: 0.35 }); }
 
 function building(W, x, floors, w) {
   const T = 14;
@@ -270,7 +294,7 @@ function makeWorld(loc, seed, lenId) {
   // гарантований мінімум знахідок і техніки
   const cnt = (t) => W.pickups.filter((p) => p.type === t).length;
   const kw = width / 14000;
-  const need = { rifle: 1, shotgun: 1, medkit: 2, fuel: 4, armor: 1, detector: 1 };
+  const need = { rifle: 1, shotgun: 1, medkit: 2, fuel: 4, armor: 1, detector: 1, shovel: 1 };
   for (const t in need) while (cnt(t) < Math.round(need[t] * kw)) W.pickups.push({ type: t, x: rand(1400, width - 1400) });
   while (W.vehicles.length < 6) {
     const vx = rand(1600, width - 1600);
@@ -286,7 +310,7 @@ function makeWorld(loc, seed, lenId) {
     v.y = gAt(W, v.x);
   }
   for (const h of W.hides) {
-    if (h.type === 'pipe') { h.y1 = gAt(W, h.x1); h.y2 = gAt(W, h.x2); h.len = h.x2 - h.x1; }
+    if (h.type === 'pipe') h.exits.forEach((e) => tunExitGeo(W, h, e));
     else { h.y = gAt(W, h.x); h.hp = HIDE_HP[h.type]; }
   }
   for (const so of W.solids) if (SOLID_HP[so.type]) so.hp = SOLID_HP[so.type];
