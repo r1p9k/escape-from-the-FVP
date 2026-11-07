@@ -56,12 +56,13 @@ function thinkHuman(b, s, dt) {
   for (const d of G.drones) {
     const dd = dist(d.x, d.y, h.x, h.y - 25);
     if (!d.landed) hear = Math.min(hear, dd); // «ждуна» на землі не чути
-    if (dd < td && (droneVisibleToHuman(d, h) || dd < 260)) { td = dd; threat = d; }
+    // бачить (не крізь стіни) або чує зовсім поруч
+    if (dd < td && (droneSeenBy(d, h) || (!d.landed && dd < 260))) { td = dd; threat = d; }
   }
   // реакція з затримкою (залежить від складності)
   if (threat && td < 450) m.reactT += dt; else m.reactT = 0;
   const danger = threat && td < 420 && m.reactT > 0.6 - L.react * 0.5;
-  const visibleThreat = threat && droneVisibleToHuman(threat, h) && lineOfSight(W, h.x, h.y - 30, threat.x, threat.y);
+  const visibleThreat = threat && droneSeenBy(threat, h, true);
 
   if (h.vehicle) {
     const v = h.vehicle;
@@ -129,14 +130,16 @@ function thinkHuman(b, s, dt) {
   // перев'язка, коли спокійно
   if (h.hp < 55 && h.medkits > 0 && !danger && h.onGround && h.healT <= 0) b.tap(s, 'slot2');
   if (h.healT > 0 && !danger) stop = true;
-  if (!stop && h.stance !== 'stand') b.tap(s, 'up');
 
   // бонус «Альоша»: увімкнути, коли дрон близько; далі автонаведення — просто стріляти
   if (h.alCharges > 0 && h.alT <= 0 && threat && td < 450 && h.onGround) { s.aim = true; b.tap(s, 'special'); }
   if (h.alT > 0) { s.fire = G.drones.some((d) => dist(d.x, d.y, h.x, h.y - 30) < 900); stop = false; }
   // стрільба
   else if (h.weapon && visibleThreat && h.onGround && td < WEAPONS[h.weapon.type].range * (0.6 + 0.3 * L.aim)) {
-    s.aim = true; stop = true;
+    stop = true;
+    // для точності — присісти перед стрільбою (досвідчені боти)
+    if (h.stance === 'stand' && L.aim >= 0.8 && td > 200) { if (Math.abs(h.vx) < 140) b.tap(s, 'down'); }
+    else s.aim = true;
     const mz = muzzle(h);
     s.aimAngle = botAim(b, mz.x, mz.y, threat, WEAPONS[h.weapon.type].speed);
     m.aimT += dt;
@@ -148,9 +151,13 @@ function thinkHuman(b, s, dt) {
     if (closing > 200) b.tap(s, 'down');
   }
 
+  if (!stop && h.stance !== 'stand') b.tap(s, 'up');
+  // перезарядитися, поки спокійно
+  if (h.weapon && !s.aim && !danger && h.reloadT <= 0 && h.weapon.mag < Math.min(WEAPONS[h.weapon.type].mag, h.weapon.ammo)) b.tap(s, 'fire');
+
   // підбір і техніка
   const pk = nearPickup(h);
-  if (pk && ((pk.type === 'armor' && h.armor <= 0) || pk.type === 'reb' || (pk.type === 'medkit' && h.medkits < MEDKIT_MAX) || (pk.type === 'fuel' && !h.canister && !h.weapon) || ((pk.type === 'rifle' || pk.type === 'shotgun') && !h.weapon))) b.tap(s, 'interact');
+  if (pk && botWants(h, pk)) b.tap(s, 'interact');
   else if (m.noVehT <= 0 && nearVehicle(h)) {
     const v = nearVehicle(h);
     if (v.driver || v.fuel > 1.5 || h.canister) b.tap(s, 'interact');
@@ -173,6 +180,18 @@ function thinkHuman(b, s, dt) {
   }
 }
 
+function botWants(h, pk) {
+  if (pk.type === 'armor') return h.armor <= 0;
+  if (pk.type === 'fuel') return !h.canister && !h.weapon;
+  if (WEAPONS[pk.type]) return !h.weapon;
+  return canTake(h, pk);
+}
+// кущ поблизу точки — сховати «ждуна»
+function bushNear(x, r) {
+  let best = null, bd = r;
+  for (const bu of G.W.bushes) { const dd = Math.abs(bu.x + bu.w / 2 - x); if (dd < bd && bu.w > 40) { bd = dd; best = bu; } }
+  return best;
+}
 function wantDrop(b, s, d, type) {
   if (d.payload !== type) b.tap(s, 'interact');
   else b.tap(s, 'special');
@@ -257,7 +276,11 @@ function thinkDrone(b, s, dt) {
     if (Math.abs(d.x + d.vx * 0.8 * tf - e.x) < 22 && Math.abs(d.y - gy) < 60) wantDrop(b, s, d, 'smoke');
   } else if (m.last && m.lostT > 3 && m.lostT < 30 && d.battery < DRONE_BATTERY * 0.55 && m.noAmbush <= 0) {
     // АКБ сідає — сісти «ждуном» попереду, куди бігла людина
-    if (m.ambX == null || m.ambX < m.last.x) m.ambX = m.last.x + 450;
+    if (m.ambX == null || m.ambX < m.last.x) {
+      m.ambX = m.last.x + 450;
+      const bu = bushNear(m.ambX, 280); // краще — у кущах, щоб не було видно
+      if (bu) m.ambX = bu.x + bu.w / 2;
+    }
     gx = m.ambX; gy = gAt(W, gx) - 30; descend = Math.abs(d.x - gx) < 120;
     if (Math.abs(d.x - gx) < 70 && !d.landing && landSurface(d.x, d.y) - d.y < 85) b.tap(s, 'aim');
     if (d.landing) return;

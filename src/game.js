@@ -22,11 +22,18 @@ const OPEN_TIME = 3;          // секунд на відкритій місце
 const HUMAN_DIM = { stand: { w: 18, h: 56 }, crouch: { w: 20, h: 38 }, prone: { w: 46, h: 16 } };
 const STANCE_DMG = { stand: 1, crouch: 0.75, prone: 0.5 };
 const WEAPONS = {
-  rifle: { name: 'Автомат', ammo: 18, rate: 0.11, speed: 1500, range: 650, spread: 0.022, pellets: 1 },
-  shotgun: { name: 'Дробовик', ammo: 5, rate: 0.75, speed: 1200, range: 380, spread: 0.11, pellets: 7 },
-  mg: { name: 'Кулемет', ammo: 50, rate: 0.085, speed: 1600, range: 800, spread: 0.03, pellets: 1 },
+  rifle: { name: 'Автомат', ammo: 18, mag: 9, reload: 2.2, rate: 0.11, speed: 1500, range: 650, spread: 0.022, pellets: 1 },
+  shotgun: { name: 'Дробовик', ammo: 5, mag: 2, reload: 1.8, rate: 0.75, speed: 1200, range: 380, spread: 0.11, pellets: 7 },
+  mg: { name: 'Кулемет', ammo: 50, mag: 25, reload: 3.5, rate: 0.085, speed: 1600, range: 800, spread: 0.03, pellets: 1 },
 };
-const PICKUP_NAMES = { rifle: 'Автомат', shotgun: 'Дробовик', reb: 'РЕБ (одноразовий)', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет' };
+// розкид куль залежно від положення: стоячи — великий, сидячи — менший, лежачи — найточніше
+const STANCE_SPREAD = { stand: 2.6, crouch: 1.4, prone: 0.75, mount: 1.3 };
+const STANCE_ACC = { stand: 'стоячи — розкид', crouch: 'сидячи — точніше', prone: 'лежачи — точно' };
+const PACK_CAP = 4;      // місць у рюкзаку: аптечки, заряди РЕБ, детектор
+const DETECT_R = 650;    // радіус детектора дронів
+const PICKUP_NAMES = { rifle: 'Автомат', shotgun: 'Дробовик', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого' };
+// зброя: ammo — усього набоїв, mag — скільки зараз у магазині
+function makeWeapon(type, ammo) { ammo = ammo == null ? WEAPONS[type].ammo : ammo; return { type, ammo, mag: Math.min(WEAPONS[type].mag, ammo) }; }
 const PLAYER_COLORS = ['#f2c94c', '#56ccf2', '#eb5757', '#6fcf97'];
 
 let G = null;
@@ -68,7 +75,7 @@ function makeHuman(p, x) {
     openTime: 0, reveal: 0, hurtT: 0, dead: false, saved: false, anim: 0,
     aimA: -0.5, aiming: false, diving: false, diveCd: 0, canister: false, smokeT: 0, gasT: 0, gasWarned: false,
     armor: 0, beaten: 0, alCharges: 0, alT: 0, alGranted: false, hideAnim: null,
-    rebCd: 0, medkits: 0, healT: 0,
+    rebCd: 0, medkits: 0, healT: 0, reloadT: 0, bloom: 0, detector: false,
     lives: G.mode === 'dm' ? Infinity : HUMAN_LIVES, nets: NETS, respawnT: 0, spawn: null, deaths: 0,
   };
 }
@@ -157,11 +164,33 @@ function droneVisibleToHuman(d, h) {
   if (!droneConcealed(d)) return true;
   return h && dist(d.x, d.y, h.x, h.y - 20) < 120;
 }
+// «ждун» сидить у кущах
+function droneInBush(d) {
+  if (!d.landed) return false;
+  for (const b of G.W.bushes) if (d.x > b.x + 4 && d.x < b.x + b.w - 4 && Math.abs(d.y + DRONE_R - b.y) < 30) return true;
+  return false;
+}
+function humanEye(h) {
+  if (h.vehicle) return { x: h.vehicle.x, y: h.vehicle.y - 34 };
+  return { x: h.x, y: h.y - HUMAN_DIM[h.stance].h * 0.85 };
+}
+// чи бачить людина дрон: не крізь стіни, не в диму/кронах, не «ждуна» в кущах; детектор бачить усе поруч
+function droneSeenBy(d, h, noDetector) {
+  if (!h || h.dead || h.saved) return true;
+  const e = humanEye(h), dd = dist(d.x, d.y, e.x, e.y);
+  if (!noDetector && h.detector && dd < DETECT_R) return true;
+  if (dd < 45) return true;
+  if (d.inBush) return false;
+  if (!droneVisibleToHuman(d, h)) return false;
+  return lineOfSight(G.W, e.x, e.y, d.x, d.y);
+}
 
 // ---------- Людина ----------
 function updateHuman(h, dt) {
   const c = h.player.ctrl, W = G.W;
   h.fireCd -= dt; h.reveal -= dt; h.hurtT -= dt;
+  h.bloom = Math.max(0, h.bloom - dt * 1.6);
+  if (h.reloadT > 0 && !h.dead && (h.reloadT -= dt) <= 0) finishReload(h);
   if (h.hideAnim && (h.hideAnim.t += dt) >= h.hideAnim.dur) h.hideAnim = null;
   if (h.alT > 0 && (h.alT -= dt) <= 0) { h.alT = 0; feed(h.player.name + ': «Альоша» закінчився', '#f2c94c'); }
   if (h.dead && h.respawnT > 0 && (h.respawnT -= dt) <= 0) respawnHuman(h);
@@ -266,16 +295,19 @@ function updateHuman(h, dt) {
   if (h.alT > 0) { if (c.held('fire') && h.fireCd <= 0 && !h.canister) alioshaShot(h); }
   // стріляти можна лише з позиції (режим прицілювання)
   else if (h.aiming && c.held('fire') && h.weapon && h.canister && c.pressed('fire')) feed(h.player.name + ': руки зайняті каністрою — [' + c.label('slot1') + '] викинути', '#ccc');
-  else if (h.aiming && c.held('fire') && h.weapon && !h.canister && h.fireCd <= 0) {
+  else if (h.aiming && c.held('fire') && h.weapon && !h.canister && h.fireCd <= 0 && h.reloadT <= 0 && h.weapon.mag > 0) {
     const m = muzzle(h);
     fireWeapon(h, m.x, m.y, h.weapon.type, aimWorld(h), false, h.stance);
     h.fireCd = WEAPONS[h.weapon.type].rate;
+    h.weapon.mag--;
     if (--h.weapon.ammo <= 0) {
       G.parts.push({ type: 'gun', x: h.x, y: h.y - 30, vx: -h.facing * 120, vy: -260, life: 1.2, max: 1.2, rot: 0 });
       feed(h.player.name + ': ' + WEAPONS[h.weapon.type].name + ' — набої скінчилися', '#ccc');
       h.weapon = null;
-    }
+    } else if (h.weapon.mag <= 0) startReload(h);
   }
+  // вогонь без позиції — перезарядити
+  else if (!h.aiming && c.pressed('fire') && h.weapon && h.reloadT <= 0 && h.alT <= 0 && h.weapon.mag < Math.min(WEAPONS[h.weapon.type].mag, h.weapon.ammo)) startReload(h);
   if (c.pressed('special')) {
     if (c.held('aim') && h.alCharges > 0 && h.alT <= 0) activateAliosha(h);
     else activateReb(h);
@@ -313,6 +345,19 @@ function alioshaShot(h) {
   G.parts.push({ type: 'flash', x: ox + Math.cos(aimWorld(h)) * 16, y: oy + Math.sin(aimWorld(h)) * 16, life: 0.05, max: 0.05, size: 10 });
   Sfx.shot(); h.reveal = 1.5;
   shootDownDrone(tgt, h);
+}
+
+// ---------- Перезарядка ----------
+function startReload(h) {
+  if (!h.weapon || h.reloadT > 0) return;
+  h.reloadT = WEAPONS[h.weapon.type].reload;
+  Sfx.click();
+}
+function finishReload(h) {
+  h.reloadT = 0;
+  if (!h.weapon) return;
+  h.weapon.mag = Math.min(WEAPONS[h.weapon.type].mag, h.weapon.ammo);
+  Sfx.tone(520, 0.05, 0.1); Sfx.click();
 }
 
 // кут прицілу: h.aimA відносно напрямку погляду (від'ємний — угору)
@@ -388,15 +433,54 @@ function nearHide(h) {
   }
   return null;
 }
+// ---------- Рюкзак: 4 місця (аптечки, заряди РЕБ, детектор) ----------
+function packUsed(h) { return h.medkits + h.reb + (h.detector ? 1 : 0); }
+function canTake(h, p) {
+  if (p.type === 'medkit') return h.medkits < MEDKIT_MAX && packUsed(h) < PACK_CAP;
+  if (p.type === 'reb') return packUsed(h) < PACK_CAP;
+  if (p.type === 'detector') return !h.detector && packUsed(h) < PACK_CAP;
+  if (p.type === 'pack') return packGain(h, p.pack);
+  return true;
+}
+// чи є в рюкзаку загиблого щось, що можна забрати
+function packGain(h, k) {
+  const room = packUsed(h) < PACK_CAP;
+  return !!((k.weapon && !h.weapon) || (room && k.detector && !h.detector) || (room && k.medkits > 0 && h.medkits < MEDKIT_MAX) || (room && k.reb > 0));
+}
 function takePickup(h, p) {
-  if (p.type === 'medkit' && h.medkits >= MEDKIT_MAX) return; // більше не влізе
+  if (!canTake(h, p)) {
+    if (G.time - (h.packMsgT || -9) > 2) { h.packMsgT = G.time; feed(h.player.name + ': не влізе в рюкзак (' + packUsed(h) + '/' + PACK_CAP + ')', '#ccc'); }
+    return;
+  }
+  if (p.type === 'pack') { takePack(h, p); return; }
   p.taken = true;
   if (p.type === 'reb') h.reb++;
   else if (p.type === 'medkit') h.medkits++;
+  else if (p.type === 'detector') { h.detector = true; feed(h.player.name + ' знайшов детектор дронів — видно дрони крізь стіни й у кущах', '#5ad1c4'); }
   else if (p.type === 'fuel') { h.canister = true; h.aiming = false; } // каністра займає руки
   else if (p.type === 'armor') h.armor = 100;
-  else h.weapon = { type: p.type, ammo: WEAPONS[p.type].ammo };
+  else { h.weapon = makeWeapon(p.type); h.reloadT = 0; }
   Sfx.click();
+}
+function takePack(h, p) {
+  const k = p.pack, got = [];
+  if (k.weapon && !h.weapon) { h.weapon = k.weapon; k.weapon = null; h.reloadT = 0; got.push(WEAPONS[h.weapon.type].name.toLowerCase()); }
+  if (k.detector && !h.detector && packUsed(h) < PACK_CAP) { h.detector = true; k.detector = false; got.push('детектор'); }
+  while (k.medkits > 0 && h.medkits < MEDKIT_MAX && packUsed(h) < PACK_CAP) { k.medkits--; h.medkits++; got.push('аптечка'); }
+  while (k.reb > 0 && packUsed(h) < PACK_CAP) { k.reb--; h.reb++; got.push('РЕБ'); }
+  if (!k.weapon && !k.detector && !k.medkits && !k.reb) p.taken = true;
+  feed(h.player.name + ' забрав із рюкзака: ' + got.join(', '), '#9c9');
+  Sfx.click();
+}
+// загиблий втрачає рюкзак (і зброю) — їх може підібрати інший
+function dropPack(h) {
+  const W = G.W, x = clamp(h.x, 20, W.width - 20);
+  if (h.canister) { h.canister = false; W.pickups.push({ type: 'fuel', x, y: surfaceY(W, x) }); }
+  const k = { weapon: h.weapon, medkits: h.medkits, reb: h.reb, detector: h.detector };
+  h.weapon = null; h.medkits = 0; h.reb = 0; h.detector = false; h.reloadT = 0; h.healT = 0;
+  if (!k.weapon && !k.medkits && !k.reb && !k.detector) return;
+  W.pickups.push({ type: 'pack', x, y: surfaceY(W, x), pack: k, life: 150, max: 150 });
+  feed(h.player.name + ' втратив рюкзак — його можна підібрати', '#ccc');
 }
 function enterHide(h, sp) {
   h.hidden = sp; h.vx = 0; h.vy = 0; h.onLadder = false;
@@ -477,11 +561,15 @@ function humanInVehicle(h, c, dt) {
       h.aimA = clamp(h.aimA + a * 1.5 * dt, -1.45, 0.3);
     }
     h.aiming = true;
-    if (c.held('fire') && v.mgAmmo > 0 && h.fireCd <= 0) {
+    if (v.mgMag == null) v.mgMag = Math.min(WEAPONS.mg.mag, v.mgAmmo);
+    if (v.mgReload > 0 && (v.mgReload -= dt) <= 0) { v.mgReload = 0; v.mgMag = Math.min(WEAPONS.mg.mag, v.mgAmmo); Sfx.click(); }
+    if (c.held('fire') && v.mgMag > 0 && !(v.mgReload > 0) && h.fireCd <= 0) {
       const mx = v.x - v.dir * T.len * 0.15, my = v.y - T.h - 14;
-      fireWeapon(h, mx, my, 'mg', aimWorld(h), Math.abs(v.vx) > 30, 'stand');
+      fireWeapon(h, mx, my, 'mg', aimWorld(h), Math.abs(v.vx) > 30, 'mount');
       h.fireCd = WEAPONS.mg.rate;
+      v.mgMag--;
       if (--v.mgAmmo <= 0) feed('Кулемет: набої скінчилися', '#ccc');
+      else if (v.mgMag <= 0) { v.mgReload = WEAPONS.mg.reload; Sfx.click(); }
     }
   }
   h.x = v.x; h.y = v.y;
@@ -524,6 +612,7 @@ function hurt(h, dmg, src) {
     h.hp = 0; h.dead = true; h.alT = 0;
     if (h.vehicle) exitVehicle(h, true);
     h.hidden = null; h.hideAnim = null; h.stance = 'prone';
+    dropPack(h);
     h.deaths++; G.stats.deaths++;
     // очко дронщику, чий вибух убив
     if (G.blastBy && (src === 'blast' || src === 'mine' || src === 'head')) G.blastBy.score += 3;
@@ -580,7 +669,9 @@ function droneHovering(d, x, y) {
 // постріл уздовж кута прицілу (без автоприцілу — влучати треба самому)
 function fireWeapon(h, ox, oy, type, base, moving, stance) {
   const Wp = WEAPONS[type];
-  const spread = Wp.spread * (moving ? 1.8 : 1) * (stance === 'prone' ? 0.7 : 1);
+  // розкид: положення тіла × рух × «віддача» від частої стрільби
+  const spread = Wp.spread * (STANCE_SPREAD[stance] || 1) * (moving ? 1.8 : 1) * (1 + (h.bloom || 0));
+  h.bloom = Math.min(1.5, (h.bloom || 0) + (Wp.pellets > 1 ? 0.5 : 0.22));
   for (let i = 0; i < Wp.pellets; i++) {
     const a = base + (RND() * 2 - 1) * spread;
     G.bullets.push({ x: ox, y: oy, vx: Math.cos(a) * Wp.speed, vy: Math.sin(a) * Wp.speed, life: (Wp.range / Wp.speed) * rand(0.9, 1.1), owner: h });
@@ -1123,10 +1214,12 @@ function updateGame(dt) {
   updateVehicles(dt);
   for (const dp of G.dps) updateDronePlayer(dp, dt);
   for (const d of G.drones.slice()) updateDrone(d, dt);
+  for (const d of G.drones) d.inBush = droneInBush(d);
   updateBullets(dt);
   updateBombs(dt);
   updateMines(dt);
   updateAirBonuses(dt);
+  updatePickups(dt);
   for (const r of G.rebs) r.t -= dt;
   G.rebs = G.rebs.filter((r) => r.t > 0);
   for (const f of G.feed) f.t -= dt;
@@ -1224,20 +1317,44 @@ function randomSpawnX() {
 }
 
 // ---------- Бонуси для дронів у повітрі ----------
+// кожен бонус висить обмежений час, потім зникає й з'являється в іншому місці
 function spawnAirBonus(b) {
   const W = G.W, x = rand(1200, W.width - 900);
-  return Object.assign(b, { x, y: gAt(W, x) - rand(150, 320), type: pick(Object.keys(AIR_BONUS)), active: true, t: 0, seed: Math.random() * 10 });
+  const life = rand(25, 45);
+  return Object.assign(b, { x, y: gAt(W, x) - rand(150, 320), type: pick(Object.keys(AIR_BONUS)), active: true, t: 0, life, max: life, seed: Math.random() * 10 });
 }
 function updateAirBonuses(dt) {
   for (const b of G.airBonuses) {
     if (!b.active) { if ((b.t -= dt) <= 0) spawnAirBonus(b); continue; }
+    if ((b.life -= dt) <= 0) { b.active = false; b.t = rand(6, 15); continue; }
     for (const d of G.drones) {
       if (d.landed || dist(d.x, d.y, b.x, b.y) > 24) continue;
       applyAirBonus(d, b.type);
-      b.active = false; b.t = 45;
+      b.active = false; b.t = rand(15, 30);
       break;
     }
   }
+}
+// ---------- Знахідки для людей: час від часу з'являються поруч і зникають ----------
+const HUMAN_BONUS = { rifle: 1, shotgun: 0.7, medkit: 1.2, armor: 0.6, reb: 0.4, detector: 0.7 };
+function groundFree(x) {
+  const W = G.W, g = gAt(W, x);
+  return !solidsNear(W, x - 30, x + 30).some((s) => !s.thin && s.x < x + 20 && s.x + s.w > x - 20 && s.y < g && s.y + s.h > g - 60);
+}
+function updatePickups(dt) {
+  const W = G.W;
+  for (const p of W.pickups) if (p.life != null && !p.taken && (p.life -= dt) <= 0) p.taken = true;
+  if (W.pickups.length > 300) W.pickups = W.pickups.filter((p) => !p.taken);
+  if (G.bonusT == null) G.bonusT = rand(25, 40);
+  if ((G.bonusT -= dt) > 0) return;
+  G.bonusT = rand(35, 55);
+  const live = G.humans.filter((h) => !h.dead && !h.saved);
+  if (!live.length || W.pickups.filter((p) => p.timed && !p.taken).length >= 2) return;
+  const h = pick(live), dir = G.mode === 'dm' ? pick([-1, 1]) : 1;
+  let x = 0;
+  for (let t = 0; t < 12; t++) { x = clamp(h.x + dir * rand(450, 1300), 300, W.width - 400); if (groundFree(x)) break; }
+  const type = weighted(HUMAN_BONUS);
+  W.pickups.push({ type, x, y: gAt(W, x), timed: true, life: 45, max: 45 });
 }
 function applyAirBonus(d, type) {
   if (type === 'lock') d.lock = true;

@@ -30,16 +30,25 @@ function drawArtBackground(ctx, vp, cx, cy, s) {
   const ks = Math.max(vp.w / sky.width, vp.h / sky.height) * 1.05;
   drawMirrorTiles(ctx, sky, vp, cx * s * 0.02, vp.y + vp.h - sky.height * ks, sky.width * ks, sky.height * ks);
   const groundY = vp.y + (BASE_G - cy) * s, mid = vp.y + vp.h * 0.5;
+  // земля, якою її бачить людина (камера на рівні землі); коли камера (дрон) піднімається,
+  // далекі шари опускаються стільки ж разів повільніше, скільки повільніше рухаються вбік
+  const refG = vp.y + vp.h - 140 * s, dG = groundY - refG;
   // дальній план
-  const kf = (ART_FAR.h / ART.far.height) * s, fy = mid + (groundY - mid) * ART_FAR.vpar - 24 * s;
+  const kf = (ART_FAR.h / ART.far.height) * s, fy = mid + (refG - mid) * ART_FAR.vpar - 24 * s + dG * ART_FAR.par;
   const ftop = fy - ART_FAR.base * kf;
   drawMirrorTiles(ctx, ART.far, vp, cx * s * ART_FAR.par, ftop, ART.far.width * kf, ART.far.height * kf);
   ctx.fillStyle = ART_FAR.haze; ctx.fillRect(vp.x, ftop + ART.far.height * kf - 1, vp.w, vp.y + vp.h);
   // ближній фон
-  const kn = (ART_NEAR.h / ART.near.height) * s, ny = mid + (groundY - mid) * ART_NEAR.vpar - 4 * s;
+  const kn = (ART_NEAR.h / ART.near.height) * s, ny = mid + (refG - mid) * ART_NEAR.vpar - 4 * s + dG * ART_NEAR.par;
   const ntop = ny - ART_NEAR.base * kn;
   drawMirrorTiles(ctx, ART.near, vp, cx * s * ART_NEAR.par, ntop, ART.near.width * kn, ART.near.height * kn);
-  ctx.fillStyle = '#2c281d'; ctx.fillRect(vp.x, ntop + ART.near.height * kn - 1, vp.w, vp.y + vp.h); // далекий ґрунт під ближнім фоном
+  // поле між ближнім фоном і землею (видно, коли дрон високо)
+  const nb = ntop + ART.near.height * kn - 1;
+  if (nb < vp.y + vp.h) {
+    const gr = ctx.createLinearGradient(0, nb, 0, Math.max(nb + 1, groundY));
+    gr.addColorStop(0, '#3a3526'); gr.addColorStop(0.5, '#4a4630'); gr.addColorStop(1, '#3d3a27');
+    ctx.fillStyle = gr; ctx.fillRect(vp.x, nb, vp.w, vp.y + vp.h - nb);
+  }
 }
 // ґрунт: текстура смугами, що йдуть за рельєфом (трава завжди на поверхні)
 function drawArtGround(ctx, W, x0, x1, bottom, theme) {
@@ -166,9 +175,13 @@ function renderView(ctx, vp, p, t) {
   // дрони
   for (const d of G.drones) {
     if (!inX(d.x - 30, d.x + 30)) continue;
-    if (!isDrone && !droneVisibleToHuman(d, human)) continue;
+    if (!isDrone && !droneSeenBy(d, human, true)) {
+      if (droneSeenBy(d, human)) drawDetected(ctx, d, t); // видно лише на детекторі
+      continue;
+    }
     drawDrone(ctx, d, t);
   }
+  if (!isDrone && human && !human.dead && !human.saved) drawSoundDirs(ctx, human, t);
   // кулі
   ctx.strokeStyle = '#ffe9a0'; ctx.lineWidth = 2;
   ctx.beginPath();
@@ -473,7 +486,7 @@ function drawLadder(ctx, l) {
   for (let y = l.bottom - 10; y > l.top - 4; y -= 14) { ctx.moveTo(l.x - 9, y); ctx.lineTo(l.x + 9, y); }
   ctx.stroke();
 }
-const PICKUP_STYLE = { rifle: ['#3b4a2f', 'АК'], shotgun: ['#5a3d24', 'ДР'], reb: ['#5b3b8a', 'РЕБ'], medkit: ['#e8e8e8', '+'], fuel: ['#a8322d', 'ПАЛ'], armor: ['#4a5568', 'БР'] };
+const PICKUP_STYLE = { rifle: ['#3b4a2f', 'АК'], shotgun: ['#5a3d24', 'ДР'], reb: ['#5b3b8a', 'РЕБ'], medkit: ['#e8e8e8', '+'], fuel: ['#a8322d', 'ПАЛ'], armor: ['#4a5568', 'БР'], detector: ['#22625c', 'ДЕТ'], pack: ['#6b5a3a', 'РЮК'] };
 // маскувальна сітка: зелено-коричнева сітка з «листям»
 function drawNet(ctx, x, y, w, h, seed, light) {
   ctx.save();
@@ -490,7 +503,32 @@ function drawNet(ctx, x, y, w, h, seed, light) {
   }
   ctx.restore();
 }
+// дрон, якого видно лише детектором
+function drawDetected(ctx, d, t) {
+  ctx.save(); ctx.globalAlpha = 0.45; drawDrone(ctx, d, t); ctx.restore();
+  const r = 15 + (t * 30) % 12;
+  ctx.strokeStyle = '#5ad1c4'; ctx.lineWidth = 2; ctx.globalAlpha = 1 - ((t * 30) % 12) / 14;
+  ctx.beginPath(); ctx.arc(d.x, d.y, r, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
+}
+// звідки чути дрон, якого не видно (приблизно)
+function drawSoundDirs(ctx, h, t) {
+  const e = humanEye(h);
+  for (const d of G.drones) {
+    if (d.landed || droneSeenBy(d, h)) continue;
+    const dd = dist(d.x, d.y, e.x, e.y);
+    if (dd > 900) continue;
+    if (d.sndSeed == null) d.sndSeed = Math.random() * 10;
+    const a = Math.atan2(d.y - e.y, d.x - e.x) + Math.sin(t * 0.8 + d.sndSeed) * 0.3; // неточно
+    const k = 1 - dd / 900, r = 58;
+    ctx.strokeStyle = 'rgba(255,110,110,' + (0.25 + 0.65 * k) + ')';
+    for (let i = 0; i < 3; i++) {
+      ctx.lineWidth = 3 - i * 0.6;
+      ctx.beginPath(); ctx.arc(e.x, e.y, r + i * 9, a - 0.3 + i * 0.05, a + 0.3 - i * 0.05); ctx.stroke();
+    }
+  }
+}
 function drawAirBonus(ctx, b, t) {
+  if (b.life < 5 && (t * 6 | 0) % 2) return; // скоро зникне — блимає
   const A = AIR_BONUS[b.type], y = b.y + Math.sin(t * 2 + b.seed) * 5, r = 11 + Math.sin(t * 5 + b.seed) * 1.5;
   ctx.fillStyle = A.color; ctx.globalAlpha = 0.25;
   ctx.beginPath(); ctx.arc(b.x, y, r + 7, 0, 7); ctx.fill();
@@ -540,6 +578,7 @@ function drawHiddenMark(ctx, h, t) {
   ctx.fillText(h.player.name, sp.x, y - 12);
 }
 function drawPickup(ctx, pk, t, human) {
+  if (pk.life != null && pk.life < 8 && (t * 5 | 0) % 2) return; // скоро зникне — блимає
   const [col, txt] = PICKUP_STYLE[pk.type];
   const y = pk.y - 14 + Math.sin(t * 3 + pk.x) * 2;
   ctx.fillStyle = 'rgba(255,240,150,0.25)'; ctx.beginPath(); ctx.arc(pk.x, y, 18, 0, 7); ctx.fill();
@@ -732,7 +771,7 @@ function drawHumanHud(ctx, vp, p, t) {
   const sc = clamp(vp.h / 320, 0.75, 1.2);
   ctx.save(); ctx.translate(vp.x, vp.y); ctx.scale(sc, sc);
   const vw = vp.w / sc, vh = vp.h / sc;
-  panel(ctx, 8, 8, 230, 164);
+  panel(ctx, 8, 8, 230, 182);
   ctx.textAlign = 'left'; ctx.font = FONT(14); ctx.fillStyle = p.color;
   ctx.fillText(p.name + ' · людина', 16, 26);
   ctx.font = FONT(12, '600');
@@ -742,13 +781,23 @@ function drawHumanHud(ctx, vp, p, t) {
   else if (h.alCharges > 0) { ctx.fillStyle = (t * 3 | 0) % 2 ? '#ffd75a' : '#fff'; ctx.fillText('«Альоша» готовий: [' + c.label('aim') + '+' + c.label('special') + ']', 16, 145); }
   else { ctx.fillStyle = '#aaa'; ctx.fillText('Дрони збито/пережито: ' + Math.min(h.beaten, ALIOSHA_NEED) + ' / ' + ALIOSHA_NEED, 16, 145); }
   ctx.fillStyle = '#fff';
+  ctx.fillStyle = packUsed(h) >= PACK_CAP ? '#f2994a' : '#ccc';
+  ctx.fillText('Рюкзак: ' + packUsed(h) + '/' + PACK_CAP, 16, 181);
+  if (h.detector) { ctx.fillStyle = '#5ad1c4'; ctx.fillText('ДЕТЕКТОР ДРОНІВ', 110, 181); }
+  ctx.fillStyle = '#fff';
   ctx.fillText((G.mode === 'dm' ? 'Рахунок: ' + p.score : 'Життя: ' + '♥'.repeat(Math.max(0, h.lives)) + '♡'.repeat(Math.max(0, HUMAN_LIVES - h.lives))) + '    Сітки: ' + h.nets, 16, 163);
   bar(ctx, 16, 34, 194, 11, h.hp / 100, h.hp > 35 ? '#6fcf97' : '#eb5757');
   bar(ctx, 16, 49, 194, 6, h.stamina, h.exhausted ? '#a66' : '#f2c94c');
   ctx.font = FONT(12, '600'); ctx.fillStyle = '#fff';
   let wtxt = 'Без зброї';
-  if (h.vehicle && h.seat === 'gunner') wtxt = 'Кулемет: ' + h.vehicle.mgAmmo;
-  else if (h.weapon) wtxt = WEAPONS[h.weapon.type].name + ': ' + h.weapon.ammo;
+  if (h.vehicle && h.seat === 'gunner') {
+    const v = h.vehicle, mg = v.mgMag == null ? Math.min(WEAPONS.mg.mag, v.mgAmmo) : v.mgMag;
+    wtxt = v.mgReload > 0 ? 'Кулемет: перезарядка ' + v.mgReload.toFixed(1) + ' с' : 'Кулемет: ' + mg + ' / ' + (v.mgAmmo - mg);
+  } else if (h.weapon) {
+    const wp = h.weapon;
+    if (h.reloadT > 0) { ctx.fillStyle = '#f2c94c'; wtxt = WEAPONS[wp.type].name + ': перезарядка ' + h.reloadT.toFixed(1) + ' с'; }
+    else wtxt = WEAPONS[wp.type].name + ': ' + wp.mag + ' / ' + (wp.ammo - wp.mag) + (wp.mag === 0 ? ' — [' + c.label('fire') + '] перезарядити' : '');
+  }
   if (h.canister) { ctx.fillStyle = '#f2994a'; wtxt = 'У руках каністра — [' + c.label('slot1') + '] викинути'; }
   ctx.fillText(wtxt, 16, 72);
   ctx.fillStyle = h.reb > 0 && h.rebCd <= 0 ? '#bb86fc' : '#777';
@@ -761,7 +810,7 @@ function drawHumanHud(ctx, vp, p, t) {
     bar(ctx, 70, 99, 150, 10, v.fuel / tank, v.fuel / tank > 0.25 ? '#f2c94c' : '#eb5757');
   } else if (h.weapon && !h.vehicle) {
     ctx.fillStyle = h.aiming ? '#6fcf97' : '#ccc';
-    ctx.fillText(h.aiming ? 'ПОЗИЦІЯ: ' + Math.round(-h.aimA * 57) + '°' : 'Тримай [' + c.label('aim') + '] — позиція', 16, 108);
+    ctx.fillText(h.aiming ? 'ПОЗИЦІЯ ' + Math.round(-h.aimA * 57) + '° · ' + STANCE_ACC[h.stance] : 'Тримай [' + c.label('aim') + '] — позиція', 16, 108);
   }
   // дим: відлік до отруєння
   if (h.hidden && h.smokeT > 0 && !h.dead) {
@@ -792,11 +841,22 @@ function drawHumanHud(ctx, vp, p, t) {
     }
     // дзижчання
     let md = 1e9;
-    for (const d of G.drones) md = Math.min(md, dist(d.x, d.y, h.x, h.y));
+    for (const d of G.drones) if (!d.landed) md = Math.min(md, dist(d.x, d.y, h.x, h.y)); // «ждун» мовчить
     if (md < 800) {
       const k = 1 - md / 800;
       ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,120,120,' + (0.5 + 0.5 * Math.sin(t * 20 * k + 1)) + ')';
       ctx.font = FONT(13); ctx.fillText('Чути дрон ' + '▮'.repeat(1 + Math.round(k * 4)), vw - 16, 90);
+    }
+    // детектор: відстань і напрямок до найближчого дрона
+    if (h.detector) {
+      const e = humanEye(h);
+      let nd = null, bd = DETECT_R;
+      for (const d of G.drones) { const dd = dist(d.x, d.y, e.x, e.y); if (dd < bd) { bd = dd; nd = d; } }
+      ctx.textAlign = 'right'; ctx.font = FONT(13, '600'); ctx.fillStyle = '#5ad1c4';
+      if (nd) {
+        const ar = ['→', '↘', '↓', '↙', '←', '↖', '↑', '↗'][((Math.round(Math.atan2(nd.y - e.y, nd.x - e.x) / (Math.PI / 4)) % 8) + 8) % 8];
+        ctx.fillText('ДЕТЕКТОР: ' + Math.round(bd / 10) + ' м ' + ar + (nd.landed ? ' (ждун)' : ''), vw - 16, 110);
+      } else ctx.fillText('Детектор: чисто', vw - 16, 110);
     }
   }
   // підказки
@@ -807,7 +867,7 @@ function drawHumanHud(ctx, vp, p, t) {
   else if (!h.dead && !h.saved) {
     const v = nearVehicle(h), pk = nearPickup(h), sp = nearHide(h);
     if (v) tip = '[' + c.label('interact') + '] ' + (v.driver ? 'стати за кулемет' : 'сісти: ' + VEH[v.type].name + ' (пальне ' + Math.round(v.fuel / VEH[v.type].tank * 100) + '%' + (h.canister ? ', заправити' : '') + ')');
-    else if (pk && pk.type === 'medkit' && h.medkits >= MEDKIT_MAX) tip = 'Аптечок досить (' + MEDKIT_MAX + ')';
+    else if (pk && !canTake(h, pk)) tip = pk.type === 'pack' ? 'Рюкзак загиблого: нічого не влізе' : PICKUP_NAMES[pk.type] + ': не влізе в рюкзак (' + packUsed(h) + '/' + PACK_CAP + ')';
     else if (pk) tip = '[' + c.label('interact') + '] підібрати: ' + PICKUP_NAMES[pk.type] + (pk.type === 'fuel' && h.weapon ? ' (зброю не можна буде використати)' : '');
     else if (sp) tip = '[' + c.label('interact') + '] сховатися: ' + { bunker: 'бліндаж', burrow: 'нора', pipe: 'труба' }[sp.type];
     else if (ladderAt(h) && !h.onLadder) tip = '[' + c.label('up') + '] лізти драбиною';
@@ -904,6 +964,7 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
     ctx.fillText('Бонуси: ' + bs.join(' · '), 16, 116);
   }
   if (d && d.lockOn) centerText(ctx, 'ЗАХОПЛЕННЯ ЦІЛІ — дрон летить сам', vw / 2, vh * 0.22, 20, '#ff5a5a');
+  if (d && d.landed) centerText(ctx, d.inBush ? 'ЖДУН У КУЩАХ — тебе не видно' : 'Ждун на відкритому — сядь у кущі, щоб сховатися', vw / 2, vh * 0.22 + 26, 16, d.inBush ? '#6fcf97' : '#ddd');
   if (!d) {
     if (dp.left > 0) {
       centerText(ctx, 'НОВИЙ ДРОН ЧЕРЕЗ ' + Math.max(0, dp.timer).toFixed(1) + ' с', vw / 2, vh / 2 - 34, 22, '#fff');
@@ -975,6 +1036,7 @@ function humanControls(h, c) {
   if (h.nets > 0) it.push(L('aim') + '+' + L('interact') + ' сітка');
   if (h.canister) it.push(L('slot1') + ' викинути каністру');
   if (h.medkits > 0) it.push(L('slot2') + ' аптечка (5 с)');
+  if (h.weapon) it.push(L('fire') + ' без позиції — перезарядити');
   return it;
 }
 function droneControls(d, c) {
