@@ -4,6 +4,15 @@ const GRAV = 1500;
 const RUN = 165, SPRINT = 295, CROUCH_SPD = 95, CRAWL = 55, JUMP = 520;
 const DRONE_R = 9, DRONE_BATTERY = 75, DRONE_RESPAWN = 2, LAUNCH_DELAY = 6;
 const ALIOSHA_NEED = 6, ALIOSHA_TIME = 10;
+const REB_CD = 120, HEAL_TIME = 5, MEDKIT_MAX = 2; // РЕБ — не частіше разу на 2 хв; аптечка — 5 с
+const MINE_TRIGGER = 30, MINE_R = 60;               // міна спрацьовує ближче 30 px (і низько в стрибку), уражає до 60 px
+const AIR_BONUS = {                                 // бонуси для дронів, що висять у повітрі
+  lock: { name: 'Автозахоплення', short: 'ЦІЛЬ', color: '#ff5a5a' },
+  armor: { name: 'Броня дрона', short: 'БРОНЯ', color: '#9fb4d0' },
+  speed: { name: 'Подвійна швидкість', short: '×2', color: '#f2c94c' },
+  battery: { name: 'Запасний АКБ', short: 'АКБ', color: '#6fcf97' },
+  ammo: { name: 'Поповнення скидів', short: '+СКИД', color: '#d79a5a' },
+};
 const HUMAN_LIVES = 3, RESPAWN_TIME = 3, NETS = 3; // 3 життя; відновлення через 3 с; 3 маскувальні сітки // «Альоша»: після 5+ збитих/пережитих дронів, триває 10 с
 const DROP_TYPES = ['frag', 'smoke', 'mine'];
 const DROP_NAMES = { frag: 'Граната', smoke: 'Дим', mine: 'Міна' };
@@ -13,9 +22,9 @@ const OPEN_TIME = 3;          // секунд на відкритій місце
 const HUMAN_DIM = { stand: { w: 18, h: 56 }, crouch: { w: 20, h: 38 }, prone: { w: 46, h: 16 } };
 const STANCE_DMG = { stand: 1, crouch: 0.75, prone: 0.5 };
 const WEAPONS = {
-  rifle: { name: 'Автомат', ammo: 30, rate: 0.11, speed: 1500, range: 650, spread: 0.022, pellets: 1 },
-  shotgun: { name: 'Дробовик', ammo: 8, rate: 0.75, speed: 1200, range: 380, spread: 0.11, pellets: 7 },
-  mg: { name: 'Кулемет', ammo: 80, rate: 0.085, speed: 1600, range: 800, spread: 0.03, pellets: 1 },
+  rifle: { name: 'Автомат', ammo: 18, rate: 0.11, speed: 1500, range: 650, spread: 0.022, pellets: 1 },
+  shotgun: { name: 'Дробовик', ammo: 5, rate: 0.75, speed: 1200, range: 380, spread: 0.11, pellets: 7 },
+  mg: { name: 'Кулемет', ammo: 50, rate: 0.085, speed: 1600, range: 800, spread: 0.03, pellets: 1 },
 };
 const PICKUP_NAMES = { rifle: 'Автомат', shotgun: 'Дробовик', reb: 'РЕБ (одноразовий)', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет' };
 const PLAYER_COLORS = ['#f2c94c', '#56ccf2', '#eb5757', '#6fcf97'];
@@ -35,6 +44,7 @@ function newGame(slots, loc, opts) {
     p.ctrl = s.bot ? new BotController(p, s.level) : CONTROLLERS[s.scheme];
     if (s.role === 'human') {
       const h = makeHuman(p, W.start.x + hi * 40); hi++;
+      if (mode === 'dm') { h.x = randomSpawnX(); h.y = gAt(W, h.x); }
       G.humans.push(h); p.ent = h;
       p.cam.x = h.x; p.cam.y = h.y - 100;
     } else {
@@ -46,6 +56,8 @@ function newGame(slots, loc, opts) {
     }
     G.players.push(p);
   });
+  G.airBonuses = [];
+  for (let i = 0; i < Math.floor(W.width / 1800); i++) G.airBonuses.push(spawnAirBonus({}));
 }
 
 function makeHuman(p, x) {
@@ -56,6 +68,7 @@ function makeHuman(p, x) {
     openTime: 0, reveal: 0, hurtT: 0, dead: false, saved: false, anim: 0,
     aimA: -0.5, aiming: false, diving: false, diveCd: 0, canister: false, smokeT: 0, gasT: 0, gasWarned: false,
     armor: 0, beaten: 0, alCharges: 0, alT: 0, alGranted: false, hideAnim: null,
+    rebCd: 0, medkits: 0, healT: 0,
     lives: G.mode === 'dm' ? Infinity : HUMAN_LIVES, nets: NETS, respawnT: 0, spawn: null, deaths: 0,
   };
 }
@@ -153,6 +166,7 @@ function updateHuman(h, dt) {
   if (h.alT > 0 && (h.alT -= dt) <= 0) { h.alT = 0; feed(h.player.name + ': «Альоша» закінчився', '#f2c94c'); }
   if (h.dead && h.respawnT > 0 && (h.respawnT -= dt) <= 0) respawnHuman(h);
   if (h.protT > 0) h.protT -= dt;
+  if (h.rebCd > 0) h.rebCd -= dt;
   if (h.dead || h.saved) return;
   if (h.vehicle) { humanInVehicle(h, c, dt); return; }
   if (h.hidden) { humanHidden(h, c, dt); return; }
@@ -234,6 +248,10 @@ function updateHuman(h, dt) {
     }
   }
 
+  backpackInput(h, c);
+  tickHeal(h, c, dt, ax !== 0 || h.aiming || !h.onGround);
+  // порожні руки — зброя підбирається сама
+  if (!h.weapon && !h.canister) { const pk = nearPickup(h); if (pk && WEAPONS[pk.type]) takePickup(h, pk); }
   if (c.pressed('interact') && c.held('aim')) placeNet(h);
   else if (c.pressed('interact')) {
     const v = nearVehicle(h);
@@ -245,9 +263,10 @@ function updateHuman(h, dt) {
     }
   }
   // «Альоша»: автонаведення на дрони, стріляти можна й на бігу
-  if (h.alT > 0) { if (c.held('fire') && h.fireCd <= 0) alioshaShot(h); }
+  if (h.alT > 0) { if (c.held('fire') && h.fireCd <= 0 && !h.canister) alioshaShot(h); }
   // стріляти можна лише з позиції (режим прицілювання)
-  else if (h.aiming && c.held('fire') && h.weapon && h.fireCd <= 0) {
+  else if (h.aiming && c.held('fire') && h.weapon && h.canister && c.pressed('fire')) feed(h.player.name + ': руки зайняті каністрою — [' + c.label('slot1') + '] викинути', '#ccc');
+  else if (h.aiming && c.held('fire') && h.weapon && !h.canister && h.fireCd <= 0) {
     const m = muzzle(h);
     fireWeapon(h, m.x, m.y, h.weapon.type, aimWorld(h), false, h.stance);
     h.fireCd = WEAPONS[h.weapon.type].rate;
@@ -370,10 +389,11 @@ function nearHide(h) {
   return null;
 }
 function takePickup(h, p) {
+  if (p.type === 'medkit' && h.medkits >= MEDKIT_MAX) return; // більше не влізе
   p.taken = true;
   if (p.type === 'reb') h.reb++;
-  else if (p.type === 'medkit') h.hp = Math.min(100, h.hp + 45);
-  else if (p.type === 'fuel') h.canister = true;
+  else if (p.type === 'medkit') h.medkits++;
+  else if (p.type === 'fuel') { h.canister = true; h.aiming = false; } // каністра займає руки
   else if (p.type === 'armor') h.armor = 100;
   else h.weapon = { type: p.type, ammo: WEAPONS[p.type].ammo };
   Sfx.click();
@@ -398,6 +418,8 @@ function hideEntrance(h) {
 function humanHidden(h, c, dt) {
   const sp = h.hidden;
   if (c.held('aim') && c.pressed('interact')) { placeNet(h); return; }
+  backpackInput(h, c);
+  tickHeal(h, c, dt, sp.type === 'pipe' && c.axisX !== 0);
   if (sp.type === 'pipe') {
     const ax = c.axisX;
     h.pipeT = clamp(h.pipeT + (ax * 75 * dt) / sp.len, 0, 1);
@@ -474,7 +496,7 @@ function checkShelter(h) {
       // дезматч: +3 очки за укриття, далі знову зі старту
       const who = h.vehicle ? [h.vehicle.driver, h.vehicle.gunner].filter(Boolean) : [h];
       if (h.vehicle) { const v = h.vehicle; for (const o of who) exitVehicle(o); v.vx = 0; }
-      for (const o of who) { o.player.score += 3; feed(o.player.name + ' дістався укриття: +3', '#6fcf97'); o.x = G.W.start.x; o.y = gAt(G.W, o.x); o.vx = 0; o.vy = 0; }
+      for (const o of who) { o.player.score += 3; feed(o.player.name + ' дістався укриття: +3', '#6fcf97'); o.x = randomSpawnX(); o.y = gAt(G.W, o.x); o.vx = 0; o.vy = 0; }
       Sfx.win();
       return;
     }
@@ -519,8 +541,8 @@ function respawnHuman(h) {
     gasT: 0, smokeT: 0, reveal: 0, openTime: 0, diving: false, climb: null, onLadder: false, aiming: false, hideAnim: null, hurtT: 0, stamina: 1, exhausted: false, protT: 3 });
   if (sp && sp.hide && !sp.hide.ruined) { h.x = sp.hide.x; h.y = sp.hide.y; h.hidden = sp.hide; }
   else if (sp && sp.bld) { h.x = sp.x; h.y = sp.y; }
-  else { h.x = W.start.x; h.y = gAt(W, h.x); }
-  h.onGround = true;
+  else { h.x = G.mode === 'dm' ? randomSpawnX() : W.start.x; h.y = gAt(W, h.x); }
+  h.onGround = true; h.healT = 0; h.canister = false;
   feed(h.player.name + ' повернувся в гру', '#6fcf97');
 }
 
@@ -581,7 +603,15 @@ function updateBullets(dt) {
       if (b.x < 0 || b.x > W.width || b.y < -100) { hit = true; break; }
       if (pointSolid(W, b.x, b.y, list)) { hit = true; G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-60, 60), vy: rand(-120, 0), life: 0.25, max: 0.25 }); break; }
       for (const d of G.drones) {
-        if (dist(b.x, b.y, d.x, d.y) < DRONE_R + 3) { hit = true; shootDownDrone(d, b.owner); break; }
+        if (dist(b.x, b.y, d.x, d.y) >= DRONE_R + 3) continue;
+        hit = true;
+        if (d.hp > 1) { d.hp--; G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-90, 90), vy: rand(-120, 20), life: 0.3, max: 0.3 }); Sfx.tone(1400, 0.03, 0.05); }
+        else shootDownDrone(d, b.owner);
+        break;
+      }
+      if (!hit) for (let mi = G.mines.length - 1; mi >= 0; mi--) {
+        const m = G.mines[mi];
+        if (dist(b.x, b.y, m.x, m.y - 3) < 9) { hit = true; G.mines.splice(mi, 1); G.blastBy = null; mineExplode(m.x, m.y); feed('Міну підірвано пострілом', '#f2994a'); break; }
       }
     }
     if (hit) G.bullets.splice(i, 1);
@@ -591,7 +621,8 @@ function updateBullets(dt) {
 // ---------- РЕБ ----------
 function activateReb(h) {
   if (h.reb <= 0) return;
-  h.reb--;
+  if (h.rebCd > 0) { if (G.time - (h.rebMsgT || -9) > 1.5) { h.rebMsgT = G.time; feed(h.player.name + ': РЕБ перезаряджається — ще ' + Math.ceil(h.rebCd) + ' с', '#bb86fc'); } return; }
+  h.reb--; h.rebCd = REB_CD;
   const x = h.vehicle ? h.vehicle.x : h.x, y = (h.vehicle ? h.vehicle.y : h.y) - 30;
   G.rebs.push({ x, y, r: 380, t: 5, max: 5 });
   feed(h.player.name + ' увімкнув РЕБ', '#bb86fc');
@@ -746,7 +777,7 @@ function updateBombs(dt) {
     G.blastBy = b.player;
     if (b.type === 'frag') explosion(b.x, b.y, 80, 90);
     else if (b.type === 'mine') {
-      if (hitH || hitV) mineBlast(b.x, b.y, hitH, hitV);
+      if (hitH || hitV) mineExplode(b.x, b.y);
       else { G.mines.push({ x: b.x, y: b.y + 3, arm: 0.8, seed: Math.random() * 10, player: b.player }); Sfx.tone(180, 0.06, 0.1); }
     } else {
       G.blastBy = null;
@@ -796,19 +827,41 @@ function updateMines(dt) {
   for (let i = G.mines.length - 1; i >= 0; i--) {
     const m = G.mines[i];
     if (m.arm > 0) { m.arm -= dt; continue; }
-    let hh = null, vv = null;
+    let trig = false;
     for (const h of G.humans) {
-      if (h.dead || h.saved || h.hidden || h.vehicle || !h.onGround) continue;
-      if (Math.abs(h.x - m.x) < HUMAN_DIM[h.stance].w / 2 + 6 && Math.abs(h.y - m.y) < 12) { hh = h; break; }
+      if (h.dead || h.saved || h.hidden || h.vehicle) continue;
+      // спрацьовує й тоді, коли людина пролітає низько над нею — перестрибнути важко
+      if (Math.abs(h.x - m.x) < MINE_TRIGGER && h.y > m.y - 34 && h.y < m.y + 14) { trig = true; break; }
     }
-    if (!hh) for (const v of W.vehicles) {
+    if (!trig) for (const v of W.vehicles) {
       if (v.dead) continue;
-      if (Math.abs(v.x - m.x) < VEH[v.type].len / 2 && Math.abs(v.y - m.y) < 18) { vv = v; break; }
+      if (Math.abs(v.x - m.x) < VEH[v.type].len / 2 + 8 && Math.abs(v.y - m.y) < 20) { trig = true; break; }
     }
-    if (hh || vv) { G.mines.splice(i, 1); G.blastBy = m.player; mineBlast(m.x, m.y, hh, vv); G.blastBy = null; }
+    if (trig) { G.mines.splice(i, 1); G.blastBy = m.player; mineExplode(m.x, m.y); G.blastBy = null; }
   }
 }
-// міна: людині без броні — мінус 50% здоров'я, техніці — знищена ходова
+// вибух міни: поруч — мінус 50% здоров'я без броні (15 у броні), далі до MINE_R — менше; техніка — знищена ходова
+function mineExplode(x, y) {
+  explosionFx(x, y - 4, 45, 50);
+  Sfx.boom(false);
+  for (const h of G.humans) {
+    if (h.dead || h.saved || h.hidden || h.vehicle || h.alT > 0) continue;
+    const dd = dist(h.x, h.y - 8, x, y);
+    if (dd > MINE_R) continue;
+    const near = dd < MINE_TRIGGER + 8, armored = h.armor > 0;
+    if (armored) h.armor = Math.max(0, h.armor - (near ? 40 : 15));
+    hurt(h, near ? (armored ? 15 : 50) : (armored ? 7 : 22), 'mine');
+    if (near) { h.vy = -220; h.onGround = false; }
+    feed(h.player.name + (near ? ' підірвався на міні' : ' поранений міною') + (armored ? ' (броня врятувала)' : ''), '#f2994a');
+  }
+  for (const v of G.W.vehicles) {
+    if (v.dead || Math.abs(v.x - x) > VEH[v.type].len / 2 + 40 || Math.abs(v.y - y) > 40) continue;
+    v.immob = true; v.vx = 0;
+    for (const o of [v.driver, v.gunner]) if (o) hurt(o, 6, 'mine');
+    feed(VEH[v.type].name + ' підірвався на міні — ходова знищена', '#f2994a');
+  }
+  damageCovers(x, y, 30);
+}
 function mineBlast(x, y, h, v) {
   explosionFx(x, y - 4, 45, 40);
   Sfx.boom(false);
@@ -847,6 +900,19 @@ function shootDownDrone(d, by) {
   explosion(d.x, d.y, 30, 55);
   if (by) { beat(by); by.player.score++; }
 }
+function acquireLock(d) {
+  const h = d.lockOn;
+  if (h && !h.dead && !h.saved && !h.hidden && dist(h.x, h.y - 25, d.x, d.y) < 520) return true;
+  d.lockOn = null;
+  let best = null, bd = 230;
+  for (const x of G.humans) {
+    if (x.dead || x.saved || x.hidden) continue;
+    const dd = dist(x.x, x.y - 25, d.x, d.y);
+    if (dd < bd && humanVisibleToDrone(x, d) && lineOfSight(G.W, d.x, d.y, x.x, x.y - 25)) { bd = dd; best = x; }
+  }
+  if (best) { d.lockOn = best; feed(d.player.name + ': автозахоплення цілі!', '#ff5a5a'); Sfx.tone(1200, 0.15, 0.1, 'sawtooth'); }
+  return !!best;
+}
 function isHeadHit(d, h) {
   const r = humanRect(h);
   const px = clamp(d.x, r.x, r.x + r.w), py = clamp(d.y, r.y, r.y + r.h);
@@ -867,7 +933,17 @@ function updateDrone(d, dt) {
   const boost = c.held('sprint');
   d.battery -= dt * (boost ? 1.8 : 1);
   d.jammed = inReb(d.x, d.y) || d.battery <= 0;
-  if (!d.jammed) {
+  if (d.speedT > 0) d.speedT -= dt;
+  const fast = d.speedT > 0 ? 2 : 1;
+  // автозахоплення: людина поруч — дрон летить у неї сам, навіть під РЕБом
+  if (d.lock && d.battery > 0 && acquireLock(d)) {
+    const h = d.lockOn, r = humanRect(h), tx = h.x, ty = r.y + r.h * 0.5;
+    const dx = tx - d.x, dy = ty - d.y, l = Math.hypot(dx, dy) || 1, v = 560 * fast;
+    const a = Math.min(1, dt * 7);
+    d.vx += (dx / l * v - d.vx) * a; d.vy += (dy / l * v - d.vy) * a;
+    d.jammed = false; d.landing = false;
+    if (c.pressed('fire')) { explodeDrone(d); return; }
+  } else if (!d.jammed) {
     let ix = c.cur.ax, iy = c.cur.ay;
     const l = Math.hypot(ix, iy);
     if (l > 1) { ix /= l; iy /= l; }
@@ -877,7 +953,7 @@ function updateDrone(d, dt) {
       else d.player.cam.wide = !d.player.cam.wide;
     }
     if (d.landing && (c.held('up') || boost)) d.landing = false;
-    const acc = boost ? 2100 : 1500, max = boost ? 720 : 460;
+    const acc = (boost ? 2100 : 1500) * fast, max = (boost ? 720 : 460) * fast;
     if (d.landing) {
       d.vx *= Math.exp(-5 * dt); d.vy = approach(d.vy, 90, 700 * dt);
     } else {
@@ -1050,6 +1126,7 @@ function updateGame(dt) {
   updateBullets(dt);
   updateBombs(dt);
   updateMines(dt);
+  updateAirBonuses(dt);
   for (const r of G.rebs) r.t -= dt;
   G.rebs = G.rebs.filter((r) => r.t > 0);
   for (const f of G.feed) f.t -= dt;
@@ -1106,4 +1183,69 @@ function teamScores() {
   let humans = 0, drones = 0;
   for (const p of G.players) if (p.role === 'human') humans += p.score; else drones += p.score;
   return { humans, drones };
+}
+
+// ---------- Рюкзак людини ----------
+// 1 — зброя (якщо в руках каністра — викинути її), 2 — аптечка (5 с), 3 — РЕБ
+function backpackInput(h, c) {
+  if (c.pressed('slot1') && h.canister) dropCanister(h);
+  if (c.pressed('slot2')) {
+    if (h.healT > 0) return;
+    if (h.medkits <= 0) feed(h.player.name + ': аптечок немає', '#ccc');
+    else if (h.hp >= 100) feed(h.player.name + ': здоров\'я повне', '#ccc');
+    else { h.healT = 0.001; feed(h.player.name + ' перев\'язується…', '#9c9'); }
+  }
+  if (c.pressed('slot3')) activateReb(h);
+}
+function dropCanister(h) {
+  h.canister = false;
+  const x = clamp(h.x + h.facing * 18, 20, G.W.width - 20);
+  G.W.pickups.push({ type: 'fuel', x, y: surfaceY(G.W, x) });
+  feed(h.player.name + ' викинув каністру', '#ccc');
+}
+// лікування: треба 5 с не рухатися
+function tickHeal(h, c, dt, moving) {
+  if (h.healT <= 0) return;
+  if (moving) { h.healT = 0; feed(h.player.name + ': перев\'язку перервано', '#ccc'); return; }
+  h.healT += dt;
+  if (h.healT >= HEAL_TIME) { h.healT = 0; h.medkits--; h.hp = Math.min(100, h.hp + 45); feed(h.player.name + ': +45 здоров\'я', '#6fcf97'); Sfx.tone(660, 0.15, 0.12); }
+}
+// дезматч: випадкове місце появи — не в об'єктах і не біля дронів
+function randomSpawnX() {
+  const W = G.W;
+  let x = W.start.x;
+  for (let t = 0; t < 40; t++) {
+    x = rand(900, W.width - 1500);
+    const busy = solidsNear(W, x - 30, x + 30).some((s) => !s.thin && s.x < x + 20 && s.x + s.w > x - 20 && s.y < gAt(W, x) && s.y + s.h > gAt(W, x) - 60);
+    const drone = G.drones.some((d) => Math.abs(d.x - x) < 600);
+    if (!busy && !drone) break;
+  }
+  return x;
+}
+
+// ---------- Бонуси для дронів у повітрі ----------
+function spawnAirBonus(b) {
+  const W = G.W, x = rand(1200, W.width - 900);
+  return Object.assign(b, { x, y: gAt(W, x) - rand(150, 320), type: pick(Object.keys(AIR_BONUS)), active: true, t: 0, seed: Math.random() * 10 });
+}
+function updateAirBonuses(dt) {
+  for (const b of G.airBonuses) {
+    if (!b.active) { if ((b.t -= dt) <= 0) spawnAirBonus(b); continue; }
+    for (const d of G.drones) {
+      if (d.landed || dist(d.x, d.y, b.x, b.y) > 24) continue;
+      applyAirBonus(d, b.type);
+      b.active = false; b.t = 45;
+      break;
+    }
+  }
+}
+function applyAirBonus(d, type) {
+  if (type === 'lock') d.lock = true;
+  else if (type === 'armor') d.hp = 10;
+  else if (type === 'speed') d.speedT = 25;
+  else if (type === 'battery') d.battery = DRONE_BATTERY * 1.5;
+  else if (type === 'ammo') d.slots = d.slots.map((s) => s || 'frag');
+  if (!d.payload) d.payload = firstDrop(d.slots);
+  feed(d.player.name + ': бонус «' + AIR_BONUS[type].name + '»', AIR_BONUS[type].color);
+  Sfx.tone(980, 0.12, 0.12); Sfx.tone(1320, 0.1, 0.08);
 }

@@ -5,6 +5,71 @@ const THEME = {
   forest: { sky: ['#7f9db2', '#d3d9cb'], far: '#56704f', far2: '#7c9172', grass: '#4d6e33', dirt: '#4a3b28', deep: '#2c2418' },
   city: { sky: ['#8f9296', '#d8ccb9'], far: '#73767c', far2: '#9a9a9a', grass: '#6b6a5b', dirt: '#55504a', deep: '#33302d' },
 };
+// ===== Графіка з файлів (фони, ґрунт). Поки картинка не завантажилась — малюємо як раніше =====
+const ART = {};
+function loadArt(name, src) { const im = new Image(); im.onload = () => { ART[name] = im; }; im.src = src; }
+loadArt('sky', 'art/sky.jpg');       // небо з хмарами
+loadArt('far', 'art/far.png');       // дальній план: пагорби, ліс, промзона (прозоре небо)
+loadArt('near', 'art/near.png');     // ближній фон: руїни, стовпи, дерева (прозорий серпанок)
+loadArt('ground', 'art/ground.png'); // ґрунт у розрізі з травою (прозорий верх)
+const ART_FAR = { h: 300, base: 410, par: 0.15, vpar: 0.6, haze: '#e1dcd5' };  // висота шару в одиницях світу, рядок горизонту, паралакс
+const ART_NEAR = { h: 250, base: 440, par: 0.4, vpar: 0.85 };
+const ART_GROUND = { k: 0.15, surf: 175, step: 6 }; // одиниць світу на піксель, рядок поверхні в ground.png, ширина смуги
+
+// картинка, що повторюється по горизонталі з дзеркальним відбиттям (щоб не було шва)
+function drawMirrorTiles(ctx, img, vp, offset, y, w, h) {
+  const period = w * 2;
+  let start = -(((offset % period) + period) % period);
+  for (let x = start, k = 0; x < vp.w; x += w, k++) {
+    if (k % 2 === 0) ctx.drawImage(img, vp.x + x, y, w + 1, h);
+    else { ctx.save(); ctx.translate(vp.x + x + w, y); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0, w + 1, h); ctx.restore(); }
+  }
+}
+function drawArtBackground(ctx, vp, cx, cy, s) {
+  const sky = ART.sky;
+  const ks = Math.max(vp.w / sky.width, vp.h / sky.height) * 1.05;
+  drawMirrorTiles(ctx, sky, vp, cx * s * 0.02, vp.y + vp.h - sky.height * ks, sky.width * ks, sky.height * ks);
+  const groundY = vp.y + (BASE_G - cy) * s, mid = vp.y + vp.h * 0.5;
+  // дальній план
+  const kf = (ART_FAR.h / ART.far.height) * s, fy = mid + (groundY - mid) * ART_FAR.vpar - 24 * s;
+  const ftop = fy - ART_FAR.base * kf;
+  drawMirrorTiles(ctx, ART.far, vp, cx * s * ART_FAR.par, ftop, ART.far.width * kf, ART.far.height * kf);
+  ctx.fillStyle = ART_FAR.haze; ctx.fillRect(vp.x, ftop + ART.far.height * kf - 1, vp.w, vp.y + vp.h);
+  // ближній фон
+  const kn = (ART_NEAR.h / ART.near.height) * s, ny = mid + (groundY - mid) * ART_NEAR.vpar - 4 * s;
+  const ntop = ny - ART_NEAR.base * kn;
+  drawMirrorTiles(ctx, ART.near, vp, cx * s * ART_NEAR.par, ntop, ART.near.width * kn, ART.near.height * kn);
+  ctx.fillStyle = '#2c281d'; ctx.fillRect(vp.x, ntop + ART.near.height * kn - 1, vp.w, vp.y + vp.h); // далекий ґрунт під ближнім фоном
+}
+// ґрунт: текстура смугами, що йдуть за рельєфом (трава завжди на поверхні)
+function drawArtGround(ctx, W, x0, x1, bottom, theme) {
+  const img = ART.ground, G0 = ART_GROUND, k = G0.k, step = G0.step;
+  const tw = img.width * k, sw = step / k;
+  x0 = Math.max(0, Math.floor(x0 / step) * step); x1 = Math.min(W.width, x1);
+  // глибше за текстуру — темний ґрунт
+  ctx.beginPath(); ctx.moveTo(x0, bottom);
+  for (let x = x0; x <= x1 + GS; x += GS) ctx.lineTo(x, gAt(W, x) + 60);
+  ctx.lineTo(x1 + GS, bottom); ctx.closePath();
+  ctx.fillStyle = '#2e2a21'; ctx.fill();
+  const top = G0.surf * k, hgt = img.height * k;
+  // кожна смуга нахилена під схил — край землі суцільний навіть в окопах
+  const m = ctx.getTransform(), S = m.a;
+  for (let x = x0; x <= x1; x += step) {
+    const ya = gAt(W, x), yb = gAt(W, x + step), slope = (yb - ya) / step;
+    const u = (((x % tw) + tw) % tw) / k;
+    ctx.setTransform(S, S * slope, 0, S, m.e + S * x, m.f + S * ya);
+    ctx.drawImage(img, u, 0, Math.min(sw, img.width - u), img.height, 0, -top, step + 0.6, hgt);
+  }
+  ctx.setTransform(m);
+  if (W.themeAt(x0) === 'city') {
+    // місто: сіріший, витоптаний ґрунт
+    ctx.beginPath(); ctx.moveTo(x0, bottom);
+    for (let x = x0; x <= x1 + GS; x += GS) ctx.lineTo(x, gAt(W, x) - 26);
+    ctx.lineTo(x1 + GS, bottom); ctx.closePath();
+    ctx.fillStyle = 'rgba(95,92,86,0.38)'; ctx.fill();
+  }
+}
+
 const hash = (n) => { const v = Math.sin(n * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
 const FONT = (sz, w) => (w || 'bold') + ' ' + sz + 'px "Segoe UI", system-ui, sans-serif';
 
@@ -51,10 +116,13 @@ function renderView(ctx, vp, p, t) {
   ctx.save();
   ctx.beginPath(); ctx.rect(vp.x, vp.y, vp.w, vp.h); ctx.clip();
   // небо
-  const sky = ctx.createLinearGradient(0, vp.y, 0, vp.y + vp.h);
-  sky.addColorStop(0, theme.sky[0]); sky.addColorStop(1, theme.sky[1]);
-  ctx.fillStyle = sky; ctx.fillRect(vp.x, vp.y, vp.w, vp.h);
-  drawFar(ctx, vp, cx, cy, s, theme, W);
+  if (ART.sky && ART.far && ART.near) drawArtBackground(ctx, vp, cx, cy, s);
+  else {
+    const sky = ctx.createLinearGradient(0, vp.y, 0, vp.y + vp.h);
+    sky.addColorStop(0, theme.sky[0]); sky.addColorStop(1, theme.sky[1]);
+    ctx.fillStyle = sky; ctx.fillRect(vp.x, vp.y, vp.w, vp.h);
+    drawFar(ctx, vp, cx, cy, s, theme, W);
+  }
 
   ctx.save();
   ctx.translate(vp.x - cx * s, vp.y - cy * s);
@@ -94,6 +162,7 @@ function renderView(ctx, vp, p, t) {
     if (v.dead || !inX(v.x - 60, v.x + 60)) continue;
     for (const o of [v.driver, v.gunner]) if (o && (!isDrone || humanVisibleToDrone(o, drone))) drawRider(ctx, v, o);
   }
+  for (const ab of G.airBonuses || []) if (ab.active && inX(ab.x - 30, ab.x + 30)) drawAirBonus(ctx, ab, t);
   // дрони
   for (const d of G.drones) {
     if (!inX(d.x - 30, d.x + 30)) continue;
@@ -178,6 +247,7 @@ function drawFar(ctx, vp, cx, cy, s, theme, W) {
 }
 
 function drawGround(ctx, W, x0, x1, bottom, theme) {
+  if (ART.ground) { drawArtGround(ctx, W, x0, x1, bottom, theme); return; }
   x0 = Math.max(0, Math.floor(x0 / GS) * GS); x1 = Math.min(W.width, x1);
   ctx.beginPath(); ctx.moveTo(x0, bottom);
   for (let x = x0; x <= x1 + GS; x += GS) ctx.lineTo(x, gAt(W, x));
@@ -213,7 +283,7 @@ function drawBack(ctx, b) {
 }
 
 function drawTrunk(ctx, tr) {
-  ctx.fillStyle = '#4a3a2a';
+  ctx.fillStyle = '#4b4134';
   const tw = tr.kind === 'poplar' ? 6 : 9;
   ctx.fillRect(tr.x - tw / 2, tr.y - tr.h * 0.75, tw, tr.h * 0.75);
 }
@@ -221,27 +291,32 @@ function drawCanopy(ctx, tr, a) {
   ctx.globalAlpha = a;
   const y = tr.y - tr.h;
   if (tr.kind === 'poplar') {
-    ctx.fillStyle = '#3f6b2f';
+    ctx.fillStyle = '#5a6143';
     ctx.beginPath(); ctx.ellipse(tr.x, y + tr.h * 0.35, tr.r * 0.55, tr.h * 0.42, 0, 0, Math.PI * 2); ctx.fill();
   } else {
-    ctx.fillStyle = '#466f30';
+    // одна форма з кількох кіл — без темних накладань при прозорості
+    ctx.fillStyle = '#61684a';
+    ctx.beginPath();
     for (let i = 0; i < 4; i++) {
-      const ox = (hash(tr.seed * 10 + i) - 0.5) * tr.r * 1.6, oy = (hash(tr.seed * 20 + i) - 0.5) * tr.r * 0.9;
-      ctx.beginPath(); ctx.arc(tr.x + ox, y + tr.r + oy, tr.r * (0.7 + hash(i + tr.seed) * 0.4), 0, Math.PI * 2); ctx.fill();
+      const ox = (hash(tr.seed * 10 + i) - 0.5) * tr.r * 1.6, oy = (hash(tr.seed * 20 + i) - 0.5) * tr.r * 0.9, rr = tr.r * (0.7 + hash(i + tr.seed) * 0.4);
+      ctx.moveTo(tr.x + ox + rr, y + tr.r + oy); ctx.arc(tr.x + ox, y + tr.r + oy, rr, 0, Math.PI * 2);
     }
-    ctx.fillStyle = 'rgba(120,160,70,0.35)';
+    ctx.fill();
+    ctx.fillStyle = 'rgba(160,160,118,0.3)';
     ctx.beginPath(); ctx.arc(tr.x - tr.r * 0.3, y + tr.r * 0.7, tr.r * 0.5, 0, Math.PI * 2); ctx.fill();
   }
   ctx.globalAlpha = 1;
 }
 function drawBush(ctx, b, a) {
   ctx.globalAlpha = a;
-  ctx.fillStyle = '#4c7433';
+  ctx.fillStyle = '#676c4b';
   const n = Math.max(2, Math.round(b.w / 28));
+  ctx.beginPath();
   for (let i = 0; i < n; i++) {
     const bx = b.x + (i + 0.5) * (b.w / n), r = b.h * (0.45 + hash(b.seed * 9 + i) * 0.25);
-    ctx.beginPath(); ctx.arc(bx, b.y - r * 0.8, r, 0, Math.PI * 2); ctx.fill();
+    ctx.moveTo(bx + r, b.y - r * 0.8); ctx.arc(bx, b.y - r * 0.8, r, 0, Math.PI * 2);
   }
+  ctx.fill();
   ctx.globalAlpha = 1;
 }
 
@@ -415,6 +490,15 @@ function drawNet(ctx, x, y, w, h, seed, light) {
   }
   ctx.restore();
 }
+function drawAirBonus(ctx, b, t) {
+  const A = AIR_BONUS[b.type], y = b.y + Math.sin(t * 2 + b.seed) * 5, r = 11 + Math.sin(t * 5 + b.seed) * 1.5;
+  ctx.fillStyle = A.color; ctx.globalAlpha = 0.25;
+  ctx.beginPath(); ctx.arc(b.x, y, r + 7, 0, 7); ctx.fill();
+  ctx.globalAlpha = 1; ctx.strokeStyle = A.color; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(b.x, y, r, 0, 7); ctx.stroke();
+  ctx.fillStyle = A.color; ctx.font = FONT(9); ctx.textAlign = 'center';
+  ctx.fillText(A.short, b.x, y + 3);
+}
 function drawMine(ctx, m, t) {
   ctx.fillStyle = '#3f4a25';
   ctx.beginPath(); ctx.ellipse(m.x, m.y - 2, 7, 3.2, 0, 0, 7); ctx.fill();
@@ -563,6 +647,11 @@ function drawHuman(ctx, h, t, alpha) {
       ctx.strokeStyle = uni; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(9, 1); ctx.stroke();
       ctx.fillStyle = '#222'; ctx.fillRect(2, -1, 24, 3.5);
       ctx.restore();
+    } else if (h.canister) {
+      ctx.lineTo(9, -torso + 12); ctx.stroke();
+      if (h.weapon) { ctx.fillStyle = '#222'; ctx.save(); ctx.rotate(-1.1); ctx.fillRect(-4, -torso + 4, 20, 3); ctx.restore(); } // зброя за спиною
+      ctx.fillStyle = '#a8322d'; roundRect(ctx, 5, -torso + 9, 10, 13, 2); ctx.fill();
+      ctx.fillStyle = '#6e1f1b'; ctx.fillRect(7, -torso + 7, 4, 3);
     } else if (h.weapon) { ctx.lineTo(10, -torso + 10); ctx.stroke(); ctx.fillStyle = '#222'; ctx.fillRect(2, -torso + 8, h.weapon.type === 'shotgun' ? 20 : 22, 3.5); }
     else { ctx.lineTo(-sw * 0.8, -torso + 16); ctx.stroke(); }
   }
@@ -584,8 +673,11 @@ function drawHuman(ctx, h, t, alpha) {
 
 // ---------- Дрон ----------
 function drawDrone(ctx, d, t) {
+  if (d.speedT > 0 && !d.landed) { ctx.strokeStyle = 'rgba(242,201,76,0.5)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - d.vx * 0.06, d.y - d.vy * 0.06); ctx.stroke(); }
   ctx.save();
   ctx.translate(d.x, d.y); ctx.rotate(d.tilt);
+  if (d.hp > 1) { ctx.strokeStyle = '#9fb4d0'; ctx.lineWidth = 2; roundRect(ctx, -9, -7, 18, 14, 3); ctx.stroke(); }
+  if (d.lockOn) { ctx.strokeStyle = '#ff5a5a'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(0, 0, 15, 0, 7); ctx.stroke(); }
   ctx.fillStyle = '#222';
   ctx.fillRect(-14, -2, 28, 4);
   ctx.fillStyle = '#333'; roundRect(ctx, -6, -5, 12, 9, 2); ctx.fill();
@@ -657,10 +749,12 @@ function drawHumanHud(ctx, vp, p, t) {
   let wtxt = 'Без зброї';
   if (h.vehicle && h.seat === 'gunner') wtxt = 'Кулемет: ' + h.vehicle.mgAmmo;
   else if (h.weapon) wtxt = WEAPONS[h.weapon.type].name + ': ' + h.weapon.ammo;
+  if (h.canister) { ctx.fillStyle = '#f2994a'; wtxt = 'У руках каністра — [' + c.label('slot1') + '] викинути'; }
   ctx.fillText(wtxt, 16, 72);
-  ctx.fillStyle = h.reb > 0 ? '#bb86fc' : '#777';
-  ctx.fillText('РЕБ: ' + h.reb + '  [' + c.label('special') + ']', 16, 90);
-  if (h.canister) { ctx.fillStyle = '#f2994a'; ctx.fillText('Каністра', 110, 90); }
+  ctx.fillStyle = h.reb > 0 && h.rebCd <= 0 ? '#bb86fc' : '#777';
+  ctx.fillText('РЕБ: ' + h.reb + (h.rebCd > 0 ? ' (' + Math.ceil(h.rebCd) + ' с)' : '') + ' [' + c.label('slot3') + ']', 16, 90);
+  ctx.fillStyle = h.medkits > 0 ? '#e8e8e8' : '#777';
+  ctx.fillText('Аптечки: ' + h.medkits + ' [' + c.label('slot2') + ']', 130, 90);
   if (h.vehicle && h.seat === 'driver') {
     const v = h.vehicle, tank = VEH[v.type].tank;
     ctx.fillStyle = '#fff'; ctx.fillText('Пальне', 16, 108);
@@ -713,7 +807,8 @@ function drawHumanHud(ctx, vp, p, t) {
   else if (!h.dead && !h.saved) {
     const v = nearVehicle(h), pk = nearPickup(h), sp = nearHide(h);
     if (v) tip = '[' + c.label('interact') + '] ' + (v.driver ? 'стати за кулемет' : 'сісти: ' + VEH[v.type].name + ' (пальне ' + Math.round(v.fuel / VEH[v.type].tank * 100) + '%' + (h.canister ? ', заправити' : '') + ')');
-    else if (pk) tip = '[' + c.label('interact') + '] підібрати: ' + PICKUP_NAMES[pk.type];
+    else if (pk && pk.type === 'medkit' && h.medkits >= MEDKIT_MAX) tip = 'Аптечок досить (' + MEDKIT_MAX + ')';
+    else if (pk) tip = '[' + c.label('interact') + '] підібрати: ' + PICKUP_NAMES[pk.type] + (pk.type === 'fuel' && h.weapon ? ' (зброю не можна буде використати)' : '');
     else if (sp) tip = '[' + c.label('interact') + '] сховатися: ' + { bunker: 'бліндаж', burrow: 'нора', pipe: 'труба' }[sp.type];
     else if (ladderAt(h) && !h.onLadder) tip = '[' + c.label('up') + '] лізти драбиною';
   }
@@ -729,6 +824,10 @@ function drawHumanHud(ctx, vp, p, t) {
   } else if (h.dead) centerText(ctx, 'ЗАГИНУВ', vw / 2, vh / 2, 34, '#eb5757');
   else if (h.saved) centerText(ctx, 'У БЕЗПЕЦІ', vw / 2, vh / 2, 34, '#6fcf97');
   else if (G.time < LAUNCH_DELAY) centerText(ctx, 'Біжи до укриття →  дрони злітають через ' + Math.ceil(LAUNCH_DELAY - G.time), vw / 2, vh * 0.3, 18, '#fff');
+  if (h.healT > 0) {
+    centerText(ctx, 'Перев\'язка — не рухайся: ' + (HEAL_TIME - h.healT).toFixed(1) + ' с', vw / 2, vh * 0.32, 18, '#9c9');
+    bar(ctx, vw / 2 - 100, vh * 0.32 + 12, 200, 8, h.healT / HEAL_TIME, '#6fcf97');
+  }
   if (h.hurtT > 0) { ctx.fillStyle = 'rgba(200,0,0,' + h.hurtT * 0.6 + ')'; ctx.fillRect(0, 0, vw, vh); }
   ctx.restore();
 }
@@ -785,7 +884,7 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
   const vw = vp.w / sc, vh = vp.h / sc;
   const prep = !d || d.onPad;
   if (!d) { ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, vw, vh); }
-  panel(ctx, 8, 8, 290, 108);
+  panel(ctx, 8, 8, 290, d && (d.lock || d.hp > 1 || d.speedT > 0) ? 126 : 108);
   ctx.textAlign = 'left'; ctx.font = FONT(14); ctx.fillStyle = p.color;
   ctx.fillText(p.name + ' · FPV-дрон', 16, 26);
   ctx.font = FONT(12, '600'); ctx.fillStyle = '#fff';
@@ -796,6 +895,15 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
     ctx.fillText(d.landed ? (d.onPad ? 'на старті' : 'ЖДУН (АКБ не сідає)') : d.landing ? 'посадка…' : (Math.hypot(d.vx, d.vy) / 10 * 3.6 | 0) + ' км/г', 172, 62);
   }
   drawSlots(ctx, 16, 72, prep ? dp.loadout : d.slots, prep ? null : d.payload, prep ? dp.sel : -1);
+  if (d && (d.lock || d.hp > 1 || d.speedT > 0)) {
+    const bs = [];
+    if (d.lock) bs.push(d.lockOn ? 'ЗАХОПЛЕНО' : 'автозахоплення');
+    if (d.hp > 1) bs.push('броня ' + d.hp);
+    if (d.speedT > 0) bs.push('×2 ' + Math.ceil(d.speedT) + ' с');
+    ctx.font = FONT(12, '600'); ctx.fillStyle = '#f2c94c'; ctx.textAlign = 'left';
+    ctx.fillText('Бонуси: ' + bs.join(' · '), 16, 116);
+  }
+  if (d && d.lockOn) centerText(ctx, 'ЗАХОПЛЕННЯ ЦІЛІ — дрон летить сам', vw / 2, vh * 0.22, 20, '#ff5a5a');
   if (!d) {
     if (dp.left > 0) {
       centerText(ctx, 'НОВИЙ ДРОН ЧЕРЕЗ ' + Math.max(0, dp.timer).toFixed(1) + ' с', vw / 2, vh / 2 - 34, 22, '#fff');
@@ -865,6 +973,8 @@ function humanControls(h, c) {
     L('aim') + ' позиція', L('fire') + ' вогонь', L('interact') + ' дія', L('special') + ' РЕБ'];
   if (h.alCharges > 0 && h.alT <= 0) it.push(L('aim') + '+' + L('special') + ' Альоша');
   if (h.nets > 0) it.push(L('aim') + '+' + L('interact') + ' сітка');
+  if (h.canister) it.push(L('slot1') + ' викинути каністру');
+  if (h.medkits > 0) it.push(L('slot2') + ' аптечка (5 с)');
   return it;
 }
 function droneControls(d, c) {
