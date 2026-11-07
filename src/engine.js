@@ -33,22 +33,24 @@ function rectDist(px, py, r) {
 
 // ===== Керування =====
 const Keys = {};
-const ACTIONS = ['left', 'right', 'up', 'down', 'sprint', 'interact', 'fire', 'special', 'aim'];
+const ACTIONS = ['left', 'right', 'up', 'down', 'sprint', 'interact', 'fire', 'special', 'aim', 'slot1', 'slot2', 'slot3'];
 // Одна клавіатура = один гравець. Ліва рука на WASD, великий палець на пробілі.
 // Стрілки дублюють WASD (рух і кут прицілу).
 const KB_SCHEMES = {
   kb: { name: 'Клавіатура', short: 'WASD', keys: {
     left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'], up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'],
     sprint: ['ShiftLeft', 'ShiftRight'], interact: ['KeyE'], fire: ['KeyF', 'KeyJ'], special: ['KeyQ'], aim: ['Space'],
+    slot1: ['Digit1', 'Numpad1'], slot2: ['Digit2', 'Numpad2'], slot3: ['Digit3', 'Numpad3'],
   } },
 };
-const GP_LABELS = { left: '←', right: '→', up: '↑/A', down: '↓/B', sprint: 'LB', interact: 'X', fire: 'RB', special: 'Y', aim: 'LT' };
+const GP_LABELS = { left: '←', right: '→', up: '↑/A', down: '↓/B', sprint: 'LB', interact: 'X', fire: 'RB', special: 'Y', aim: 'LT', slot1: 'Back', slot2: 'L3', slot3: 'R3' };
 const LOBBY_CODES = ['Escape', 'Enter'];
 const USED_CODES = new Set(LOBBY_CODES);
 for (const s of Object.values(KB_SCHEMES)) for (const cs of Object.values(s.keys)) for (const c of cs) USED_CODES.add(c);
 
 function codeLabel(c) {
   if (c.startsWith('Key')) return c.slice(3);
+  if (c.startsWith('Digit')) return c.slice(5);
   if (c.startsWith('Numpad')) return 'Num' + c.slice(6).replace('Add', '+');
   return { Space: 'Пробіл', ShiftLeft: 'Shift', ShiftRight: 'Shift', ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓', Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Quote: "'" }[c] || c;
 }
@@ -89,7 +91,7 @@ class Controller {
         const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
         s.left = ax < -0.45 || b(14); s.right = ax > 0.45 || b(15);
         s.up = ay < -0.6 || b(12) || b(0); s.down = ay > 0.6 || b(13) || b(1);
-        s.sprint = b(4); s.aim = b(6); s.fire = b(5) || b(7); s.interact = b(2) || b(9); s.special = b(3);
+        s.sprint = b(4); s.aim = b(6); s.slot1 = b(8); s.slot2 = b(10); s.slot3 = b(11); s.fire = b(5) || b(7); s.interact = b(2) || b(9); s.special = b(3);
         if (Math.hypot(ax, ay) > 0.2) { s.ax = ax; s.ay = ay; }
       }
     }

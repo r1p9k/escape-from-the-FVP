@@ -124,6 +124,11 @@ function thinkHuman(b, s, dt) {
       else if (coverFor(h, HUMAN_DIM.prone.h)) { stop = true; if (h.stance !== 'prone') b.tap(s, 'down'); }
     }
   }
+  // каністра заважає стріляти — викинути, якщо є зброя й загроза
+  if (h.canister && h.weapon && visibleThreat) b.tap(s, 'slot1');
+  // перев'язка, коли спокійно
+  if (h.hp < 55 && h.medkits > 0 && !danger && h.onGround && h.healT <= 0) b.tap(s, 'slot2');
+  if (h.healT > 0 && !danger) stop = true;
   if (!stop && h.stance !== 'stand') b.tap(s, 'up');
 
   // бонус «Альоша»: увімкнути, коли дрон близько; далі автонаведення — просто стріляти
@@ -145,7 +150,7 @@ function thinkHuman(b, s, dt) {
 
   // підбір і техніка
   const pk = nearPickup(h);
-  if (pk && ((pk.type === 'armor' && h.armor <= 0) || pk.type === 'reb' || (pk.type === 'medkit' && h.hp < 80) || (pk.type === 'fuel' && !h.canister) || ((pk.type === 'rifle' || pk.type === 'shotgun') && !h.weapon))) b.tap(s, 'interact');
+  if (pk && ((pk.type === 'armor' && h.armor <= 0) || pk.type === 'reb' || (pk.type === 'medkit' && h.medkits < MEDKIT_MAX) || (pk.type === 'fuel' && !h.canister && !h.weapon) || ((pk.type === 'rifle' || pk.type === 'shotgun') && !h.weapon))) b.tap(s, 'interact');
   else if (m.noVehT <= 0 && nearVehicle(h)) {
     const v = nearVehicle(h);
     if (v.driver || v.fuel > 1.5 || h.canister) b.tap(s, 'interact');
@@ -160,7 +165,8 @@ function thinkHuman(b, s, dt) {
     if (h.onGround && Math.abs(h.vx) < 15) m.stuck += dt; else m.stuck = 0;
     if (m.stuck > 0.2 && h.stance === 'stand') { b.tap(s, 'up'); }
     // міну на шляху перестрибнути
-    if (h.onGround && G.mines.some((mi) => mi.arm <= 0 && (mi.x - h.x) * dir > 10 && (mi.x - h.x) * dir < 45 && Math.abs(mi.y - h.y) < 14)) {
+    if (h.onGround && G.mines.some((mi) => mi.arm <= 0 && (mi.x - h.x) * dir > 38 && (mi.x - h.x) * dir < 70 && Math.abs(mi.y - h.y) < 14)) {
+      s.sprint = h.stamina > 0.1;
       b.tap(s, 'up');
     }
     if (m.stuck > 3) { s.right = !s.right; s.left = !s.left; if (m.stuck > 3.6) m.stuck = 0; }
@@ -267,6 +273,12 @@ function thinkDrone(b, s, dt) {
     if (d.x < 500) m.patrol = 1;
     gx = d.x + m.patrol * 500; gy = gAt(W, d.x) - 260;
     boost = d.battery > 30;
+  }
+  // без цілі — підібрати бонус у повітрі поруч
+  if (!tgt && !descend && G.airBonuses) {
+    let bb = null, bd = 650;
+    for (const ab of G.airBonuses) if (ab.active) { const dd = dist(ab.x, ab.y, d.x, d.y); if (dd < bd) { bd = dd; bb = ab; } }
+    if (bb) { gx = bb.x; gy = bb.y; boost = bd > 250; }
   }
   if (!attack && !descend) {
     // летіти вище за рельєф і всі будівлі на шляху

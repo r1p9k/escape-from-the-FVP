@@ -167,7 +167,7 @@ const F = {
   },
 };
 
-function pickupType() { return weighted({ rifle: 3, shotgun: 2, reb: 1.1, medkit: 2, fuel: 2, armor: 1.3 }); }
+function pickupType() { return weighted({ rifle: 1.6, shotgun: 1.1, reb: 0.45, medkit: 1.6, fuel: 2, armor: 1.1 }); }
 
 function building(W, x, floors, w) {
   const T = 14;
@@ -205,6 +205,8 @@ function building(W, x, floors, w) {
     const lx = x + rand(40, w - 40);
     W.ladders.push({ x: lx, top: g - (k + 1) * FLOOR_H, bottom: g - k * FLOOR_H });
   }
+  // драбина з верхнього поверху на дах (біля стіни, де даху завжди є перекриття)
+  W.ladders.push({ x: x + 26, top: roofY - 14, bottom: g - (floors - 1) * FLOOR_H, roof: true });
   W.covers.push({ type: 'ruin', x: x + T, w: w - 2 * T, y: roofY, h: g - roofY + 6 });
   // знахідки на поверхах
   if (RND() < 0.65) {
@@ -263,7 +265,7 @@ function makeWorld(loc, seed, lenId) {
   // гарантований мінімум знахідок і техніки
   const cnt = (t) => W.pickups.filter((p) => p.type === t).length;
   const kw = width / 14000;
-  const need = { rifle: 3, shotgun: 2, reb: 3, medkit: 3, fuel: 4, armor: 2 };
+  const need = { rifle: 2, shotgun: 1, reb: 1, medkit: 3, fuel: 4, armor: 2 };
   for (const t in need) while (cnt(t) < Math.round(need[t] * kw)) W.pickups.push({ type: t, x: rand(1400, width - 1400) });
   while (W.vehicles.length < 6) {
     const vx = rand(1600, width - 1600);
