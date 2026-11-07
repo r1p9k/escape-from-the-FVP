@@ -103,9 +103,21 @@ function thinkHuman(b, s, dt) {
     }
     m.aimT = 0;
     if (sp.type === 'pipe') {
-      const toRight = sp.x2 > sp.x1;
-      if (toRight) s.right = true; else s.left = true;
-      if (h.pipeT > 0.9 && m.safeT > 1.2) { b.tap(s, 'interact'); m.hideCd = 4; }
+      // тунелем — до найдальшого вперед виходу, там вилізти, коли тихо
+      const T = h.tun;
+      let ti = 0;
+      sp.exits.forEach((e, i) => { if (e.tx > sp.exits[ti].tx) ti = i; });
+      const tgt = sp.exits[ti];
+      if (h.digging) return;
+      if (T.ex >= 0 && T.ex !== ti) s.down = true;
+      else if (T.ex === ti) {
+        if (m.safeT > 1.2 || m.hideT > 25) { s.up = true; if (T.u >= 1) { b.tap(s, 'interact'); m.hideCd = 4; m.hideT = 0; } }
+        else if (T.u > 0.5) s.down = true;
+      } else {
+        const dx = tgt.bx - h.x;
+        if (Math.abs(dx) > 6) { if (dx > 0) s.right = true; else s.left = true; }
+        else b.tap(s, 'up');
+      }
     } else if (m.safeT > 2.5 || h.smokeT > 0.4 || m.hideT > 25) { b.tap(s, 'interact'); m.hideCd = 4; m.hideT = 0; }
     return;
   }
@@ -122,10 +134,10 @@ function thinkHuman(b, s, dt) {
       let best = null, bd = 220;
       for (const sp of W.hides) {
         if (sp.ruined) continue;
-        const ex = sp.type === 'pipe' ? (sp.x2 > sp.x1 ? sp.x1 : sp.x2) : sp.x;
-        const ey = sp.type === 'pipe' ? (sp.x2 > sp.x1 ? sp.y1 : sp.y2) : sp.y;
-        const dd = Math.abs(ex - h.x);
-        if (dd < bd && ex > h.x - 120 && Math.abs(ey - h.y) < 60) { bd = dd; best = ex; }
+        for (const en of hideEnds(sp)) {
+          const dd = Math.abs(en.x - h.x);
+          if (dd < bd && en.x > h.x - 120 && Math.abs(en.y - h.y) < 60) { bd = dd; best = en.x; }
+        }
       }
       if (best != null) dir = Math.sign(best - h.x) || 1;
     }
@@ -191,6 +203,7 @@ function thinkHuman(b, s, dt) {
 }
 
 function botWants(h, pk) {
+  if (pk.type === 'shovel') return false; // боти не копають
   if (pk.type === 'armor') return h.armor <= 0;
   if (pk.type === 'fuel') return !h.canister && !h.weapon;
   if (WEAPONS[pk.type]) return !h.weapon;
@@ -211,8 +224,7 @@ function nearestHideTo(x, y, d) {
   for (const sp of G.W.hides) {
     if (sp.ruined) continue;
     if (sp.net && !droneHovering(d, sp.x, sp.y - 10)) continue; // під сіткою вхід не видно
-    const ends = sp.type === 'pipe' ? [[sp.x1, sp.y1], [sp.x2, sp.y2]] : [[sp.x, sp.y]];
-    for (const [ex, ey] of ends) { const dd = dist(x, y, ex, ey); if (dd < bd) { bd = dd; best = { x: ex, y: ey }; } }
+    for (const { x: ex, y: ey } of hideEnds(sp)) { const dd = dist(x, y, ex, ey); if (dd < bd) { bd = dd; best = { x: ex, y: ey }; } }
   }
   return best;
 }
