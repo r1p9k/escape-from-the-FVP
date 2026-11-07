@@ -27,8 +27,8 @@ const WEAPONS = {
   mg: { name: 'Кулемет', ammo: 50, mag: 25, reload: 3.5, rate: 0.085, speed: 1600, range: 800, spread: 0.03, pellets: 1 },
 };
 // розкид куль залежно від положення: стоячи — великий, сидячи — менший, лежачи — найточніше
-const STANCE_SPREAD = { stand: 2.6, crouch: 1.4, prone: 0.75, mount: 1.3 };
-const STANCE_ACC = { stand: 'стоячи — розкид', crouch: 'сидячи — точніше', prone: 'лежачи — точно' };
+const STANCE_SPREAD = { stand: 2.6, crouch: 1.4, prone: 0.75, mount: 1.3, burrow: 1.0 };
+const STANCE_ACC = { stand: 'стоячи — розкид', crouch: 'сидячи — точніше', prone: 'лежачи — точно', burrow: 'з нори — точно' };
 const PACK_CAP = 4;      // місць у рюкзаку: аптечки, заряди РЕБ, детектор
 const DETECT_R = 650;    // радіус детектора дронів
 const PICKUP_NAMES = { rifle: 'Автомат', shotgun: 'Дробовик', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого' };
@@ -149,7 +149,9 @@ function droneConcealed(d) {
 // чи бачить гравець-дрон цю людину
 function humanVisibleToDrone(h, drone) {
   if (h.dead) return true;
-  if (h.saved || h.hidden) return false;
+  if (h.saved) return false;
+  // з нори визирає — дрон помітить після пострілу або впритул
+  if (h.hidden) return !!(h.peek && drone && (h.reveal > 0 || dist(drone.x, drone.y, h.hidden.x, h.hidden.y - 8) < 160));
   const by = concealedBy(h);
   if (!by) return true;
   if (!drone) return false;
@@ -172,6 +174,7 @@ function droneInBush(d) {
 }
 function humanEye(h) {
   if (h.vehicle) return { x: h.vehicle.x, y: h.vehicle.y - 34 };
+  if (h.hidden && h.hidden.type === 'burrow') return { x: h.hidden.x, y: h.hidden.y - 8 };
   return { x: h.x, y: h.y - HUMAN_DIM[h.stance].h * 0.85 };
 }
 // чи бачить людина дрон: не крізь стіни, не в диму/кронах, не «ждуна» в кущах; детектор бачить усе поруч
@@ -296,15 +299,7 @@ function updateHuman(h, dt) {
   // стріляти можна лише з позиції (режим прицілювання)
   else if (h.aiming && c.held('fire') && h.weapon && h.canister && c.pressed('fire')) feed(h.player.name + ': руки зайняті каністрою — [' + c.label('slot1') + '] викинути', '#ccc');
   else if (h.aiming && c.held('fire') && h.weapon && !h.canister && h.fireCd <= 0 && h.reloadT <= 0 && h.weapon.mag > 0) {
-    const m = muzzle(h);
-    fireWeapon(h, m.x, m.y, h.weapon.type, aimWorld(h), false, h.stance);
-    h.fireCd = WEAPONS[h.weapon.type].rate;
-    h.weapon.mag--;
-    if (--h.weapon.ammo <= 0) {
-      G.parts.push({ type: 'gun', x: h.x, y: h.y - 30, vx: -h.facing * 120, vy: -260, life: 1.2, max: 1.2, rot: 0 });
-      feed(h.player.name + ': ' + WEAPONS[h.weapon.type].name + ' — набої скінчилися', '#ccc');
-      h.weapon = null;
-    } else if (h.weapon.mag <= 0) startReload(h);
+    humanShoot(h, muzzle(h), h.stance);
   }
   // вогонь без позиції — перезарядити
   else if (!h.aiming && c.pressed('fire') && h.weapon && h.reloadT <= 0 && h.alT <= 0 && h.weapon.mag < Math.min(WEAPONS[h.weapon.type].mag, h.weapon.ammo)) startReload(h);
@@ -313,6 +308,22 @@ function updateHuman(h, dt) {
     else activateReb(h);
   }
   checkShelter(h);
+}
+
+function humanShoot(h, m, stance) {
+  fireWeapon(h, m.x, m.y, h.weapon.type, aimWorld(h), false, stance);
+  h.fireCd = WEAPONS[h.weapon.type].rate;
+  h.weapon.mag--;
+  if (--h.weapon.ammo <= 0) {
+    G.parts.push({ type: 'gun', x: m.x, y: m.y, vx: -h.facing * 120, vy: -260, life: 1.2, max: 1.2, rot: 0 });
+    feed(h.player.name + ': ' + WEAPONS[h.weapon.type].name + ' — набої скінчилися', '#ccc');
+    h.weapon = null;
+  } else if (h.weapon.mag <= 0) startReload(h);
+}
+// звідки стріляє людина, що визирає з нори
+function burrowMuzzle(h) {
+  const sp = h.hidden, a = aimWorld(h);
+  return { x: sp.x + Math.cos(a) * 14, y: sp.y - 7 + Math.sin(a) * 14 };
 }
 
 // ---------- Бонус «Альоша» ----------
@@ -483,7 +494,7 @@ function dropPack(h) {
   feed(h.player.name + ' втратив рюкзак — його можна підібрати', '#ccc');
 }
 function enterHide(h, sp) {
-  h.hidden = sp; h.vx = 0; h.vy = 0; h.onLadder = false;
+  h.hidden = sp; h.vx = 0; h.vy = 0; h.onLadder = false; h.aiming = false; h.peek = false;
   if (sp.type === 'pipe') h.pipeT = Math.abs(h.x - sp.x1) < Math.abs(h.x - sp.x2) ? 0 : 1;
   else h.hideAnim = { dir: 'in', t: 0, dur: 0.5, sp, fx: h.x, facing: h.facing };
   h.smokeT = 0;
@@ -511,14 +522,28 @@ function humanHidden(h, c, dt) {
     if (ax) h.facing = ax;
     h.anim += Math.abs(ax) * dt * 5;
   } else { h.x = sp.x; h.y = sp.y; }
-  if (c.pressed('interact') || (sp.type !== 'pipe' && c.pressed('up'))) {
+  // з нори можна визирнути й стріляти: тримати «Позицію»
+  h.peek = sp.type === 'burrow' && !h.hideAnim && c.held('aim') && !c.pressed('interact');
+  h.aiming = h.peek && !!h.weapon;
+  if (h.peek) {
+    if (c.cur.aimAngle !== undefined) setAimWorld(h, c.cur.aimAngle);
+    else {
+      if (c.pressed('left')) h.facing = -1;
+      if (c.pressed('right')) h.facing = 1;
+      const v = (c.held('down') ? 1 : 0) - (c.held('up') ? 1 : 0);
+      h.aimA += v * 1.5 * dt;
+    }
+    h.aimA = clamp(h.aimA, -1.45, 0.15); // з ями вниз не постріляєш
+    if (c.held('fire') && h.weapon && h.fireCd <= 0 && h.reloadT <= 0 && h.weapon.mag > 0) humanShoot(h, burrowMuzzle(h), 'burrow');
+  } else if (c.pressed('fire') && h.weapon && h.reloadT <= 0 && h.weapon.mag < Math.min(WEAPONS[h.weapon.type].mag, h.weapon.ammo)) startReload(h);
+  if (c.pressed('interact') || (sp.type !== 'pipe' && c.pressed('up') && !h.peek)) {
     if (sp.type === 'pipe') {
       if (h.pipeT < 0.12) { h.x = sp.x1; h.y = sp.y1; }
       else if (h.pipeT > 0.88) { h.x = sp.x2; h.y = sp.y2; }
       else return;
     }
     if (sp.type !== 'pipe') h.hideAnim = { dir: 'out', t: 0, dur: 0.35, sp, facing: h.facing };
-    h.hidden = null; h.stance = 'crouch'; h.vy = 0; h.vx = 0;
+    h.hidden = null; h.peek = false; h.aiming = false; h.stance = 'crouch'; h.vy = 0; h.vx = 0;
     Sfx.click();
   }
   if (c.pressed('special')) activateReb(h);
@@ -1138,7 +1163,8 @@ function explosion(x, y, power, radius, direct) {
     if (h.dead || h.saved || h.vehicle || shielded.has(h)) continue;
     if (h.hidden) {
       const e = hideEntrance(h);
-      if (dist(x, y, e.x, e.y) < 45) hurt(h, power * 0.35, 'blast');
+      if (h.peek) { if (dist(x, y, e.x, e.y) < 65) hurt(h, power * 0.7, 'blast'); } // визирнув — вразливіший
+      else if (dist(x, y, e.x, e.y) < 45) hurt(h, power * 0.35, 'blast');
       continue;
     }
     // пряме влучання дрона в голову — броня не рятує

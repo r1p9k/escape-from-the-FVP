@@ -186,10 +186,12 @@ function building(W, x, floors, w) {
     }
   }
   // перекриття (прохідні знизу) з дірками
+  const holes = [];
   for (let k = 1; k < floors; k++) {
     const y = g - k * FLOOR_H;
     if (RND() < 0.5) {
       const hx = x + rand(60, w - 120);
+      holes[k] = [hx, hx + 64];
       addSolid(W, { type: 'floor', thin: true, x: x + T, y, w: hx - x - T, h: 10 });
       addSolid(W, { type: 'floor', thin: true, x: hx + 64, y, w: x + w - T - hx - 64, h: 10 });
     } else addSolid(W, { type: 'floor', thin: true, x: x + T, y, w: w - 2 * T, h: 10 });
@@ -200,9 +202,12 @@ function building(W, x, floors, w) {
     addSolid(W, { type: 'roof', x, y: roofY - 14, w: gx - x, h: 14 });
     addSolid(W, { type: 'roof', x: gx + 90, y: roofY - 14, w: x + w - gx - 90, h: 14 });
   } else addSolid(W, { type: 'roof', x, y: roofY - 14, w, h: 14 });
-  // драбини між поверхами
+  // драбини між поверхами: верх і низ — на суцільному перекритті (не в проломі)
+  const solidAt = (k, px) => !holes[k] || px < holes[k][0] - 24 || px > holes[k][1] + 24;
   for (let k = 0; k < floors - 1; k++) {
-    const lx = x + rand(40, w - 40);
+    let lx = x + rand(40, w - 40);
+    for (let i = 0; i < 40 && !(solidAt(k + 1, lx) && solidAt(k, lx)); i++) lx = x + rand(40, w - 40);
+    if (!(solidAt(k + 1, lx) && solidAt(k, lx))) lx = x + 40;
     W.ladders.push({ x: lx, top: g - (k + 1) * FLOOR_H, bottom: g - k * FLOOR_H });
   }
   // драбина з верхнього поверху на дах (біля стіни, де даху завжди є перекриття)
