@@ -12,17 +12,19 @@ loadArt('sky', 'art/sky.jpg');       // небо з хмарами
 loadArt('far', 'art/far.png');       // дальній план: пагорби, ліс, промзона (прозоре небо)
 loadArt('near', 'art/near.png');     // ближній фон: руїни, стовпи, дерева (прозорий серпанок)
 loadArt('ground', 'art/ground.png'); // ґрунт у розрізі з травою (прозорий верх)
-const ART_FAR = { h: 300, base: 410, par: 0.15, vpar: 0.6, haze: '#e1dcd5' };  // висота шару в одиницях світу, рядок горизонту, паралакс
+const ART_FAR = { h: 300, base: 410, cut: 413, par: 0.15, vpar: 0.6 }; // нижче cut у far.png — туман, його не малюємо  // висота шару в одиницях світу, рядок горизонту, паралакс
 const ART_NEAR = { h: 250, base: 440, par: 0.4, vpar: 0.85 };
 const ART_GROUND = { k: 0.15, surf: 175, step: 6 }; // одиниць світу на піксель, рядок поверхні в ground.png, ширина смуги
 
 // картинка, що повторюється по горизонталі з дзеркальним відбиттям (щоб не було шва)
-function drawMirrorTiles(ctx, img, vp, offset, y, w, h) {
-  const period = w * 2;
+// sh — скільки рядків картинки брати (зверху)
+function drawMirrorTiles(ctx, img, vp, offset, y, w, h, sh) {
+  sh = sh || img.height;
+  const dh = h * sh / img.height, period = w * 2;
   let start = -(((offset % period) + period) % period);
   for (let x = start, k = 0; x < vp.w; x += w, k++) {
-    if (k % 2 === 0) ctx.drawImage(img, vp.x + x, y, w + 1, h);
-    else { ctx.save(); ctx.translate(vp.x + x + w, y); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0, w + 1, h); ctx.restore(); }
+    if (k % 2 === 0) ctx.drawImage(img, 0, 0, img.width, sh, vp.x + x, y, w + 1, dh);
+    else { ctx.save(); ctx.translate(vp.x + x + w, y); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0, img.width, sh, 0, 0, w + 1, dh); ctx.restore(); }
   }
 }
 function drawArtBackground(ctx, vp, cx, cy, s) {
@@ -36,8 +38,15 @@ function drawArtBackground(ctx, vp, cx, cy, s) {
   // дальній план
   const kf = (ART_FAR.h / ART.far.height) * s, fy = mid + (refG - mid) * ART_FAR.vpar - 24 * s + dG * ART_FAR.par;
   const ftop = fy - ART_FAR.base * kf;
-  drawMirrorTiles(ctx, ART.far, vp, cx * s * ART_FAR.par, ftop, ART.far.width * kf, ART.far.height * kf);
-  ctx.fillStyle = ART_FAR.haze; ctx.fillRect(vp.x, ftop + ART.far.height * kf - 1, vp.w, vp.y + vp.h);
+  drawMirrorTiles(ctx, ART.far, vp, cx * s * ART_FAR.par, ftop, ART.far.width * kf, ART.far.height * kf, ART_FAR.cut);
+  // рівнина, що тягнеться від дальнього плану до ближнього: біля обрію світла в серпанку, ближче — темніша
+  const fb = ftop + ART_FAR.cut * kf - 1;
+  if (fb < vp.y + vp.h) {
+    const span = Math.max(40 * s, groundY - fb);
+    const gr = ctx.createLinearGradient(0, fb, 0, fb + span);
+    gr.addColorStop(0, '#b6b4a3'); gr.addColorStop(0.08, '#a3a28a'); gr.addColorStop(0.35, '#87876a'); gr.addColorStop(1, '#5c5a43');
+    ctx.fillStyle = gr; ctx.fillRect(vp.x, fb, vp.w, vp.y + vp.h - fb);
+  }
   // ближній фон
   const kn = (ART_NEAR.h / ART.near.height) * s, ny = mid + (refG - mid) * ART_NEAR.vpar - 4 * s + dG * ART_NEAR.par;
   const ntop = ny - ART_NEAR.base * kn;
