@@ -93,7 +93,7 @@ const F = {
     const bx = x + (RND() < 0.5 ? w * 0.25 : w * 0.75);
     W.hides.push({ type: 'bunker', x: bx });
     W.decor.push({ type: 'sandbags', x: x - 30, w: 40 }, { type: 'sandbags', x: x + w - 10, w: 40 });
-    if (RND() < 0.55) W.pickups.push({ type: pickupType(), x: bx + 40 });
+    if (RND() < 0.3) W.pickups.push({ type: pickupType(), x: bx + 40 });
     return w;
   },
 
@@ -167,7 +167,7 @@ const F = {
   },
 };
 
-function pickupType() { return weighted({ rifle: 1.6, shotgun: 1.1, reb: 0.45, medkit: 1.6, fuel: 2, armor: 1.1 }); }
+function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25 }); }
 
 function building(W, x, floors, w) {
   const T = 14;
@@ -265,7 +265,7 @@ function makeWorld(loc, seed, lenId) {
   // гарантований мінімум знахідок і техніки
   const cnt = (t) => W.pickups.filter((p) => p.type === t).length;
   const kw = width / 14000;
-  const need = { rifle: 2, shotgun: 1, reb: 1, medkit: 3, fuel: 4, armor: 2 };
+  const need = { rifle: 1, shotgun: 1, medkit: 2, fuel: 4, armor: 1, detector: 1 };
   for (const t in need) while (cnt(t) < Math.round(need[t] * kw)) W.pickups.push({ type: t, x: rand(1400, width - 1400) });
   while (W.vehicles.length < 6) {
     const vx = rand(1600, width - 1600);
