@@ -191,7 +191,9 @@ const F = {
   },
 };
 
-function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25, shovel: 0.35 }); }
+function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25, shovel: 0.35, grenade: 0.6 }); }
+// предмети побуту в будівлях (їх можна кидати)
+const PROP_KINDS = { jar: 3, chair: 2, stool: 1.5, pot: 1.5, brick: 1.2, tv: 0.8, iron: 1 };
 
 function building(W, x, floors, w) {
   const T = 14;
@@ -243,6 +245,15 @@ function building(W, x, floors, w) {
     W.pickups.push({ type: pickupType(), x: x + rand(40, w - 40), y: g - k * FLOOR_H });
   }
   if (RND() < 0.5) W.hides.push({ type: 'bunker', x: x + rand(40, w - 40), basement: true });
+  // побут: на кожному поверсі 1–3 речі, на даху інколи цегла
+  for (let k = 0; k < floors; k++) {
+    for (let i = randi(1, 3); i > 0; i--) {
+      let px = x + rand(30, w - 30);
+      for (let t = 0; t < 10 && !solidAt(k, px); t++) px = x + rand(30, w - 30);
+      if (solidAt(k, px)) W.props.push({ type: weighted(PROP_KINDS), x: px, y: g - k * FLOOR_H });
+    }
+  }
+  if (RND() < 0.4) W.props.push({ type: 'brick', x: x + 26 + rand(20, 60), y: roofY - 14 });
   return w + 40;
 }
 
@@ -264,7 +275,7 @@ function makeWorld(loc, seed, lenId) {
   const W = {
     loc, width, seed, lenId: ML.id,
     ground: new Float32Array(Math.ceil(width / GS) + 4),
-    solids: [], covers: [], hides: [], ladders: [], pickups: [], vehicles: [], trees: [], bushes: [], backs: [], decor: [],
+    solids: [], covers: [], hides: [], ladders: [], pickups: [], vehicles: [], trees: [], bushes: [], backs: [], decor: [], props: [], mounts: [],
   };
   const themeAt = (x) => (loc !== 'mixed' ? loc : x < width * 0.36 ? 'fields' : x < width * 0.66 ? 'forest' : 'city');
   W.themeAt = themeAt;
@@ -294,7 +305,7 @@ function makeWorld(loc, seed, lenId) {
   // гарантований мінімум знахідок і техніки
   const cnt = (t) => W.pickups.filter((p) => p.type === t).length;
   const kw = width / 14000;
-  const need = { rifle: 1, shotgun: 1, medkit: 2, fuel: 4, armor: 1, detector: 1, shovel: 1 };
+  const need = { rifle: 1, shotgun: 1, medkit: 2, fuel: 4, armor: 1, detector: 1, shovel: 1, grenade: 2 };
   for (const t in need) while (cnt(t) < Math.round(need[t] * kw)) W.pickups.push({ type: t, x: rand(1400, width - 1400) });
   while (W.vehicles.length < 6) {
     const vx = rand(1600, width - 1600);
@@ -321,10 +332,11 @@ function makeWorld(loc, seed, lenId) {
   }
   for (const t of W.trees) t.y = gAt(W, t.x);
   for (const b of W.bushes) b.y = gAt(W, b.x + b.w / 2);
-  // злітні майданчики дронів розкидані по всій мапі
+  // злітні майданчики дронів: 2, 3 або 4 залежно від довжини мапи
   W.pads = [];
-  for (let px = 160; px < width - 1800; px += 2600 + rand(-300, 300)) {
-    let x = px;
+  const nPads = { normal: 2, long: 3, huge: 4 }[ML.id] || 2, span = width * 0.72 - 160;
+  for (let i = 0; i < nPads; i++) {
+    let x = i === 0 ? 160 : 160 + (span * i) / (nPads - 1) + rand(-200, 200);
     for (let tries = 0; tries < 30 && solidsNear(W, x - 50, x + 50).some((so) => so.x < x + 50 && so.x + so.w > x - 50); tries++) x += 70;
     if (W.hides.some((h) => h.type !== 'pipe' && Math.abs(h.x - x) < 60)) x += 90;
     W.pads.push({ x, y: gAt(W, x), n: W.pads.length + 1 });
