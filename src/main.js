@@ -44,6 +44,12 @@ const Lobby = {
     const hu = this.slots.filter((s) => s.role === 'human').length;
     if (!this.slots.some((s) => !s.bot)) return { ok: false, text: 'Додайте хоча б одного живого гравця' };
     if (n < 2) return { ok: false, text: 'Потрібно щонайменше 2 учасники — додайте гравця або бота' };
+    if (this.mode === 'team') {
+      const t1 = this.slots.filter((s) => s.team === 1).length;
+      if (!t1 || t1 === n) return { ok: false, text: 'У кожній команді має бути хоча б один учасник' };
+      if (hu < 1) return { ok: false, text: 'Потрібна хоча б одна людина — лише люди захоплюють об\'єкти' };
+      return { ok: true, text: 'Усе готово — можна починати!' };
+    }
     if (hu < 1) return { ok: false, text: 'Потрібна хоча б одна людина' };
     if (hu === n) return { ok: false, text: 'Потрібен хоча б один дрон' };
     return { ok: true, text: 'Усе готово — можна починати!' };
@@ -59,7 +65,7 @@ const Lobby = {
   add(scheme) {
     if (this.slots.length >= 4) return;
     const bot = scheme === 'bot';
-    this.slots.push({ scheme: bot ? 'bot' + Math.random() : scheme, bot, role: this.autoRole(), level: 1 });
+    this.slots.push({ scheme: bot ? 'bot' + Math.random() : scheme, bot, role: this.autoRole(), level: 1, team: this.slots.length % 2 });
     this.renumber(); this.menuFor = -1; Sfx.click();
   },
 };
@@ -100,10 +106,11 @@ function renderLobbyDOM() {
     const extra = s.bot
       ? '<div class="seg small">' + BOT_LEVELS.map((lv, k) => '<button data-act="level" data-i="' + i + '" data-v="' + k + '" class="' + (s.level === k ? 'on' : '') + '">' + lv.name + '</button>').join('') + '</div>'
       : '<div class="keys">' + keyHtml(c) + '</div>';
-    cards += '<div class="card filled" style="--pc:' + s.color + '">' +
+    const teamSeg = L.mode === 'team' ? '<div class="seg small">' + TEAMS.map((tm, k) => '<button data-act="team" data-i="' + i + '" data-v="' + k + '" class="' + ((s.team || 0) === k ? 'on' : '') + '">🚩 ' + tm.name + '</button>').join('') + '</div>' : '';
+    cards += '<div class="card filled" style="--pc:' + (L.mode === 'team' ? TEAMS[s.team || 0].col : s.color) + '">' +
       '<button class="x" title="Прибрати" data-act="remove" data-i="' + i + '">✕</button>' +
       '<div class="name">' + s.name + '</div><div class="sub">' + (s.bot ? 'Комп\'ютер' : c.name) + '</div>' +
-      role + extra + '</div>';
+      role + teamSeg + extra + '</div>';
   }
   const locs = LOCATIONS.map((l, k) => '<button class="loc ' + (L.loc === k ? 'on' : '') + '" data-act="loc" data-v="' + k + '"><b>' + l.name.replace(/ \(.*\)/, '') + '</b><span>' + LOC_INFO[l.id] + '</span></button>').join('');
   const keyRows = [
@@ -125,11 +132,14 @@ function renderLobbyDOM() {
     '<h2>Режим гри</h2><div class="opts">' +
     '<div class="opt"><span>Режим</span><div class="seg">' +
     '<button data-act="mode" data-v="escape" class="' + (L.mode === 'escape' ? 'on' : '') + '">🏃 Втеча</button>' +
-    '<button data-act="mode" data-v="dm" class="' + (L.mode === 'dm' ? 'on' : '') + '">⚔️ Дезматч</button></div>' +
-    '<small>' + (L.mode === 'dm'
+    '<button data-act="mode" data-v="dm" class="' + (L.mode === 'dm' ? 'on' : '') + '">⚔️ Дезматч</button>' +
+    '<button data-act="mode" data-v="team" class="' + (L.mode === 'team' ? 'on' : '') + '">🚩 Команди</button></div>' +
+    '<small>' + (L.mode === 'team'
+      ? 'Сині зліва, жовті справа, у кожній команді — люди й дрони. Будівлю чи бліндаж захоплює людина: 15 с усередині без ворогів (двоє — удвічі швидше). Захоплене дає прапор, відновлення, точку злету дронів і очки. Захопив ворожу базу — перемога, інакше за рахунком'
+      : L.mode === 'dm'
       ? 'Безліміт дронів і життів, гра на рахунок: збитий дрон +1, укриття +3 (і знову зі старту), дронщику +3 за вбивство'
       : 'Добігти до укриття. У людини 3 життя, відновлення там, де натягнула маскувальну сітку. Дронів безліміт') + '</small></div>' +
-    (L.mode === 'dm' ? '<div class="opt"><span>Тривалість дезматчу</span><div class="seg">' + [5, 10, 15, 20, 30].map((m) => '<button data-act="dmMin" data-v="' + m + '" class="' + (L.dmMin === m ? 'on' : '') + '">' + m + ' хв</button>').join('') + '</div></div>' : '') +
+    (L.mode !== 'escape' ? '<div class="opt"><span>Тривалість гри</span><div class="seg">' + [5, 10, 15, 20, 30].map((m) => '<button data-act="dmMin" data-v="' + m + '" class="' + (L.dmMin === m ? 'on' : '') + '">' + m + ' хв</button>').join('') + '</div></div>' : '') +
     '</div>' +
     '<h2>Налаштування</h2><div class="opts">' +
     '<div class="opt"><span>Довжина мапи</span><div class="seg">' + MAP_LENGTHS.map((m, k) => '<button data-act="len" data-v="' + k + '" class="' + (L.len === k ? 'on' : '') + '">' + m.name + ' · ' + (m.width / 10 / 1000).toFixed(1) + ' км</button>').join('') + '</div>' +
@@ -170,6 +180,12 @@ function renderLobbyDOM() {
     '<li><b>Маскувальна сітка</b> (3 шт.): <b>Позиція + Дія</b> біля входу в бліндаж чи нору або в будівлі. Дрон бачить такий вхід, лише коли зависає поруч. Там же — точка відновлення</li>' +
     '<li><b>3 життя</b>: після смерті через 3 с людина повертається туди, де востаннє натягнула сітку (або на старт)</li>' +
     '<li>Дерева, кущі, окопи, руїни й дим ховають від дрона. 3 с на відкритому — дрон бачить стрілку</li></ul></section>' +
+    '<section><h3>🚩 Команда проти команди</h3><ul>' +
+    '<li>Сині стартують зліва, жовті справа. У кожній команді можуть бути і люди, і дрони</li>' +
+    '<li>Дрони полюють лише на ворожих людей, кулі й кинуті речі не зачіпають своїх дронів. Вибухи шкодять усім</li>' +
+    '<li><b>Захоплення</b>: будівля, бліндаж або база — 15 с усередині без живих ворогів (двоє — удвічі швидше). Якщо там є обидві команди, захоплення стоїть</li>' +
+    '<li>Захоплений об\'єкт: прапор команди, точка відновлення людей, точка злету дронів (на даху чи біля бліндажа), +1 очко щодесять секунд. Сітку, фанеру й гвинтівки там ставить лише власник</li>' +
+    '<li>Перемога — захопити ворожу базу, інакше за рахунком наприкінці часу</li></ul></section>' +
     '<section><h3>🛸 FPV-дрон — не дати людині втекти</h3><ul>' +
     '<li><b>Рух</b> — політ у будь-який бік, <b>Прискорення</b> — форсаж (швидше сідає АКБ)</li>' +
     '<li><b>Вогонь</b> — підрив (камікадзе). Удар об людину чи техніку — теж вибух</li>' +
@@ -197,6 +213,7 @@ lobbyEl.addEventListener('click', (e) => {
   else if (act === 'remove') { L.slots.splice(i, 1); L.renumber(); }
   else if (act === 'role') L.slots[i].role = b.dataset.v;
   else if (act === 'level') L.slots[i].level = +b.dataset.v;
+  else if (act === 'team') L.slots[i].team = +b.dataset.v;
   else if (act === 'loc') L.loc = +b.dataset.v;
   else if (act === 'len') { L.len = +b.dataset.v; savePref('len', L.len); }
   else if (act === 'mode') { L.mode = b.dataset.v; savePref('mode', L.mode); }

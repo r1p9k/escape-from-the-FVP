@@ -54,6 +54,7 @@ function thinkHuman(b, s, dt) {
   // загрози: видимі дрони + ті, що чути зовсім поруч
   let threat = null, td = 1e9, hear = 1e9;
   for (const d of G.drones) {
+    if (ally(d, h)) continue; // свої дрони — не загроза
     const dd = dist(d.x, d.y, h.x, h.y - 25);
     if (!d.landed) hear = Math.min(hear, dd); // «ждуна» на землі не чути
     // бачить (не крізь стіни) або чує зовсім поруч
@@ -67,7 +68,7 @@ function thinkHuman(b, s, dt) {
   if (h.vehicle) {
     const v = h.vehicle;
     if (h.seat === 'driver') {
-      s.right = true;
+      if (fwdDir(b.p) > 0) s.right = true; else s.left = true;
       // міна попереду або ходову вже знищено — виходимо
       if (v.immob || G.mines.some((mi) => mi.arm <= 0 && mi.x > v.x && mi.x - v.x < 160 && Math.abs(mi.y - v.y) < 30)) { b.tap(s, 'interact'); m.noVehT = 6; return; }
       // застрягла техніка: мало проїхали за останні 2 с — виходимо
@@ -108,7 +109,7 @@ function thinkHuman(b, s, dt) {
       // тунелем — до найдальшого вперед виходу, там вилізти, коли тихо
       const T = h.tun;
       let ti = 0;
-      sp.exits.forEach((e, i) => { if (e.tx > sp.exits[ti].tx) ti = i; });
+      sp.exits.forEach((e, i) => { if ((e.tx - sp.exits[ti].tx) * fwdDir(b.p) > 0) ti = i; });
       const tgt = sp.exits[ti];
       if (h.digging) return;
       if (T.ex >= 0 && T.ex !== ti) s.down = true;
@@ -120,13 +121,28 @@ function thinkHuman(b, s, dt) {
         if (Math.abs(dx) > 6) { if (dx > 0) s.right = true; else s.left = true; }
         else b.tap(s, 'up');
       }
-    } else if (m.safeT > 2.5 || h.smokeT > 0.4 || m.hideT > 25) { b.tap(s, 'interact'); m.hideCd = 4; m.hideT = 0; }
+    } else if (isTeam() && h.smokeT <= 0 && (objAt(h) || {}).owner !== h.player.team && objAt(h)) { /* тримаємо бліндаж, поки не захопимо */ }
+    else if (m.safeT > 2.5 || h.smokeT > 0.4 || m.hideT > 25) { b.tap(s, 'interact'); m.hideCd = 4; m.hideT = 0; }
     return;
   }
 
   m.hideCd -= dt; m.noVehT -= dt; m.hideT = 0;
-  let dir = 1;      // куди бігти
+  const fwd = fwdDir(b.p);
+  let dir = fwd;    // куди бігти
   let stop = false; // зупинитися й причаїтися
+  let hold = false; // командний режим: стояти на об'єкті, поки не захопимо
+  if (isTeam()) {
+    const at = objAt(h);
+    if (at && at.owner !== h.player.team) hold = true;
+    else {
+      const goal = teamGoal(h);
+      if (goal) {
+        const gx = goal.kind === 'bld' ? goal.ref.x + goal.ref.w / 2 : goal.x;
+        dir = Math.sign(gx - h.x) || fwd;
+        if (goal.kind === 'bunker' && Math.abs(goal.ref.x - h.x) < 24 && m.hideCd <= 0 && !goal.ref.ruined) { b.tap(s, 'interact'); return; }
+      }
+    }
+  }
 
   if (danger) {
     if (h.reb > 0 && td < 300 && Math.random() < L.react * 0.5) b.tap(s, 'special');
@@ -138,13 +154,13 @@ function thinkHuman(b, s, dt) {
         if (sp.ruined) continue;
         for (const en of hideEnds(sp)) {
           const dd = Math.abs(en.x - h.x);
-          if (dd < bd && en.x > h.x - 120 && Math.abs(en.y - h.y) < 60) { bd = dd; best = en.x; }
+          if (dd < bd && (en.x - h.x) * fwd > -120 && Math.abs(en.y - h.y) < 60) { bd = dd; best = en.x; }
         }
       }
       if (best != null) dir = Math.sign(best - h.x) || 1;
     }
     // маскування: якщо в укритті (кущі, окоп, дерева) — лягти й перечекати
-    if (!h.weapon && dir === 1) {
+    if (!h.weapon && dir === fwd) {
       if (coverFor(h, HUMAN_DIM.stand.h)) stop = true;
       else if (coverFor(h, HUMAN_DIM.prone.h)) { stop = true; if (h.stance !== 'prone') b.tap(s, 'down'); }
     }
@@ -182,13 +198,14 @@ function thinkHuman(b, s, dt) {
   // підбір і техніка
   const pk = nearPickup(h);
   if (pk && botWants(h, pk)) b.tap(s, 'interact');
-  else if (m.noVehT <= 0 && nearVehicle(h)) {
+  else if (!isTeam() && m.noVehT <= 0 && nearVehicle(h)) {
     const v = nearVehicle(h);
     if (v.driver || v.fuel > 1.5 || h.canister) b.tap(s, 'interact');
   }
 
   // довго в диму — вибиратися, не зупинятися
   if (h.gasT > 10) { stop = false; s.aim = false; s.fire = false; }
+  if (hold && !danger) stop = true;
   if (!stop) {
     if (dir > 0) s.right = true; else s.left = true;
     s.sprint = (danger || h.openTime > 1.5) && h.stamina > 0.05;
@@ -238,7 +255,7 @@ function thinkDrone(b, s, dt) {
   // що бачить камера дрона (без підглядання)
   let tgt = null, best = 1e9;
   for (const h of G.humans) {
-    if (h.dead || h.saved) continue;
+    if (h.dead || h.saved || ally(h, d)) continue;
     const inCam = Math.abs(h.x - d.x) < 700 * L.sense && Math.abs(h.y - d.y) < 450 * L.sense && humanVisibleToDrone(h, d);
     const arrow = !h.hidden && h.openTime >= OPEN_TIME;
     if (!inCam && !arrow) continue;
