@@ -93,9 +93,11 @@ function thinkHuman(b, s, dt) {
     m.safeT = hear < 600 ? 0 : m.safeT + dt;
     m.hideT = (m.hideT || 0) + dt;
     // з нори — відстрілюватися, визираючи з отвору
-    if (sp.type === 'burrow' && !h.hideAnim && h.weapon && visibleThreat && td < WEAPONS[h.weapon.type].range * (0.55 + 0.3 * L.aim)) {
+    const pa = canPeek(sp) && !h.hideAnim && h.weapon && visibleThreat ? botAim(b, sp.x, sp.y - (sp.type === 'bunker' ? 16 : 7), threat, WEAPONS[h.weapon.type].speed) : null;
+    const inSector = pa != null && aimRel(pa) >= AIM_SECTOR[sp.type][0] && aimRel(pa) <= AIM_SECTOR[sp.type][1];
+    if (inSector && td < WEAPONS[h.weapon.type].range * (0.55 + 0.3 * L.aim)) {
       s.aim = true;
-      s.aimAngle = botAim(b, sp.x, sp.y - 7, threat, WEAPONS[h.weapon.type].speed);
+      s.aimAngle = pa;
       m.aimT += dt;
       if (m.aimT > 0.35 - 0.15 * L.react) s.fire = true;
       m.hideT = 0;
