@@ -268,12 +268,12 @@ function makeVehicle(type, x, mg) {
   return { type, x, y: 0, vx: 0, dir: 1, ang: 0, hp: T.hp, driver: null, gunner: null, hasMG: !!mg, mgAmmo: mg ? WEAPONS.mg.ammo : 0, input: 0, dead: false, burn: 0, fuel: T.tank * rand(0.3, 1) };
 }
 
-function makeWorld(loc, seed, lenId) {
+function makeWorld(loc, seed, lenId, team) {
   RND = mulberry32(seed);
   const ML = MAP_LENGTHS.find((m) => m.id === lenId) || MAP_LENGTHS[0];
   const width = ML.width;
   const W = {
-    loc, width, seed, lenId: ML.id,
+    loc, width, seed, lenId: ML.id, team: !!team,
     ground: new Float32Array(Math.ceil(width / GS) + 4),
     solids: [], covers: [], hides: [], ladders: [], pickups: [], vehicles: [], trees: [], bushes: [], backs: [], decor: [], props: [], mounts: [],
   };
@@ -288,8 +288,10 @@ function makeWorld(loc, seed, lenId) {
   // старт
   flatten(W, 60, 280);
   W.start = { x: 640 };
+  W.start2 = { x: width - 640 }; // база правої команди (командний режим)
   let x = 1000;
   F.vehicle(W, x + 100, themeAt(x)); x += 300;
+  if (team) F.vehicle(W, width - 1500, themeAt(width - 1500));
   while (x < width - 1100) {
     const th = themeAt(x);
     const f = weighted(FEATURES[th]);
@@ -299,8 +301,10 @@ function makeWorld(loc, seed, lenId) {
   const sx = width - 560;
   const sg = flatten(W, sx - 160, width - 10);
   W.shelter = { x: sx, y: sg };
-  addSolid(W, { type: 'shelter', x: sx + 36, y: sg - 124, w: 320, h: 130 });
-  W.decor.push({ type: 'sandbags', x: sx - 120, w: 50 });
+  if (!team) {
+    addSolid(W, { type: 'shelter', x: sx + 36, y: sg - 124, w: 320, h: 130 });
+    W.decor.push({ type: 'sandbags', x: sx - 120, w: 50 });
+  }
 
   // гарантований мінімум знахідок і техніки
   const cnt = (t) => W.pickups.filter((p) => p.type === t).length;
@@ -334,12 +338,23 @@ function makeWorld(loc, seed, lenId) {
   for (const b of W.bushes) b.y = gAt(W, b.x + b.w / 2);
   // злітні майданчики дронів: 2, 3 або 4 залежно від довжини мапи
   W.pads = [];
-  const nPads = { normal: 2, long: 3, huge: 4 }[ML.id] || 2, span = width * 0.72 - 160;
-  for (let i = 0; i < nPads; i++) {
-    let x = i === 0 ? 160 : 160 + (span * i) / (nPads - 1) + rand(-200, 200);
-    for (let tries = 0; tries < 30 && solidsNear(W, x - 50, x + 50).some((so) => so.x < x + 50 && so.x + so.w > x - 50); tries++) x += 70;
-    if (W.hides.some((h) => h.type !== 'pipe' && Math.abs(h.x - x) < 60)) x += 90;
-    W.pads.push({ x, y: gAt(W, x), n: W.pads.length + 1 });
+  const nPads = { normal: 2, long: 3, huge: 4 }[ML.id] || 2;
+  const placePad = (x, t, n) => {
+    const dir = t === 1 ? -1 : 1;
+    for (let tries = 0; tries < 30 && solidsNear(W, x - 50, x + 50).some((so) => so.x < x + 50 && so.x + so.w > x - 50); tries++) x += 70 * dir;
+    if (W.hides.some((h) => h.type !== 'pipe' && Math.abs(h.x - x) < 60)) x += 90 * dir;
+    W.pads.push({ x, y: gAt(W, x), n, team: t });
+  };
+  if (team) {
+    // у кожної команди свої точки на своїй половині (дзеркально)
+    const span = width * 0.4 - 160;
+    for (const t of [0, 1]) for (let i = 0; i < nPads; i++) {
+      const x = 160 + (span * i) / (nPads - 1) + (i ? rand(-150, 150) : 0);
+      placePad(t ? width - x : x, t, i + 1);
+    }
+  } else {
+    const span = width * 0.72 - 160;
+    for (let i = 0; i < nPads; i++) placePad(i === 0 ? 160 : 160 + (span * i) / (nPads - 1) + rand(-200, 200), -1, i + 1);
   }
   W.pad = W.pads[0];
   return W;

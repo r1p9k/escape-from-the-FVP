@@ -69,7 +69,7 @@ function grenadeBlast(th) {
   explosion(x, y, GRENADE_POWER, GRENADE_R);
   G.blastBy = null;
   for (const d of G.drones.slice()) {
-    if (dist(x, y, d.x, d.y) > GRENADE_DRONE_R) continue;
+    if (dist(x, y, d.x, d.y) > GRENADE_DRONE_R || ally(th.owner, d)) continue;
     if (d.hp > 3) d.hp -= 3; else shootDownDrone(d, th.owner);
   }
 }
@@ -97,7 +97,7 @@ function updateThrows(dt) {
       th.x += (th.vx * dt) / steps; th.y += (th.vy * dt) / steps;
       if (th.x < 5 || th.x > W.width - 5) { gone = true; break; }
       if (!th.hitDrone) for (const d of G.drones) {
-        if (dist(th.x, th.y, d.x, d.y) > DRONE_R + 6) continue;
+        if (dist(th.x, th.y, d.x, d.y) > DRONE_R + 6 || ally(th.owner, d)) continue;
         th.hitDrone = true;
         if (th.kind === 'grenade') { th.vx *= 0.3; th.vy = Math.abs(th.vy) * 0.2; }
         else { propHitsDrone(th, d); th.vx *= -0.3; th.vy = 60; }
@@ -189,12 +189,14 @@ function nearGap(h, b, mount) {
 function fortTarget(h) {
   const b = bldUnder(h);
   if (!b || !b.net) return null;
+  if (isTeam() && !hideOwnedBy(b, h.player.team)) return null;
   const gp = nearGap(h, b, false);
   return gp ? { b, gp } : null;
 }
 function mountTarget(h) {
   const b = buildingAt(h.x, h.y);
   if (!b || !b.net || !h.onGround) return null;
+  if (isTeam() && !hideOwnedBy(b, h.player.team)) return null;
   const gp = nearGap(h, b, true);
   if (!gp) return null;
   const my = h.y - 38;

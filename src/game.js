@@ -46,18 +46,22 @@ let G = null;
 
 function newGame(slots, loc, opts) {
   opts = opts || {};
-  const W = makeWorld(loc, (Math.random() * 1e9) | 0, opts.len);
-  const mode = opts.mode === 'dm' ? 'dm' : 'escape';
+  const mode = opts.mode === 'dm' || opts.mode === 'team' ? opts.mode : 'escape';
+  const W = makeWorld(loc, (Math.random() * 1e9) | 0, opts.len, mode === 'team');
   G = { W, opts, mode, timeLeft: (opts.dmMin || 10) * 60, players: [], humans: [], dps: [], drones: [], bullets: [], bombs: [], throws: [], mines: [], smokes: [], parts: [], rebs: [], feed: [], time: 0, over: null, overReason: '', overT: 0, stats: { dronesUsed: 0, shotDown: 0, deaths: 0 } };
   const nHum = slots.filter((s) => s.role === 'human').length;
   const nDr = slots.filter((s) => s.role === 'drone').length;
   let hi = 0;
+  const tc = [0, 0], th = [0, 0];
+  if (mode === 'team') initTeam();
   slots.forEach((s, i) => {
-    const p = { name: s.name, color: s.color, role: s.role, bot: !!s.bot, cam: { x: 0, y: 0, wide: false }, idx: i, score: 0 };
+    const p = { name: s.name, color: s.color, role: s.role, bot: !!s.bot, cam: { x: 0, y: 0, wide: false }, idx: i, score: 0, team: -1 };
+    if (mode === 'team') { p.team = s.team === 1 ? 1 : s.team === 0 ? 0 : i % 2; p.color = TEAMS[p.team].cols[tc[p.team]++ % 2]; }
     p.ctrl = s.bot ? new BotController(p, s.level) : CONTROLLERS[s.scheme];
     if (s.role === 'human') {
       const h = makeHuman(p, W.start.x + hi * 40); hi++;
       if (mode === 'dm') { h.x = randomSpawnX(); h.y = gAt(W, h.x); }
+      if (mode === 'team') { const k = th[p.team]++; h.x = p.team ? W.start2.x - k * 40 : W.start.x + k * 40; h.y = gAt(W, h.x); h.facing = fwdDir(p); }
       G.humans.push(h); p.ent = h;
       p.cam.x = h.x; p.cam.y = h.y - 100;
     } else {
@@ -65,7 +69,7 @@ function newGame(slots, loc, opts) {
       const dp = { player: p, left: Infinity, total: Infinity, used: 0, drone: null, timer: LAUNCH_DELAY, pad: 0, sel: 0,
         loadout: (s.bot ? pick(BOT_LOADOUTS) : s.loadout || DEFAULT_LOADOUT).slice() };
       G.dps.push(dp); p.ent = dp;
-      p.cam.x = W.pads[0].x + 120; p.cam.y = W.pads[0].y - 150;
+      const p0 = curPad(dp); p.cam.x = p0.x + 120 * fwdDir(p); p.cam.y = p0.y - 150;
     }
     G.players.push(p);
   });
@@ -83,7 +87,7 @@ function makeHuman(p, x) {
     aimA: -0.5, aiming: false, diving: false, diveCd: 0, canister: false, smokeT: 0, gasT: 0, gasWarned: false,
     armor: 0, beaten: 0, alCharges: 0, alT: 0, alGranted: false, hideAnim: null,
     rebCd: 0, medkits: 0, healT: 0, reloadT: 0, bloom: 0, detector: false,
-    lives: G.mode === 'dm' ? Infinity : HUMAN_LIVES, nets: NETS, respawnT: 0, spawn: null, deaths: 0,
+    lives: G.mode === 'escape' ? HUMAN_LIVES : Infinity, nets: NETS, respawnT: 0, spawn: null, deaths: 0,
   };
 }
 function feed(text, color) { G.feed.push({ text, color: color || '#fff', t: 4 }); if (G.feed.length > 5) G.feed.shift(); }
@@ -156,6 +160,7 @@ function droneConcealed(d) {
 // чи бачить гравець-дрон цю людину
 function humanVisibleToDrone(h, drone) {
   if (h.dead) return true;
+  if (drone && ally(h, drone)) return !h.saved; // своїх дрон бачить завжди
   if (h.saved) return false;
   // з нори визирає — дрон помітить після пострілу або впритул
   if (h.hidden) return !!(h.peek && drone && (h.reveal > 0 || dist(drone.x, drone.y, h.hidden.x, h.hidden.y - 8) < 160));
@@ -814,6 +819,7 @@ function humanInVehicle(h, c, dt) {
 }
 
 function checkShelter(h) {
+  if (G.mode === 'team') return; // у командному режимі укриття немає — є бази
   const S = G.W.shelter;
   if (h.x > S.x - 8 && h.x < S.x + 40 && h.y > S.y - 30) {
     if (G.mode === 'dm') {
@@ -851,7 +857,7 @@ function hurt(h, dmg, src) {
     dropPack(h);
     h.deaths++; G.stats.deaths++;
     // очко дронщику, чий вибух убив
-    if (G.blastBy && (src === 'blast' || src === 'mine' || src === 'head')) G.blastBy.score += 3;
+    if (G.blastBy && (src === 'blast' || src === 'mine' || src === 'head') && !allyP(G.blastBy, h.player)) G.blastBy.score += 3;
     h.lives--;
     if (h.lives > 0) {
       h.respawnT = RESPAWN_TIME;
@@ -864,7 +870,8 @@ function respawnHuman(h) {
   const W = G.W, sp = h.spawn;
   Object.assign(h, { dead: false, hp: 100, stance: 'stand', vx: 0, vy: 0, armor: 0, weapon: null, hidden: null, vehicle: null, seat: null,
     gasT: 0, smokeT: 0, reveal: 0, openTime: 0, diving: false, climb: null, onLadder: false, aiming: false, hideAnim: null, hurtT: 0, stamina: 1, exhausted: false, protT: 3, tun: null, digging: null, carry: null, mount: null, working: null, grenades: Math.max(1, h.grenades) });
-  if (sp && sp.hide && !sp.hide.ruined) { h.x = sp.hide.x; h.y = sp.hide.y; h.hidden = sp.hide; }
+  if (G.mode === 'team') { h.hidden = null; teamRespawn(h); }
+  else if (sp && sp.hide && !sp.hide.ruined) { h.x = sp.hide.x; h.y = sp.hide.y; h.hidden = sp.hide; }
   else if (sp && sp.bld) { h.x = sp.x; h.y = sp.y; }
   else { h.x = G.mode === 'dm' ? randomSpawnX() : W.start.x; h.y = gAt(W, h.x); }
   h.onGround = true; h.healT = 0; h.canister = false;
@@ -882,6 +889,7 @@ function placeNet(h) {
   const sp = h.hidden && h.hidden.type !== 'pipe' ? h.hidden : null;
   let target = sp;
   if (!target) for (const x of G.W.hides) if (x.type !== 'pipe' && !x.ruined && Math.abs(h.x - x.x) < 34 && Math.abs(h.y - x.y) < 40) { target = x; break; }
+  if (target && isTeam() && target.type === 'bunker' && !hideOwnedBy(target, h.player.team)) { feed('Спершу захопіть цей бліндаж', '#ccc'); return; }
   if (target) {
     if (target.net) { h.spawn = { hide: target }; feed('Тут уже є сітка — точку відновлення збережено', '#9c9'); return; }
     target.net = true; h.nets--; h.spawn = { hide: target };
@@ -889,6 +897,7 @@ function placeNet(h) {
     Sfx.click(); return;
   }
   const b = buildingAt(h.x, h.y);
+  if (b && isTeam() && !hideOwnedBy(b, h.player.team)) { feed('Спершу захопіть цю будівлю (15 с усередині)', '#ccc'); return; }
   if (b) {
     if (!b.net) { b.net = true; b.ply = PLY_PER_NET; h.nets--; feed(h.player.name + ' натягнув сітку в будівлі — можна укріплювати: фанера на вікна, вогневі позиції', '#9c9'); Sfx.click(); }
     h.spawn = { bld: b, x: h.x, y: h.y };
@@ -930,7 +939,7 @@ function updateBullets(dt) {
       if (b.x < 0 || b.x > W.width || b.y < -100) { hit = true; break; }
       if (pointSolid(W, b.x, b.y, list)) { hit = true; G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-60, 60), vy: rand(-120, 0), life: 0.25, max: 0.25 }); break; }
       for (const d of G.drones) {
-        if (dist(b.x, b.y, d.x, d.y) >= DRONE_R + 3) continue;
+        if (dist(b.x, b.y, d.x, d.y) >= DRONE_R + 3 || ally(b.owner, d)) continue;
         hit = true;
         if (d.hp > 1) { d.hp--; G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-90, 90), vy: rand(-120, 20), life: 0.3, max: 0.3 }); Sfx.tone(1400, 0.03, 0.05); }
         else shootDownDrone(d, b.owner);
@@ -999,21 +1008,36 @@ function destroyVehicle(v) {
 
 // ---------- Дрони ----------
 // майданчик старту: не ближче 500 px до живих людей (окрім базового №1)
-function padOk(i) {
-  const p = G.W.pads[i];
-  return i === 0 || !G.humans.some((h) => !h.dead && !h.saved && Math.abs(h.x - p.x) < 500);
+// точки злету, доступні цьому дронщику (у командному режимі — своєї команди й захоплені об'єкти)
+function padsOf(dp) { return G.mode === 'team' ? teamPads(dp.player.team) : G.W.pads; }
+function curPad(dp) { const L = padsOf(dp); return L[dp.pad] || L[0]; }
+// майданчик не ближче 500 px до живих людей (ворожих); перший — завжди
+function padOk(dp, i) {
+  const p = padsOf(dp)[i];
+  if (!p) return false;
+  if (i === 0) return true;
+  return !G.humans.some((h) => !h.dead && !h.saved && !allyP(h.player, dp.player) && Math.abs(h.x - p.x) < 500);
 }
-// автовибір: найближчий майданчик позаду найдальшої людини
-function autoPad() {
+// автовибір: найближчий до цілей майданчик, але не впритул до них
+function autoPad(dp) {
+  const L = padsOf(dp);
+  if (G.mode === 'team') {
+    let best = 0, bd = 1e9;
+    L.forEach((p, i) => {
+      if (!padOk(dp, i)) return;
+      for (const h of G.humans) if (!h.dead && !allyP(h.player, dp.player)) { const d = Math.abs(h.x - p.x); if (d < bd) { bd = d; best = i; } }
+    });
+    return best;
+  }
   let front = 0;
   for (const h of G.humans) if (!h.dead && !h.saved) front = Math.max(front, h.x);
   let best = 0;
-  G.W.pads.forEach((p, i) => { if (p.x < front - 600 && padOk(i)) best = i; });
+  L.forEach((p, i) => { if (p.x < front - 600 && padOk(dp, i)) best = i; });
   return best;
 }
 function nextPad(dp, dir) {
-  const n = G.W.pads.length;
-  for (let k = 1; k <= n; k++) { const i = (((dp.pad + k * (dir || 1)) % n) + n) % n; if (padOk(i)) { dp.pad = i; return; } }
+  const n = padsOf(dp).length;
+  for (let k = 1; k <= n; k++) { const i = (((dp.pad + k * (dir || 1)) % n) + n) % n; if (padOk(dp, i)) { dp.pad = i; return; } }
 }
 function firstDrop(slots) { return slots.find(Boolean) || null; }
 function dropCount(d, t) { return d.slots.filter((x) => x === t).length; }
@@ -1030,7 +1054,7 @@ function loadoutInput(dp, c) {
   }
   if (c.pressed('interact') || c.pressed('aim')) {
     nextPad(dp, c.pressed('aim') ? -1 : 1); Sfx.click();
-    if (d) { const p = G.W.pads[dp.pad]; d.x = p.x; d.y = p.y - DRONE_R - 2; }
+    if (d) { const p = curPad(dp); d.x = p.x; d.y = p.y - DRONE_R - 2; }
   }
   if (d) { d.slots = dp.loadout.slice(); d.payload = firstDrop(d.slots); }
 }
@@ -1041,8 +1065,8 @@ function updateDronePlayer(dp, dt) {
   if (d || dp.left <= 0) return;
   dp.timer -= dt;
   if (dp.timer <= 0) {
-    if (!padOk(dp.pad)) dp.pad = autoPad();
-    const pad = G.W.pads[dp.pad];
+    if (!padOk(dp, dp.pad)) dp.pad = autoPad(dp);
+    const pad = curPad(dp);
     const slots = dp.loadout.slice();
     // новий дрон стоїть на майданчику, АКБ не сідає, поки не злетить
     const nd = { player: dp.player, dp, x: pad.x, y: pad.y - DRONE_R - 2, vx: 0, vy: 0, battery: DRONE_BATTERY, jammed: false, tilt: 0, spin: 0,
@@ -1093,7 +1117,7 @@ function updateBombs(dt) {
       b.x += (b.vx * dt) / steps; b.y += (b.vy * dt) / steps;
       if (pointSolid(W, b.x, b.y, solidsNear(W, b.x - 4, b.x + 4))) { hit = true; b.y -= 3; break; }
       for (const h of G.humans) {
-        if (h.dead || h.saved || h.hidden) continue;
+        if (h.dead || h.saved || h.hidden || allyP(h.player, b.player)) continue;
         if (rectDist(b.x, b.y, humanRect(h)) < 3) { hit = true; hitH = h; break; }
       }
       for (const v of W.vehicles) if (!v.dead && rectDist(b.x, b.y, vehRect(v)) < 2) { hit = true; hitV = v; break; }
@@ -1209,7 +1233,7 @@ function mineBlast(x, y, h, v) {
 function removeDrone(d) {
   const i = G.drones.indexOf(d);
   if (i >= 0) G.drones.splice(i, 1);
-  d.dp.drone = null; d.dp.timer = DRONE_RESPAWN; d.dp.pad = autoPad();
+  d.dp.drone = null; d.dp.timer = DRONE_RESPAWN; d.dp.pad = autoPad(d.dp);
 }
 // direct — людина, в яку дрон врізався; head — влучання в голову
 function explodeDrone(d, direct, head) {
@@ -1233,7 +1257,7 @@ function acquireLock(d) {
   d.lockOn = null;
   let best = null, bd = 230;
   for (const x of G.humans) {
-    if (x.dead || x.saved || x.hidden) continue;
+    if (x.dead || x.saved || x.hidden || ally(x, d)) continue;
     const dd = dist(x.x, x.y - 25, d.x, d.y);
     if (dd < bd && humanVisibleToDrone(x, d) && lineOfSight(G.W, d.x, d.y, x.x, x.y - 25)) { bd = dd; best = x; }
   }
@@ -1333,9 +1357,9 @@ function updateDrone(d, dt) {
     d.x = nx + (dx / l) * DRONE_R; d.y = ny + (dy / l) * DRONE_R;
     if (dot < 0) { d.vx -= (dx / l) * dot * 1.3; d.vy -= (dy / l) * dot * 1.3; }
   }
-  // цілі
+  // цілі (свої люди — не ціль)
   for (const h of G.humans) {
-    if (h.dead || h.saved || h.hidden || h.vehicle) continue;
+    if (h.dead || h.saved || h.hidden || h.vehicle || ally(h, d)) continue;
     if (rectDist(d.x, d.y, humanRect(h)) < DRONE_R) { explodeDrone(d, h, isHeadHit(d, h)); return; }
   }
   for (const v of W.vehicles) {
@@ -1466,7 +1490,7 @@ function updateCameras(dt) {
     } else {
       const d = p.ent.drone;
       if (d) { tx = d.x + d.vx * 0.35; ty = d.y + d.vy * 0.2; }
-      else { const pd = G.W.pads[p.ent.pad]; tx = pd.x + 120; ty = pd.y - 150; }
+      else { const pd = curPad(p.ent); tx = pd.x + 120 * fwdDir(p); ty = pd.y - 150; }
     }
     const k = Math.min(1, dt * 5);
     p.cam.x += (tx - p.cam.x) * k; p.cam.y += (ty - p.cam.y) * k;
@@ -1487,6 +1511,7 @@ function updateGame(dt) {
   updateMines(dt);
   updateAirBonuses(dt);
   updatePickups(dt);
+  if (G.mode === 'team' && !G.over) updateTeam(dt);
   for (const r of G.rebs) r.t -= dt;
   G.rebs = G.rebs.filter((r) => r.t > 0);
   for (const f of G.feed) f.t -= dt;
@@ -1520,7 +1545,8 @@ function updateGame(dt) {
   Sfx.setBuzz(G.over ? 0 : lvl, pitch);
   // кінець гри
   if (!G.over) {
-    if (G.mode === 'dm') {
+    if (G.mode === 'team') teamTick(dt);
+    else if (G.mode === 'dm') {
       G.timeLeft -= dt;
       if (G.timeLeft <= 0) {
         G.timeLeft = 0;
@@ -1618,7 +1644,7 @@ function updatePickups(dt) {
   G.bonusT = rand(35, 55);
   const live = G.humans.filter((h) => !h.dead && !h.saved);
   if (!live.length || W.pickups.filter((p) => p.timed && !p.taken).length >= 2) return;
-  const h = pick(live), dir = G.mode === 'dm' ? pick([-1, 1]) : 1;
+  const h = pick(live), dir = G.mode === 'escape' ? 1 : G.mode === 'team' ? fwdDir(h.player) : pick([-1, 1]);
   let x = 0;
   for (let t = 0; t < 12; t++) { x = clamp(h.x + dir * rand(450, 1300), 300, W.width - 400); if (groundFree(x)) break; }
   const type = weighted(HUMAN_BONUS);
