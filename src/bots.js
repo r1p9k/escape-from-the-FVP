@@ -185,6 +185,22 @@ function thinkHuman(b, s, dt) {
     m.aimT += dt;
     if (m.aimT > 0.35 - 0.15 * L.react) s.fire = true;
   } else m.aimT = 0;
+  // командний режим: граната по ворожій людині на відстані кидка
+  m.grenT = (m.grenT || 0) - dt;
+  if (isTeam() && h.grenades > 0 && m.grenT <= 0 && h.onGround && !h.carry && !h.canister && !s.fire) {
+    let foe = null, fd = 380;
+    for (const o of G.humans) {
+      if (o.dead || o.saved || o.vehicle || allyP(o.player, h.player)) continue;
+      const tx = o.hidden ? null : o.x;
+      if (tx == null) continue;
+      const dd = Math.abs(tx - h.x);
+      if (dd > 110 && dd < fd && Math.abs(o.y - h.y) < 120 && lineOfSight(W, h.x, h.y - 40, o.x, o.y - 20)) { fd = dd; foe = o; }
+    }
+    if (foe) {
+      const a = grenadeAngle(handPos(h), foe.x, foe.y - 10);
+      if (a != null) { s.aim = true; s.aimAngle = a; b.tap(s, 'slot3'); m.grenT = 5 + Math.random() * 3; }
+    }
+  }
   // кидок на землю, коли дрон пікірує впритул
   if (threat && td < 170 && !s.aim && h.stance === 'stand' && Math.abs(h.vx) > 140 && Math.random() < L.react * 0.5) {
     const closing = (threat.vx * (h.x - threat.x) + threat.vy * (h.y - 25 - threat.y)) / Math.max(1, td);
@@ -227,6 +243,14 @@ function botWants(h, pk) {
   if (pk.type === 'fuel') return !h.canister && !h.weapon;
   if (WEAPONS[pk.type]) return !h.weapon;
   return canTake(h, pk);
+}
+// кут кидка гранати (низька траєкторія) з точки p у (tx, ty)
+function grenadeAngle(p, tx, ty) {
+  const dx = tx - p.x, X = Math.abs(dx), Y = p.y - ty, v = GRENADE_SPD, g = THROW_G;
+  const disc = v ** 4 - g * (g * X * X + 2 * Y * v * v);
+  if (disc < 0 || X < 1) return null;
+  const up = Math.atan((v * v - Math.sqrt(disc)) / (g * X)); // кут над горизонтом
+  return dx >= 0 ? -up : Math.PI + up;
 }
 // кущ поблизу точки — сховати «ждуна»
 function bushNear(x, r) {
@@ -275,6 +299,8 @@ function thinkDrone(b, s, dt) {
     const vx = tgt.vehicle ? tgt.vehicle.vx : tgt.vx;
     m.last = { x: tgt.x, y: tgt.y, vx }; m.lostT = 0;
   } else m.lostT += dt;
+  // командний режим: без людей у полі зору — полювати на ворожі НРК з підвозом
+  const ugvT = !tgt && isTeam() ? nearestEnemyUgv(d, 900 * L.sense) : null;
 
   let descend = false, gx, gy, attack = false, boost = false, weave = 0, aim = null;
   if (tgt) {
@@ -310,6 +336,11 @@ function thinkDrone(b, s, dt) {
     }
     // підрив поруч, якщо ціль лежить або ховається за бруствером
     if (dd < 26 || (attack && dd < 46 && lineOfSight(W, d.x, d.y, tx, ty))) b.tap(s, 'fire');
+  } else if (ugvT) {
+    const dd = dist(d.x, d.y, ugvT.x, ugvT.y - 10);
+    gx = ugvT.x + ugvT.dir * UGV_SPD * 0.3; gy = ugvT.y - 12;
+    if (dd < 300) { attack = true; boost = true; } else { gy = ugvT.y - 160; boost = true; }
+    if (dd < 30) b.tap(s, 'fire');
   } else if (m.last && m.lostT > 1.2 && m.lostT < 16 && dropCount(d, 'smoke') > 0 && (m.smokeAt = m.smokeAt || nearestHideTo(m.last.x, m.last.y, d))) {
     // людина зникла біля схованки — викурити димом
     const e = m.smokeAt, tf = Math.sqrt((2 * 160) / 900);

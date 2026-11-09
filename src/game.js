@@ -53,7 +53,7 @@ function newGame(slots, loc, opts) {
   const nDr = slots.filter((s) => s.role === 'drone').length;
   let hi = 0;
   const tc = [0, 0], th = [0, 0];
-  if (mode === 'team') initTeam();
+  if (mode === 'team') { initTeam(); initSupply(); }
   slots.forEach((s, i) => {
     const p = { name: s.name, color: s.color, role: s.role, bot: !!s.bot, cam: { x: 0, y: 0, wide: false }, idx: i, score: 0, team: -1 };
     if (mode === 'team') { p.team = s.team === 1 ? 1 : s.team === 0 ? 0 : i % 2; p.color = TEAMS[p.team].cols[tc[p.team]++ % 2]; }
@@ -82,7 +82,7 @@ function makeHuman(p, x) {
     player: p, x, y: gAt(G.W, x), vx: 0, vy: 0, stance: 'stand', facing: 1, onGround: true, onThin: false, wasGround: true,
     hp: 100, stamina: 1, staminaDelay: 0, exhausted: false, climb: null, onLadder: false, dropT: 0,
     vehicle: null, seat: null, hidden: null, tun: null, digging: null, shovel: 0, weapon: null, reb: 1, fireCd: 0,
-    carry: null, mount: null, working: null, grenades: GRENADES_START, grenadeCd: 0,
+    carry: null, mount: null, working: null, grenades: G.mode === 'team' ? 3 : GRENADES_START, grenadeCd: 0, piloting: false,
     openTime: 0, reveal: 0, hurtT: 0, dead: false, saved: false, anim: 0,
     aimA: -0.5, aiming: false, diving: false, diveCd: 0, canister: false, smokeT: 0, gasT: 0, gasWarned: false,
     armor: 0, beaten: 0, alCharges: 0, alT: 0, alGranted: false, hideAnim: null,
@@ -215,6 +215,8 @@ function updateHuman(h, dt) {
   if (h.rebCd > 0) h.rebCd -= dt;
   if (h.grenadeCd > 0) h.grenadeCd -= dt;
   if (h.dead || h.saved) return;
+  // гравець керує дроном — тіло лишається на місці
+  if (h.piloting) { if (!h.hidden) { h.vx = 0; moveHuman(h, dt); } return; }
   if (h.mount) { humanOnMount(h, c, dt); return; }
   if (h.vehicle) { humanInVehicle(h, c, dt); return; }
   if (h.hidden) { humanHidden(h, c, dt); return; }
@@ -852,6 +854,7 @@ function hurt(h, dmg, src) {
   h.hp -= dmg; h.hurtT = 0.4;
   if (h.hp <= 0) {
     h.hp = 0; h.dead = true; h.alT = 0;
+    if (h.piloting) { const dp = G.dps.find((x) => x.temp && x.human === h); if (dp) endPilot(dp); }
     if (h.vehicle) exitVehicle(h, true);
     h.hidden = null; h.hideAnim = null; h.stance = 'prone';
     dropPack(h);
@@ -880,7 +883,7 @@ function respawnHuman(h) {
 
 // ---------- Маскувальна сітка ----------
 function buildingAt(x, y) {
-  for (const b of G.W.backs) if (x > b.x + 10 && x < b.x + b.w - 10 && y > b.y && y <= b.y + b.h + 4) return b;
+  for (const b of G.W.backs) if (!b.ruined && x > b.x + 10 && x < b.x + b.w - 10 && y > b.y && y <= b.y + b.h + 4) return b;
   return null;
 }
 // натягнути сітку на вхід у бліндаж/нору або в будівлі; там же — точка відновлення
@@ -943,6 +946,13 @@ function updateBullets(dt) {
         hit = true;
         if (d.hp > 1) { d.hp--; G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-90, 90), vy: rand(-120, 20), life: 0.3, max: 0.3 }); Sfx.tone(1400, 0.03, 0.05); }
         else shootDownDrone(d, b.owner);
+        break;
+      }
+      if (!hit && G.ugvs) for (const u of G.ugvs) {
+        if (u.dead || rectDist(b.x, b.y, ugvRect(u)) > 1) continue;
+        if (b.owner && b.owner.player.team === u.team) continue; // свої кулі НРК не зачіпають
+        hit = true; hurtUgv(u, 5, b.owner && b.owner.player);
+        G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-90, 90), vy: rand(-120, 0), life: 0.25, max: 0.25 });
         break;
       }
       if (!hit) for (let mi = G.mines.length - 1; mi >= 0; mi--) {
@@ -1009,7 +1019,7 @@ function destroyVehicle(v) {
 // ---------- Дрони ----------
 // майданчик старту: не ближче 500 px до живих людей (окрім базового №1)
 // точки злету, доступні цьому дронщику (у командному режимі — своєї команди й захоплені об'єкти)
-function padsOf(dp) { return G.mode === 'team' ? teamPads(dp.player.team) : G.W.pads; }
+function padsOf(dp) { return dp.fixedPad ? [dp.fixedPad] : G.mode === 'team' ? teamPads(dp.player.team) : G.W.pads; }
 function curPad(dp) { const L = padsOf(dp); return L[dp.pad] || L[0]; }
 // майданчик не ближче 500 px до живих людей (ворожих); перший — завжди
 function padOk(dp, i) {
@@ -1060,11 +1070,18 @@ function loadoutInput(dp, c) {
 }
 function updateDronePlayer(dp, dt) {
   if (G.over) return;
+  // людина, що взяла дрон: 1 — повернутися (дрон без вибуху вимикається)
+  if (dp.temp && G.time > dp.t0 + 0.2 && dp.player.ctrl.pressed('slot1')) { endPilot(dp); return; }
   const d = dp.drone;
   if ((!d && dp.left > 0) || (d && d.onPad)) loadoutInput(dp, dp.player.ctrl);
   if (d || dp.left <= 0) return;
   dp.timer -= dt;
   if (dp.timer <= 0) {
+    // командний режим: дрони беруться із запасу команди, який поповнюють НРК
+    if (G.mode === 'team') {
+      if (G.stock[dp.player.team] <= 0) { dp.timer = 0; dp.noStock = true; return; }
+      G.stock[dp.player.team]--; dp.noStock = false;
+    }
     if (!padOk(dp, dp.pad)) dp.pad = autoPad(dp);
     const pad = curPad(dp);
     const slots = dp.loadout.slice();
@@ -1121,6 +1138,7 @@ function updateBombs(dt) {
         if (rectDist(b.x, b.y, humanRect(h)) < 3) { hit = true; hitH = h; break; }
       }
       for (const v of W.vehicles) if (!v.dead && rectDist(b.x, b.y, vehRect(v)) < 2) { hit = true; hitV = v; break; }
+      if (G.ugvs) for (const u of G.ugvs) if (!u.dead && u.team !== (b.player && b.player.team) && rectDist(b.x, b.y, ugvRect(u)) < 2) { hit = true; break; }
     }
     if (b.x < 0 || b.x > W.width) { G.bombs.splice(i, 1); continue; }
     if (!hit) continue;
@@ -1234,6 +1252,7 @@ function removeDrone(d) {
   const i = G.drones.indexOf(d);
   if (i >= 0) G.drones.splice(i, 1);
   d.dp.drone = null; d.dp.timer = DRONE_RESPAWN; d.dp.pad = autoPad(d.dp);
+  if (d.dp.temp) endPilot(d.dp); // дрон людини вибухнув — керування назад до людини
 }
 // direct — людина, в яку дрон врізався; head — влучання в голову
 function explodeDrone(d, direct, head) {
@@ -1366,6 +1385,7 @@ function updateDrone(d, dt) {
     if (v.dead) continue;
     if (rectDist(d.x, d.y, vehRect(v)) < DRONE_R + 2) { explodeDrone(d); return; }
   }
+  if (G.ugvs) for (const u of G.ugvs) if (!u.dead && u.team !== d.player.team && rectDist(d.x, d.y, ugvRect(u)) < DRONE_R + 2) { explodeDrone(d); return; }
 }
 
 function explosionFx(x, y, power, radius) {
@@ -1412,6 +1432,7 @@ function explosion(x, y, power, radius, direct) {
     if (!lineOfSight(W, x, y, h.x, r.y + r.h / 2)) dmg *= 0.25;
     hurt(h, dmg, 'blast');
   }
+  blastUgvs(x, y, power, radius);
   if (power >= 25) { damageCovers(x, y, power); damageFort(x, y, power); }
   if (power >= 60) breachSolids(x, y, radius);
 }
@@ -1420,12 +1441,13 @@ const BREACHABLE = { wall: 1, floor: 1, roof: 1 };
 function breachSolids(x, y, radius) {
   const W = G.W, r = radius * 0.4;
   const bx0 = x - r * rand(0.85, 1.1), bx1 = x + r * rand(0.85, 1.1), by0 = y - r * rand(0.85, 1.1), by1 = y + r * rand(0.85, 1.1);
-  const add = [];
+  const add = [], hitB = new Set();
   let changed = false;
   for (const so of solidsNear(W, bx0 - 2, bx1 + 2)) {
     if (!BREACHABLE[so.type] || so.dead) continue;
     if (so.x >= bx1 || so.x + so.w <= bx0 || so.y >= by1 || so.y + so.h <= by0) continue;
     so.dead = true; changed = true;
+    if (so.bld) hitB.add(so.bld);
     const x0 = Math.max(so.x, bx0), x1 = Math.min(so.x + so.w, bx1), y0 = Math.max(so.y, by0), y1 = Math.min(so.y + so.h, by1);
     const base = { bt: so.bt, bb: so.bb, bl: so.bl, br: so.br };
     const pieces = [
@@ -1441,6 +1463,7 @@ function breachSolids(x, y, radius) {
   if (!changed) return;
   W.solids = W.solids.filter((so) => !so.dead).concat(add);
   buildBuckets(W);
+  for (const b of hitB) checkCollapse(b); // від будівлі майже нічого не лишилось — обвал
 }
 // наземні укриття руйнуються: бліндажі, нори, тюки, колоди, блоки, кущі
 function damageCovers(x, y, power) {
@@ -1511,7 +1534,7 @@ function updateGame(dt) {
   updateMines(dt);
   updateAirBonuses(dt);
   updatePickups(dt);
-  if (G.mode === 'team' && !G.over) updateTeam(dt);
+  if (G.mode === 'team' && !G.over) { updateTeam(dt); updateSupply(dt); }
   for (const r of G.rebs) r.t -= dt;
   G.rebs = G.rebs.filter((r) => r.t > 0);
   for (const f of G.feed) f.t -= dt;
@@ -1576,6 +1599,7 @@ function teamScores() {
 function backpackInput(h, c) {
   if (c.pressed('slot1') && h.canister) dropCanister(h);
   else if (c.pressed('slot1') && h.carry) dropCarry(h);
+  else if (c.pressed('slot1') && isTeam()) tryPilot(h);
   if (c.pressed('slot2')) {
     if (h.healT > 0) return;
     if (h.medkits <= 0) feed(h.player.name + ': аптечок немає', '#ccc');

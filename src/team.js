@@ -127,3 +127,155 @@ function teamGoal(h) {
   }
   return best;
 }
+
+// ---------- Людина бере керування дроном ----------
+// Тільки у своїй будівлі, бліндажі чи на базі (там є точка злету). Після вибуху дрона — назад до людини.
+function pilotSpot(h) {
+  if (!isTeam() || h.dead || h.vehicle) return null;
+  const o = objAt(h), t = h.player.team;
+  if (!o || o.owner !== t || o.n[1 - t] > 0) return null;
+  return o;
+}
+function tryPilot(h) {
+  const o = pilotSpot(h);
+  if (!o) { tipOnce(h, 'Дрон можна взяти лише у своїй будівлі, бліндажі чи на базі'); return; }
+  const t = h.player.team;
+  if (G.stock[t] <= 0) { tipOnce(h, 'Запас дронів скінчився — чекайте НРК'); return; }
+  const p = h.player;
+  const pad = o.kind === 'base' ? G.W.pads.filter((q) => q.team === t)[0] : objPad(o);
+  const dp = { player: p, left: Infinity, total: Infinity, used: 0, drone: null, timer: 0, pad: 0, sel: 0,
+    loadout: (p.loadout || DEFAULT_LOADOUT).slice(), temp: true, human: h, fixedPad: pad, t0: G.time };
+  G.dps.push(dp);
+  p.role = 'drone'; p.ent = dp;
+  h.piloting = true; h.aiming = false; h.vx = 0; h.healT = 0;
+  if (h.carry) dropCarry(h);
+  if (!h.hidden && h.onGround) h.stance = 'crouch';
+  feed(p.name + ' керує дроном (' + (pad.label || 'база') + ')', p.color);
+  Sfx.click();
+}
+// повернути керування людині (дрон уже прибрано або прибирається)
+function endPilot(dp) {
+  const p = dp.player, h = dp.human;
+  G.dps = G.dps.filter((x) => x !== dp);
+  if (dp.drone) { G.drones = G.drones.filter((x) => x !== dp.drone); dp.drone = null; }
+  p.role = 'human'; p.ent = h; h.piloting = false;
+  p.loadout = dp.loadout.slice();
+  p.cam.x = h.x; p.cam.y = h.y - 100;
+}
+
+// ---------- Підвіз: НРК везуть дрони й зброю на базу ----------
+const STOCK_START = 8, STOCK_MAX = 14, UGV_EVERY = 30, UGV_SPD = 110, UGV_HP = 100, UGV_DRONES = 4;
+function initSupply() {
+  G.stock = [STOCK_START, STOCK_START];
+  G.ugvs = [];
+  G.ugvT = [UGV_EVERY, UGV_EVERY];
+  // на старті кілька НРК уже в дорозі — підвіз іде регулярно з перших хвилин
+  for (const t of [0, 1]) for (const k of [0.35, 0.6, 0.85]) { spawnUgv(t, true); const u = G.ugvs[G.ugvs.length - 1]; const far = t ? 30 : G.W.width - 30; u.x = far + (baseX(t) - far) * k; u.y = gAt(G.W, u.x); }
+}
+function baseX(t) { return t ? G.W.start2.x : G.W.start.x; }
+// НРК виїжджає з протилежного краю мапи й їде через усю мапу до своєї бази
+function spawnUgv(t, quiet) {
+  const W = G.W, x = t ? 30 : W.width - 30;
+  G.ugvs.push({ team: t, player: { team: t }, x, y: gAt(W, x), dir: t ? 1 : -1, hp: UGV_HP, ang: 0, wheel: 0 });
+  if (!quiet) feed('НРК ' + TEAMS[t].gen + ' виїхав із підвозом', TEAMS[t].col);
+}
+function ugvRect(u) { return { x: u.x - 24, y: u.y - 20, w: 48, h: 20 }; }
+function updateSupply(dt) {
+  const W = G.W;
+  for (const t of [0, 1]) if ((G.ugvT[t] -= dt) <= 0) { G.ugvT[t] = UGV_EVERY; spawnUgv(t, true); }
+  for (const u of G.ugvs) {
+    if (u.dead) continue;
+    u.x += u.dir * UGV_SPD * dt; u.wheel += dt * 10;
+    u.y = gAt(W, u.x);
+    u.ang = Math.atan2(gAt(W, u.x + 14) - gAt(W, u.x - 14), 28);
+    if ((baseX(u.team) - u.x) * u.dir <= 0) deliverUgv(u);
+  }
+  G.ugvs = G.ugvs.filter((u) => !u.dead);
+}
+function deliverUgv(u) {
+  const t = u.team, W = G.W, bx = baseX(t);
+  u.dead = true;
+  const got = Math.min(UGV_DRONES, STOCK_MAX - G.stock[t]);
+  G.stock[t] += got;
+  // зброя й припаси біля бази (не більше 4 штук, щоб не завалити)
+  const near = W.pickups.filter((p) => !p.taken && Math.abs(p.x - bx) < 140).length;
+  for (let i = 0; i < 2 && near + i < 4; i++) {
+    const x = bx + rand(-90, 90);
+    W.pickups.push({ type: weighted({ rifle: 1, shotgun: 0.6, grenade: 1.2, medkit: 0.8 }), x, y: gAt(W, x) });
+  }
+  feed('НРК ' + TEAMS[t].gen + ' доставив ' + got + ' дрони й зброю на базу', TEAMS[t].col);
+  Sfx.tone(520, 0.12, 0.08);
+}
+function hurtUgv(u, dmg, by) {
+  if (u.dead || dmg <= 0) return;
+  u.hp -= dmg;
+  if (u.hp > 0) return;
+  u.dead = true;
+  explosionFx(u.x, u.y - 10, 50, 60);
+  for (let i = 0; i < 10; i++) G.parts.push({ type: 'debris', x: u.x, y: u.y - 10, vx: rand(-200, 200), vy: rand(-300, -60), life: rand(0.6, 1.2), max: 1.2, col: '#3a3f33' });
+  feed('НРК ' + TEAMS[u.team].gen + ' знищено — підвіз не доїхав', '#f2994a');
+  if (by && by.team !== u.team) G.teamPts[by.team] += 2;
+}
+// вибух поруч із НРК
+function blastUgvs(x, y, power, radius) {
+  if (!G.ugvs) return;
+  for (const u of G.ugvs) {
+    const d = rectDist(x, y, ugvRect(u));
+    if (d < radius * 0.7) hurtUgv(u, power * 1.4 * (1 - d / radius), G.blastBy);
+  }
+}
+function nearestEnemyUgv(d, r) {
+  let best = null, bd = r;
+  for (const u of G.ugvs || []) {
+    if (u.dead || u.team === d.player.team) continue;
+    const dd = dist(d.x, d.y, u.x, u.y - 10);
+    if (dd < bd) { bd = dd; best = u; }
+  }
+  return best;
+}
+
+// ---------- Обвал будівлі: під руїнами — бліндаж із тунелем ----------
+const COLLAPSE_AT = 0.25; // будівля падає, коли від конструкції лишилось менше 25%
+function bldArea(b) {
+  let a = 0;
+  for (const s of G.W.solids) if (s.bld === b && s.type !== 'plywood') a += s.w * s.h;
+  return a;
+}
+function checkCollapse(b) {
+  if (!b || b.ruined || !b.area0) return;
+  if (bldArea(b) < b.area0 * COLLAPSE_AT) collapseBuilding(b);
+}
+function collapseBuilding(b) {
+  const W = G.W, x0 = b.x, x1 = b.x + b.w, g = b.y + b.h, cx = b.x + b.w / 2;
+  b.ruined = true; b.net = false;
+  const inside = (s) => s.x >= x0 - 2 && s.x + s.w <= x1 + 2 && s.y >= b.y - 20 && s.y < g;
+  for (const s of W.solids) if (s.bld === b || (s.type === 'plywood' && inside(s))) {
+    for (let i = 0; i < Math.min(6, 1 + (s.w * s.h) / 300); i++) G.parts.push({ type: 'debris', x: s.x + rand(0, s.w), y: s.y + rand(0, s.h), vx: rand(-160, 160), vy: rand(-200, 0), life: rand(0.8, 1.6), max: 1.6, col: '#7a5c48' });
+  }
+  W.solids = W.solids.filter((s) => !(s.bld === b || (s.type === 'plywood' && inside(s))));
+  W.covers = W.covers.filter((c) => !(c.type === 'ruin' && c.x > x0 - 2 && c.x < x0 + 20));
+  W.ladders = W.ladders.filter((l) => !(l.x > x0 && l.x < x1 && l.bottom <= g + 1));
+  W.props = W.props.filter((p) => !(p.x > x0 && p.x < x1 && p.y < g - 4));
+  for (const pk of W.pickups) if (pk.x > x0 && pk.x < x1 && pk.y < g - 4) pk.y = gAt(W, pk.x); // знахідки падають на землю
+  for (const m of W.mounts.filter((m) => m.b === b)) if (m.user) leaveMount(m.user);
+  W.mounts = W.mounts.filter((m) => m.b !== b);
+  for (let i = 0; i < 24; i++) G.parts.push({ type: 'smoke', x: rand(x0, x1), y: g - rand(0, b.h * 0.6), vx: rand(-30, 30), vy: rand(-40, -5), life: rand(2, 4), max: 4, size: rand(18, 34) });
+  Sfx.boom(true);
+  // бліндаж: підвальний стає звичайним, інакше — новий посередині
+  let bunker = W.hides.find((sp) => sp.type === 'bunker' && sp.basement && sp.x > x0 && sp.x < x1);
+  if (bunker) { bunker.basement = false; bunker.ruined = false; bunker.hp = HIDE_HP.bunker; }
+  else { bunker = { type: 'bunker', x: cx, y: gAt(W, cx), hp: HIDE_HP.bunker }; W.hides.push(bunker); }
+  bunker.fromRuin = true;
+  // тунель під руїнами з виходами в обидва боки
+  const a = bunker.x - 130, bb = bunker.x + 130;
+  const tun = { type: 'pipe', style: 'dug', a, b: bb, depth: TUN_DEPTH, exits: [{ x: a, dir: -1, kind: 'ramp' }, { x: bb, dir: 1, kind: 'ramp' }], dug: true };
+  tun.exits.forEach((e) => tunExitGeo(W, tun, e));
+  W.hides.push(tun);
+  buildBuckets(W);
+  feed('Будівлю зруйновано — під руїнами бліндаж із тунелем', '#f2994a');
+  // командний режим: прапор зникає, об'єкт стає бліндажем (звідти теж можна запускати дрони)
+  if (isTeam()) {
+    const o = G.objs.find((x) => x.ref === b);
+    if (o) Object.assign(o, { kind: 'bunker', ref: bunker, x: bunker.x, owner: -1, capT: 0, capTeam: -1, pad: null, name: 'бліндаж у руїнах', acc: 'бліндаж у руїнах' });
+  }
+}
