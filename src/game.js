@@ -290,7 +290,7 @@ function updateHuman(h, dt) {
       let speed = h.stance === 'stand' ? RUN : h.stance === 'crouch' ? CROUCH_SPD : CRAWL;
       const wantSprint = c.held('sprint') && h.stance === 'stand' && ax !== 0;
       if (wantSprint && h.stamina > 0 && !h.exhausted) {
-        speed = SPRINT; h.stamina -= dt / 3; h.staminaDelay = 0.9;
+        speed = SPRINT; h.stamina -= dt / 6; h.staminaDelay = 0.9; // запасу витривалості — на 6 с бігу
         if (h.stamina <= 0) { h.stamina = 0; h.exhausted = true; }
       } else {
         h.staminaDelay -= dt;
@@ -554,7 +554,7 @@ function enterHide(h, sp) {
   if (sp.type === 'pipe') {
     let bi = 0, bd = 1e9;
     sp.exits.forEach((e, i) => { const dd = Math.abs(h.x - e.tx) + Math.abs(h.y - e.ty); if (dd < bd) { bd = dd; bi = i; } });
-    h.tun = { ex: bi, u: 1, push: 0 }; h.stance = 'crouch';
+    h.tun = { ex: bi, u: 1, push: 0 }; h.stance = sp.tall ? 'stand' : 'crouch'; // у високому ході — на повний зріст
   } else h.hideAnim = { dir: 'in', t: 0, dur: 0.5, sp, fx: h.x, facing: h.facing };
   h.smokeT = 0;
   if (sp.bonus === 'aliosha') {
@@ -610,7 +610,7 @@ function tunnelControl(h, sp, c, dt) {
     const e = sp.exits[T.ex];
     let v = (c.held('up') ? 1 : 0) - (c.held('down') ? 1 : 0);
     if (e.kind === 'ramp' && ax) v = ax === e.dir ? 1 : -1;
-    T.u = clamp(T.u + (v * TUN_SPD * dt) / e.len, 0, 1);
+    T.u = clamp(T.u + (v * TUN_SPD * (sp.tall ? 1.5 : 1) * dt) / e.len, 0, 1);
     if (e.kind === 'ramp' && v) h.facing = v > 0 ? e.dir : -e.dir; else if (ax) h.facing = ax;
     const p = tunExitPos(e, T.u); h.x = p.x; h.y = p.y;
     h.anim += Math.abs(v) * dt * 9; h.vx = v ? 60 * h.facing : 0;
@@ -630,7 +630,7 @@ function tunnelControl(h, sp, c, dt) {
     if (h.shovel > 0) digGallery(h, sp, ax, dt);
     else if (c.pressed('left') || c.pressed('right')) tipOnce(h, 'Кінець тунелю. Лопатою можна копати далі');
   } else {
-    h.x = clamp(h.x + ax * TUN_SPD * dt, sp.a, sp.b);
+    h.x = clamp(h.x + ax * TUN_SPD * (sp.tall ? 1.6 : 1) * dt, sp.a, sp.b);
     h.anim += Math.abs(ax) * dt * 9; h.vx = ax * 60;
   }
   h.y = tunFloor(W, sp, h.x);
@@ -647,7 +647,8 @@ function tipOnce(h, text) {
 }
 function leaveTunnel(h, e) {
   h.hidden = null; h.tun = null; h.x = e.tx + (e.kind === 'ramp' ? e.dir * 6 : 0); h.y = gAt(G.W, h.x);
-  h.stance = 'crouch'; h.vx = 0; h.vy = 0; h.onGround = true;
+  h.vx = 0; h.vy = 0; h.onGround = true;
+  if (!tryStance(h, 'stand')) h.stance = 'crouch'; // вийшов — випрямився (якщо є місце)
   Sfx.click();
 }
 function digDirt(x, y) {

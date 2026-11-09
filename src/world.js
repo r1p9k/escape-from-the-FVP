@@ -65,6 +65,9 @@ function addSolid(W, s) { W.solids.push(s); return s; }
 // ---- Тунелі ----
 const TUN_DEPTH = 52;   // підлога галереї під поверхнею
 const TUN_H = 40;       // висота галереї (людина йде зігнувшись)
+const TUN_H_TALL = 64;  // високий хід — на повний зріст
+const TUN_DEPTH_TALL = 78;
+function tunH(sp) { return sp.tall ? TUN_H_TALL : TUN_H; }
 const TUN_K = 1.15;     // нахил спуску (вертикаль на одиницю горизонталі)
 function tunFloor(W, sp, x) { return gAt(W, x) + sp.depth; }
 // геометрія виходу: основа на підлозі галереї, верх на поверхні
@@ -132,14 +135,16 @@ const F = {
     const ex = (px, dir) => ({ x: px, dir, kind: RND() < 0.7 ? 'ramp' : 'shaft' });
     const exits = [ex(a + 6, -1), ex(b - 6, 1)];
     if (len > 280 && RND() < 0.4) exits.push({ x: lerp(a, b, rand(0.4, 0.6)), dir: RND() < 0.5 ? -1 : 1, kind: RND() < 0.5 ? 'ramp' : 'shaft' });
-    W.hides.push({ type: 'pipe', style: 'dug', a, b, depth: TUN_DEPTH, exits });
+    // частина ходів — високі, на повний зріст (глибші)
+    const tall = RND() < 0.4;
+    W.hides.push({ type: 'pipe', style: 'dug', a, b, depth: tall ? TUN_DEPTH_TALL : TUN_DEPTH, tall, exits });
     return len + 110;
   },
 
   // каналізація: бетонний колектор глибше, вниз — лазами з люками
   sewer(W, x) {
     const len = rand(360, 660);
-    W.hides.push({ type: 'pipe', style: 'sewer', a: x, b: x + len, depth: 92, exits: [{ x: x + 12, dir: -1, kind: 'shaft' }, { x: x + len - 12, dir: 1, kind: 'shaft' }] });
+    W.hides.push({ type: 'pipe', style: 'sewer', a: x, b: x + len, depth: 92, tall: true, exits: [{ x: x + 12, dir: -1, kind: 'shaft' }, { x: x + len - 12, dir: 1, kind: 'shaft' }] });
     return 60;
   },
 
