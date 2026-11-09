@@ -396,7 +396,7 @@ function drawHideFront(ctx, sp) {
 }
 // тунель у розрізі: виритий окоп під землею з кріпленням або бетонний колектор
 function drawTunnel(ctx, sp, W) {
-  const sewer = sp.style === 'sewer', H = TUN_H;
+  const sewer = sp.style === 'sewer', H = tunH(sp);
   const fl = (x) => tunFloor(W, sp, x);
   const jag = (x, k) => (sewer ? 0 : (hash(Math.round(x / 7) * 7 + k) - 0.5) * 5);
   const cave = sewer ? '#1c1e20' : '#1d1610', wall = sewer ? '#6d6f70' : '#3b2c1c';
@@ -894,96 +894,7 @@ function drawVehicle(ctx, v, t) {
     ctx.beginPath(); ctx.arc(v.x + rand(-15, 15), v.y - T.h + rand(-6, 6), rand(4, 9), 0, 7); ctx.fill();
   }
 }
-function drawRider(ctx, v, h) {
-  const T = VEH[v.type];
-  const off = h.seat === 'gunner' ? -T.len * 0.15 : T.len * 0.05;
-  const x = v.x + off * v.dir, y = v.y - (v.type === 'car' ? T.h - 6 : T.h - 4);
-  ctx.save(); ctx.translate(x, y); ctx.scale(v.dir, 1);
-  ctx.fillStyle = h.hurtT > 0 ? '#c33' : '#556b2f';
-  ctx.fillRect(-6, -22, 12, 22);
-  ctx.fillStyle = '#d9b48f'; ctx.beginPath(); ctx.arc(0, -28, 6, 0, 7); ctx.fill();
-  ctx.fillStyle = h.player.color; ctx.beginPath(); ctx.arc(0, -30, 7, Math.PI, 0); ctx.fill();
-  ctx.restore();
-}
-
-// ---------- Людина ----------
-function drawHuman(ctx, h, t, alpha) {
-  ctx.save();
-  ctx.globalAlpha = h.protT > 0 ? alpha * (0.45 + 0.35 * Math.sin(t * 20)) : alpha; // мерехтить, поки діє захист після відновлення
-  ctx.translate(h.x, h.y);
-  ctx.scale(h.facing, 1);
-  const uni = h.dead ? '#4a4a40' : h.hurtT > 0 ? '#c33' : '#556b2f';
-  const skin = '#d9b48f', helm = h.dead ? '#555' : h.player.color;
-  ctx.lineCap = 'round';
-  if (h.dead || h.stance === 'prone') {
-    const crawl = Math.sin(h.anim * 2) * 3;
-    ctx.strokeStyle = '#3d4a24'; ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.moveTo(-14, -5); ctx.lineTo(-24, -3 + crawl); ctx.moveTo(-14, -5); ctx.lineTo(-24, -6 - crawl); ctx.stroke();
-    ctx.fillStyle = uni; roundRect(ctx, -16, -12, 28, 10, 4); ctx.fill();
-    if (h.armor > 0) { ctx.fillStyle = '#3b4250'; roundRect(ctx, -10, -13, 18, 9, 3); ctx.fill(); }
-    ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(17, -8, 5.5, 0, 7); ctx.fill();
-    ctx.fillStyle = helm; ctx.beginPath(); ctx.arc(17, -9, 6.5, Math.PI * 0.9, Math.PI * 2.1); ctx.fill();
-    if (h.weapon && !h.dead) { ctx.fillStyle = '#222'; ctx.fillRect(12, -4, 18, 3); }
-  } else {
-    const crouch = h.stance === 'crouch' || (h.hidden && h.hidden.type !== 'pipe');
-    const legH = crouch ? 12 : 22, torso = crouch ? 18 : 22;
-    const sw = h.onLadder ? Math.sin(h.anim) * 5 : Math.sin(h.anim) * (crouch ? 5 : 9) * Math.min(1, Math.abs(h.vx) / 80);
-    ctx.strokeStyle = '#3d4a24'; ctx.lineWidth = 5;
-    ctx.beginPath();
-    if (crouch) { ctx.moveTo(0, -legH); ctx.lineTo(8 + sw, -5); ctx.lineTo(4 + sw, 0); ctx.moveTo(0, -legH); ctx.lineTo(-6 - sw, -2); ctx.lineTo(-9 - sw, 0); }
-    else { ctx.moveTo(0, -legH); ctx.lineTo(sw, 0); ctx.moveTo(0, -legH); ctx.lineTo(-sw, 0); }
-    ctx.stroke();
-    const tilt = crouch ? 0.25 : Math.min(0.2, Math.abs(h.vx) / 1500);
-    ctx.translate(0, -legH); ctx.rotate(tilt);
-    ctx.fillStyle = uni; roundRect(ctx, -6, -torso, 12, torso, 3); ctx.fill();
-    ctx.fillStyle = '#3f4f2a'; ctx.fillRect(-8, -torso + 3, 4, 12); // рюкзак
-    if (h.armor > 0) { ctx.fillStyle = '#3b4250'; roundRect(ctx, -7, -torso + 2, 14, torso - 6, 3); ctx.fill(); ctx.fillStyle = '#2a2f3a'; ctx.fillRect(-7, -torso + 8, 14, 2); }
-    ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(1, -torso - 7, 6, 0, 7); ctx.fill();
-    ctx.fillStyle = helm; ctx.beginPath(); ctx.arc(1, -torso - 8, 7.5, Math.PI * 0.95, Math.PI * 2.05); ctx.fill();
-    ctx.strokeStyle = uni; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.moveTo(0, -torso + 4);
-    if (h.meleeT > 0) {
-      // удар: рука (чи приклад) різко вперед
-      const k = Math.sin((1 - h.meleeT / MELEE_T) * Math.PI), reach = 8 + k * 12;
-      ctx.lineTo(reach, -torso + 7); ctx.stroke();
-      if (h.weapon && !h.carry) { ctx.fillStyle = '#222'; ctx.fillRect(reach - 18, -torso + 5, 24, 4); ctx.fillStyle = '#5a3d24'; ctx.fillRect(reach + 2, -torso + 4, 7, 6); }
-      else if (h.carry) drawProp(ctx, h.carry, reach + 4, -torso + 12, 0.8);
-      else { ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(reach + 1, -torso + 7, 3, 0, 7); ctx.fill(); }
-    } else if (h.mount) { ctx.lineTo(11, -torso + 7); ctx.stroke(); }
-    else if (h.carry) {
-      // предмет над головою — замах для кидка
-      ctx.lineTo(4, -torso - 4); ctx.stroke();
-      drawProp(ctx, h.carry, 5, -torso - 6, h.aiming ? h.aimA : 0);
-    } else if (h.weapon && h.aiming) {
-      // зброя дивиться вздовж прицілу
-      ctx.stroke();
-      ctx.save(); ctx.translate(0, -torso + 6); ctx.rotate(h.aimA - tilt);
-      ctx.strokeStyle = uni; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(9, 1); ctx.stroke();
-      ctx.fillStyle = '#222'; ctx.fillRect(2, -1, 24, 3.5);
-      ctx.restore();
-    } else if (h.canister) {
-      ctx.lineTo(9, -torso + 12); ctx.stroke();
-      if (h.weapon) { ctx.fillStyle = '#222'; ctx.save(); ctx.rotate(-1.1); ctx.fillRect(-4, -torso + 4, 20, 3); ctx.restore(); } // зброя за спиною
-      ctx.fillStyle = '#a8322d'; roundRect(ctx, 5, -torso + 9, 10, 13, 2); ctx.fill();
-      ctx.fillStyle = '#6e1f1b'; ctx.fillRect(7, -torso + 7, 4, 3);
-    } else if (h.weapon) { ctx.lineTo(10, -torso + 10); ctx.stroke(); ctx.fillStyle = '#222'; ctx.fillRect(2, -torso + 8, h.weapon.type === 'shotgun' ? 20 : 22, 3.5); }
-    else { ctx.lineTo(-sw * 0.8, -torso + 16); ctx.stroke(); }
-  }
-  ctx.restore();
-  if (h.alT > 0 && !h.dead) {
-    const r = HUMAN_DIM[h.stance];
-    ctx.strokeStyle = 'rgba(255,215,90,' + (0.45 + 0.3 * Math.sin(t * 12)) + ')'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.ellipse(h.x, h.y - r.h / 2, r.w / 2 + 12, r.h / 2 + 12, 0, 0, 7); ctx.stroke();
-    ctx.fillStyle = '#ffd75a'; ctx.font = FONT(11); ctx.textAlign = 'center';
-    ctx.fillText('АЛЬОША', h.x, h.y - r.h - 30);
-  }
-  if (!h.dead && !h.hidden) {
-    ctx.fillStyle = h.player.color; ctx.font = FONT(10); ctx.textAlign = 'center';
-    ctx.globalAlpha = 0.85 * alpha;
-    ctx.fillText(h.player.name, h.x, h.y - HUMAN_DIM[h.stance].h - 18);
-    ctx.globalAlpha = 1;
-  }
-}
+// людина й вершник — у src/human.js
 
 // ---------- Дрон ----------
 function drawDrone(ctx, d, t) {

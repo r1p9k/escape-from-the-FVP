@@ -363,7 +363,7 @@ function collapseBuilding(b) {
   Sfx.boom(true);
   // тунель під руїнами з виходами в обидва боки
   const a = cx - 130, bb = cx + 130;
-  const tun = { type: 'pipe', style: 'dug', a, b: bb, depth: TUN_DEPTH, exits: [{ x: a, dir: -1, kind: 'ramp' }, { x: bb, dir: 1, kind: 'ramp' }], dug: true };
+  const tun = { type: 'pipe', style: 'dug', a, b: bb, depth: TUN_DEPTH_TALL, tall: true, exits: [{ x: a, dir: -1, kind: 'ramp' }, { x: bb, dir: 1, kind: 'ramp' }], dug: true };
   tun.exits.forEach((e) => tunExitGeo(W, tun, e));
   W.hides.push(tun);
   buildBuckets(W);
