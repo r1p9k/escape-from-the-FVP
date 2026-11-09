@@ -19,7 +19,7 @@ const GRENADE_POWER = 70, GRENADE_R = 85, GRENADE_DRONE_R = 70; // дрон бл
 const PLY_PER_NET = 8;       // листів фанери на будівлю після сітки
 const PLY_TIME = 1.2, MOUNT_TIME = 2.5, MOUNTS_PER_BLD = 2, MOUNT_AMMO = 80;
 const BT = 14;               // товщина стін будівлі (як у world.js)
-WEAPONS.mrifle = { name: 'Станкова гвинтівка', ammo: MOUNT_AMMO, mag: MOUNT_AMMO, reload: 0, rate: 0.16, speed: 1900, range: 950, spread: 0.007, pellets: 1 };
+WEAPONS.mrifle = { name: 'Станкова гвинтівка', ammo: MOUNT_AMMO, mag: MOUNT_AMMO, reload: 0, rate: 0.16, speed: 1900, range: 600, spread: 0.007, pellets: 1, dmg: 70 };
 AIM_SECTOR.mount = [-0.7, 0.4];
 STANCE_ACC.mount = 'станкова — дуже точно';
 
@@ -159,7 +159,8 @@ function updateThrows(dt) {
 function bldUnder(h) {
   const b = buildingAt(h.x, h.y);
   if (b) return b;
-  for (const x of G.W.backs) if (!x.ruined && h.x > x.x && h.x < x.x + x.w && Math.abs(h.y - (x.y - 14)) < 5) return x; // на даху
+  // на даху — і в стрибку над ним (до ~1,5 висоти стрибка)
+  for (const x of G.W.backs) if (!x.ruined && h.x > x.x && h.x < x.x + x.w && h.y < x.y - 14 + 5 && h.y > x.y - 14 - 140) return x;
   return null;
 }
 function uncovered(lo, hi, segs, min) {
@@ -319,4 +320,48 @@ function damageFort(x, y, power) {
     feed('Станкову гвинтівку знищено', '#f2994a');
     return false;
   });
+}
+
+// ---------- Рукопашний бій ----------
+// «Вогонь» без позиції впритул до ворожої людини чи дрона — удар (кулак, приклад або річ у руках)
+const MELEE_REACH = 36, MELEE_CD = 0.55, MELEE_T = 0.22;
+const MELEE_DMG = { fist: 20, butt: 35, prop: 30 };
+function meleeTarget(h) {
+  if (h.dead || h.hidden || h.vehicle || h.mount || h.canister) return null;
+  let best = null, bd = MELEE_REACH;
+  for (const o of G.humans) {
+    if (o === h || o.dead || o.saved || o.hidden || o.vehicle || !isTeam() || allyP(o.player, h.player)) continue;
+    const dx = Math.abs(o.x - h.x);
+    if (dx < bd && Math.abs(o.y - h.y) < 30) { bd = dx; best = { kind: 'h', o }; }
+  }
+  if (best) return best;
+  const hy = h.y - HUMAN_DIM[h.stance].h * 0.6;
+  for (const d of G.drones) {
+    if (ally(d, h)) continue;
+    const dd = Math.min(dist(h.x + h.facing * 12, hy, d.x, d.y), dist(h.x + h.facing * 14, h.y - 8, d.x, d.y));
+    if (dd < 30 + DRONE_R && dd < bd + DRONE_R) { bd = dd - DRONE_R; best = { kind: 'd', o: d }; }
+  }
+  return best;
+}
+function melee(h, t) {
+  const o = t.o;
+  h.meleeCd = MELEE_CD; h.meleeT = MELEE_T; h.healT = 0;
+  h.facing = Math.sign(o.x - h.x) || h.facing;
+  const how = h.carry ? 'prop' : h.weapon ? 'butt' : 'fist';
+  if (t.kind === 'd') {
+    if (o.hp > 2) { o.hp -= 2; Sfx.tone(900, 0.05, 0.08); }
+    else { feed(h.player.name + ' збив дрон ударом!', '#56ccf2'); shootDownDrone(o, h); }
+  } else {
+    o.lastHitBy = h.player;
+    hurt(o, MELEE_DMG[how], 'melee');
+    // відкидає й перериває те, що ворог робив
+    o.vx = h.facing * 260; if (o.onGround) { o.vy = -140; o.onGround = false; }
+    o.healT = 0; o.working = null; o.digging = null; o.aiming = false; o.climb = null; o.onLadder = false;
+    if (o.mount) leaveMount(o);
+    if (o.carry && Math.random() < 0.5) dropCarry(o);
+  }
+  for (let i = 0; i < 6; i++) G.parts.push({ type: 'spark', x: o.x - h.facing * 6, y: (t.kind === 'd' ? o.y : o.y - 30), vx: h.facing * rand(40, 160), vy: rand(-140, 20), life: 0.25, max: 0.25 });
+  Sfx.noise_(0.09, 0.2, 500, 'lowpass');
+  // крихка річ розбивається об ворога
+  if (how === 'prop' && PROP_TYPES[h.carry].breaks) { breakProp({ type: h.carry, x: h.x + h.facing * 14, y: h.y - 40 }); h.carry = null; }
 }

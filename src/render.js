@@ -121,7 +121,7 @@ function renderGame(ctx, w, h, t) {
   });
   ctx.globalAlpha = 1;
   if (G.mode === 'dm') drawDmBoard(ctx, w);
-  else if (G.mode === 'team') drawTeamBoard(ctx, w);
+  else if (G.mode === 'team') { drawTeamBoard(ctx, w); drawBaseAlarm(ctx, w, h, t); }
   if (G.over && G.overT > 0.8) renderResults(ctx, w, h);
 }
 
@@ -942,7 +942,14 @@ function drawHuman(ctx, h, t, alpha) {
     ctx.fillStyle = helm; ctx.beginPath(); ctx.arc(1, -torso - 8, 7.5, Math.PI * 0.95, Math.PI * 2.05); ctx.fill();
     ctx.strokeStyle = uni; ctx.lineWidth = 4;
     ctx.beginPath(); ctx.moveTo(0, -torso + 4);
-    if (h.mount) { ctx.lineTo(11, -torso + 7); ctx.stroke(); }
+    if (h.meleeT > 0) {
+      // удар: рука (чи приклад) різко вперед
+      const k = Math.sin((1 - h.meleeT / MELEE_T) * Math.PI), reach = 8 + k * 12;
+      ctx.lineTo(reach, -torso + 7); ctx.stroke();
+      if (h.weapon && !h.carry) { ctx.fillStyle = '#222'; ctx.fillRect(reach - 18, -torso + 5, 24, 4); ctx.fillStyle = '#5a3d24'; ctx.fillRect(reach + 2, -torso + 4, 7, 6); }
+      else if (h.carry) drawProp(ctx, h.carry, reach + 4, -torso + 12, 0.8);
+      else { ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(reach + 1, -torso + 7, 3, 0, 7); ctx.fill(); }
+    } else if (h.mount) { ctx.lineTo(11, -torso + 7); ctx.stroke(); }
     else if (h.carry) {
       // предмет над головою — замах для кидка
       ctx.lineTo(4, -torso - 4); ctx.stroke();
@@ -1166,6 +1173,7 @@ function drawHumanHud(ctx, vp, p, t) {
     else if (pk && !canTake(h, pk)) tip = pk.type === 'pack' ? 'Рюкзак загиблого: нічого не влізе' : PICKUP_NAMES[pk.type] + ': не влізе в рюкзак (' + packUsed(h) + '/' + PACK_CAP + ')';
     else if (pk) tip = '[' + c.label('interact') + '] підібрати: ' + PICKUP_NAMES[pk.type] + (pk.type === 'fuel' && h.weapon ? ' (зброю не можна буде використати)' : '');
     else if (sp) tip = '[' + c.label('interact') + '] сховатися: ' + { bunker: 'бліндаж', burrow: 'нора', pipe: sp.style === 'sewer' ? 'каналізація' : 'тунель' }[sp.type];
+    else if (meleeTarget(h)) tip = L('fire') + ' удар' + (meleeTarget(h).kind === 'd' ? ' по дрону' : '');
     else if (pr) tip = L('interact') + ' взяти: ' + PROP_TYPES[pr.type].name.toLowerCase() + ' — можна кинути в дрон';
     else if (ft) tip = L('interact') + ' залатати фанерою' + (mt && !mt.bad ? '   ' + L('aim') + '+' + L('interact') + ' вогнева позиція' : '');
     else if (mt && !mt.bad) tip = L('aim') + '+' + L('interact') + ' облаштувати вогневу позицію (станкова гвинтівка)';
@@ -1349,6 +1357,7 @@ function humanControls(h, c) {
   if (h.carry) it.push(L('fire') + ' кинути', L('slot1') + ' покласти');
   if (h.grenades > 0) it.push(L('slot3') + ' граната');
   if (pilotSpot(h)) it.push(L('slot1') + ' взяти дрон');
+  it.push(L('fire') + ' впритул — удар');
   if (h.medkits > 0) it.push(L('slot2') + ' аптечка (5 с)');
   if (h.weapon) it.push(L('fire') + ' без позиції — перезарядити');
   return it;
@@ -1372,7 +1381,7 @@ function renderResults(ctx, w, h) {
     '   на одне вбивство: ' + (deaths ? (G.stats.dronesUsed / deaths).toFixed(1) : '—'), w / 2, h / 2 - 16, 16, '#ddd');
   centerText(ctx, 'Збито дронів: ' + G.stats.shotDown + '   Смертей людей: ' + deaths + '   Час: ' + fmtTime(G.time), w / 2, h / 2 + 8, 16, '#ddd');
   // рахунок гравців
-  const rows = G.players.slice().sort((x, y) => y.score - x.score);
+  const rows = G.players.filter((p) => !p.guard).sort((x, y) => y.score - x.score);
   rows.forEach((p, i) => {
     const extra = p.role === 'human' ? '  (смертей: ' + p.ent.deaths + (p.ent.saved ? ', в укритті' : '') + ')' : '  (дронів: ' + p.ent.used + ')';
     centerText(ctx, p.name + (p.team >= 0 ? ' (' + TEAMS[p.team].name + ')' : '') + ' · ' + (p.role === 'human' ? 'людина' : 'дрон') + ' — ' + p.score + ' оч.' + extra, w / 2, h / 2 + 40 + i * 22, 15, p.color);
@@ -1380,6 +1389,22 @@ function renderResults(ctx, w, h) {
   if (G.overT > 2) centerText(ctx, 'Клацніть або натисніть Enter — до лобі', w / 2, h / 2 + 50 + rows.length * 22 + 16, 18, '#f2c94c');
 }
 function fmtTime(sec) { sec = Math.max(0, Math.ceil(sec)); return ((sec / 60) | 0) + ':' + String(sec % 60).padStart(2, '0'); }
+// яскрава тривога: ворог захоплює головну базу
+function drawBaseAlarm(ctx, w, h, t) {
+  const al = baseAlert();
+  if (!al) return;
+  const on = (t * 3 | 0) % 2, k = al.capT / CAP_TIME;
+  ctx.save();
+  ctx.strokeStyle = on ? 'rgba(255,40,40,0.85)' : 'rgba(255,200,40,0.6)'; ctx.lineWidth = 10; ctx.strokeRect(5, 5, w - 10, h - 10);
+  const txt = '⚠ ' + TEAMS[al.capTeam].name.toUpperCase() + ' ЗАХОПЛЮЮТЬ ' + al.acc.toUpperCase() + '! ' + Math.round(k * 100) + '%';
+  ctx.font = FONT(26); ctx.textAlign = 'center';
+  const tw = ctx.measureText(txt).width + 40, y = h * 0.42;
+  ctx.fillStyle = on ? 'rgba(170,0,0,0.85)' : 'rgba(90,0,0,0.85)'; ctx.fillRect(w / 2 - tw / 2, y - 30, tw, 58);
+  ctx.fillStyle = '#fff'; ctx.fillText(txt, w / 2, y + 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.fillRect(w / 2 - tw / 2 + 10, y + 14, tw - 20, 6);
+  ctx.fillStyle = TEAMS[al.capTeam].col; ctx.fillRect(w / 2 - tw / 2 + 10, y + 14, (tw - 20) * k, 6);
+  ctx.restore();
+}
 // табло командного режиму: час, рахунок і кількість об'єктів
 function drawTeamBoard(ctx, w) {
   const a = teamScore(0), b = teamScore(1);
@@ -1398,6 +1423,7 @@ function drawObjFlag(ctx, o, t) {
   let x, y, hgt = 34;
   if (o.kind === 'bld') { x = o.ref.x + o.ref.w - 22; y = o.ref.y - 14; }
   else if (o.kind === 'bunker') { x = o.ref.x + 34; y = o.ref.y; hgt = 30; }
+  else if (o.kind === 'tunnel') { const e = o.ref.exits[0]; x = e ? e.tx + 14 : o.x; y = e ? e.ty : gAt(G.W, o.x); hgt = 32; }
   else if (o.ref) { x = o.ref.x + o.ref.w - 30; y = o.ref.y - 14; hgt = 50; }
   else { x = o.x; y = gAt(G.W, o.x); hgt = 70; }
   if (o.owner >= 0) {

@@ -22,9 +22,9 @@ const OPEN_TIME = 3;          // секунд на відкритій місце
 const HUMAN_DIM = { stand: { w: 18, h: 56 }, crouch: { w: 20, h: 38 }, prone: { w: 46, h: 16 } };
 const STANCE_DMG = { stand: 1, crouch: 0.75, prone: 0.5 };
 const WEAPONS = {
-  rifle: { name: 'Автомат', ammo: 18, mag: 9, reload: 2.2, rate: 0.11, speed: 1500, range: 650, spread: 0.022, pellets: 1 },
-  shotgun: { name: 'Дробовик', ammo: 5, mag: 2, reload: 1.8, rate: 0.75, speed: 1200, range: 380, spread: 0.11, pellets: 7 },
-  mg: { name: 'Кулемет', ammo: 50, mag: 25, reload: 3.5, rate: 0.085, speed: 1600, range: 800, spread: 0.03, pellets: 1 },
+  rifle: { name: 'Автомат', ammo: 18, mag: 9, reload: 2.2, rate: 0.11, speed: 1500, range: 420, spread: 0.022, pellets: 1, dmg: 55 },
+  shotgun: { name: 'Дробовик', ammo: 5, mag: 2, reload: 1.8, rate: 0.75, speed: 1200, range: 240, spread: 0.11, pellets: 7, dmg: 30 },
+  mg: { name: 'Кулемет', ammo: 50, mag: 25, reload: 3.5, rate: 0.085, speed: 1600, range: 520, spread: 0.03, pellets: 1, dmg: 45 },
 };
 // розкид куль залежно від положення: стоячи — великий, сидячи — менший, лежачи — найточніше
 const STANCE_SPREAD = { stand: 2.6, crouch: 1.4, prone: 0.75, mount: 1.3, burrow: 1.0, bunker: 0.8 };
@@ -34,9 +34,9 @@ const AIM_SECTOR = { burrow: [-1.45, 0.15], bunker: [-0.6, 0.05], trench: [-1.45
 const PACK_CAP = 4;      // місць у рюкзаку: аптечки, заряди РЕБ, детектор
 const DETECT_R = 650;    // радіус детектора дронів
 const PICKUP_NAMES = { rifle: 'Автомат', shotgun: 'Дробовик', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого', shovel: 'Лопата', grenade: 'Гранати', ammo: 'Набої' };
-const SHOVEL_M = 5;      // на скільки метрів копання вистачає лопати
+const SHOVEL_M = 50;     // на скільки метрів копання вистачає лопати
 const DIG_PX_M = 30;     // одиниць світу в метрі копання (людина ≈ 1,8 м)
-const DIG_SPD = 26;      // швидкість копання, одиниць/с
+const DIG_SPD = 13;      // швидкість копання, одиниць/с (повільно)
 const TUN_SPD = 72;      // хода зігнувшись у тунелі
 // зброя: ammo — усього набоїв, mag — скільки зараз у магазині
 function makeWeapon(type, ammo) { ammo = ammo == null ? WEAPONS[type].ammo : ammo; return { type, ammo, mag: Math.min(WEAPONS[type].mag, ammo) }; }
@@ -215,6 +215,8 @@ function updateHuman(h, dt) {
   if (h.protT > 0) h.protT -= dt;
   if (h.rebCd > 0) h.rebCd -= dt;
   if (h.grenadeCd > 0) h.grenadeCd -= dt;
+  if (h.meleeCd > 0) h.meleeCd -= dt;
+  if (h.meleeT > 0) h.meleeT -= dt;
   if (h.dead || h.saved) return;
   // гравець керує дроном — тіло лишається на місці
   if (h.piloting) { if (!h.hidden) { h.vx = 0; moveHuman(h, dt); } return; }
@@ -327,7 +329,9 @@ function updateHuman(h, dt) {
     }
   }
   // «Альоша»: автонаведення на дрони, стріляти можна й на бігу
-  if (h.carry) { if (c.pressed('fire') && h.fireCd <= 0) throwCarry(h); } // предмет у руках — кинути
+  const mt = !h.aiming && c.pressed('fire') && !(h.meleeCd > 0) ? meleeTarget(h) : null;
+  if (mt) melee(h, mt); // впритул — рукопашна
+  else if (h.carry) { if (c.pressed('fire') && h.fireCd <= 0) throwCarry(h); } // предмет у руках — кинути
   else if (h.alT > 0) { if (c.held('fire') && h.fireCd <= 0 && !h.canister) alioshaShot(h); }
   // стріляти можна лише з позиції (режим прицілювання)
   else if (h.aiming && c.held('fire') && h.weapon && h.canister && c.pressed('fire')) feed(h.player.name + ': руки зайняті каністрою — [' + c.label('slot1') + '] викинути', '#ccc');
@@ -638,6 +642,7 @@ function tunnelControl(h, sp, c, dt) {
   }
 }
 function tipOnce(h, text) {
+  if (h.player.bot) return; // ботам підказки не потрібні
   if (G.time - (h.tipT || -9) > 2.5) { h.tipT = G.time; feed(h.player.name + ': ' + text, '#ccc'); }
 }
 function leaveTunnel(h, e) {
@@ -711,6 +716,11 @@ function mergeTunnels(sp, o) {
   sp.a = Math.min(sp.a, o.a); sp.b = Math.max(sp.b, o.b);
   sp.exits.push(...o.exits);
   G.W.hides = G.W.hides.filter((x) => x !== o);
+  // командний режим: об'єкт-тунель, що злився, тепер — частина іншого
+  if (G.objs) {
+    const oo = G.objs.find((x) => x.ref === o);
+    if (oo) { if (G.objs.some((x) => x.ref === sp)) G.objs = G.objs.filter((x) => x !== oo); else Object.assign(oo, { ref: sp, x: (sp.a + sp.b) / 2, pad: null }); }
+  }
   for (const h of G.humans) if (h.hidden === o) { h.hidden = sp; if (h.tun && h.tun.ex >= 0) h.tun.ex = sp.exits.indexOf(o.exits[h.tun.ex]); }
   feed('Тунелі з\'єднано', '#c8a26a');
 }
@@ -864,6 +874,7 @@ function hurt(h, dmg, src) {
     h.deaths++; G.stats.deaths++;
     // очко дронщику, чий вибух убив
     if (G.blastBy && (src === 'blast' || src === 'mine' || src === 'head') && !allyP(G.blastBy, h.player)) G.blastBy.score += 3;
+    if ((src === 'melee' || src === 'bullet') && h.lastHitBy && !allyP(h.lastHitBy, h.player)) { h.lastHitBy.score += 3; feed(h.lastHitBy.name + (src === 'melee' ? ' переміг ' + h.player.name + ' у рукопашній' : ' застрелив ' + h.player.name), '#eb5757'); }
     h.lives--;
     if (h.lives > 0) {
       h.respawnT = RESPAWN_TIME;
@@ -925,7 +936,7 @@ function fireWeapon(h, ox, oy, type, base, moving, stance) {
   h.bloom = Math.min(1.5, (h.bloom || 0) + (Wp.pellets > 1 ? 0.5 : 0.22));
   for (let i = 0; i < Wp.pellets; i++) {
     const a = base + (RND() * 2 - 1) * spread;
-    G.bullets.push({ x: ox, y: oy, vx: Math.cos(a) * Wp.speed, vy: Math.sin(a) * Wp.speed, life: (Wp.range / Wp.speed) * rand(0.9, 1.1), owner: h });
+    G.bullets.push({ x: ox, y: oy, vx: Math.cos(a) * Wp.speed, vy: Math.sin(a) * Wp.speed, life: (Wp.range / Wp.speed) * rand(0.9, 1.1), owner: h, dmg: Wp.dmg || 50 });
   }
   G.parts.push({ type: 'flash', x: ox, y: oy, life: 0.05, max: 0.05, size: 10 });
   h.reveal = 1.5;
@@ -949,6 +960,15 @@ function updateBullets(dt) {
         hit = true;
         if (d.hp > 1) { d.hp--; G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-90, 90), vy: rand(-120, 20), life: 0.3, max: 0.3 }); Sfx.tone(1400, 0.03, 0.05); }
         else shootDownDrone(d, b.owner);
+        break;
+      }
+      // командний режим: кулі влучають у ворожих людей (кілька влучань — смерть)
+      if (!hit && isTeam() && b.owner) for (const o of G.humans) {
+        if (o.dead || o.saved || o.hidden || o.vehicle || o.protT > 0 || allyP(o.player, b.owner.player)) continue;
+        if (rectDist(b.x, b.y, humanRect(o)) > 1) continue;
+        hit = true; o.lastHitBy = b.owner.player;
+        hurt(o, b.dmg * (o.armor > 0 ? 0.6 : 1), 'bullet');
+        for (let k = 0; k < 4; k++) G.parts.push({ type: 'debris', x: b.x, y: b.y, vx: rand(-80, 80) + b.vx * 0.05, vy: rand(-120, 20), life: 0.4, max: 0.4, col: '#a1202a' });
         break;
       }
       if (!hit && G.ugvs) for (const u of G.ugvs) {
