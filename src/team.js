@@ -29,12 +29,14 @@ function initTeam() {
     { kind: 'base', ref: B[1], x: B[1] ? B[1].x + B[1].w / 2 : W.start2.x, owner: 1, team: 1, capT: 0, capTeam: -1, n: [0, 0], name: 'база жовтих', acc: 'базу жовтих' },
   ];
   for (const b of W.backs) if (!b.base) G.objs.push({ kind: 'bld', ref: b, x: b.x + b.w / 2, owner: -1, capT: 0, capTeam: -1, n: [0, 0], name: 'будівля', acc: 'будівлю' });
-  for (const sp of W.hides) if (sp.type === 'bunker' && !sp.basement) G.objs.push({ kind: 'bunker', ref: sp, x: sp.x, owner: -1, capT: 0, capTeam: -1, n: [0, 0], name: 'бліндаж', acc: 'бліндаж' });
+  // підземні ходи (тунелі й колектори) — теж об'єкти з прапором
+  for (const sp of W.hides) if (sp.type === 'pipe') { const nm = sp.style === 'sewer' ? 'колектор' : 'тунель'; G.objs.push({ kind: 'tunnel', ref: sp, x: (sp.a + sp.b) / 2, owner: -1, capT: 0, capTeam: -1, n: [0, 0], name: nm, acc: nm }); }
   G.objs.sort((a, b) => a.x - b.x);
 }
 // чи людина «тримає» об'єкт
 function objHas(o, h) {
   if (o.kind === 'bld' || (o.kind === 'base' && o.ref)) return bldUnder(h) === o.ref;
+  if (o.kind === 'tunnel') return h.hidden === o.ref;
   if (o.kind === 'bunker') return h.hidden === o.ref || (!h.hidden && Math.abs(h.x - o.ref.x) < 40 && Math.abs(h.y - o.ref.y) < 30);
   return !h.hidden && Math.abs(h.x - o.x) < 80 && Math.abs(h.y - gAt(G.W, o.x)) < 50;
 }
@@ -56,12 +58,21 @@ function updateTeam(dt) {
     const tm = n[0] && !n[1] ? 0 : n[1] && !n[0] ? 1 : -1;
     if (tm >= 0 && tm !== o.owner) {
       if (o.capTeam !== tm) { o.capTeam = tm; o.capT = 0; }
+      o.absT = 0;
       o.capT += dt * n[tm];
       if (o.capT >= CAP_TIME) captureObj(o, tm);
     } else if (!(n[0] && n[1])) {
-      // усі вийшли — прогрес захоплення втрачено
-      o.capT = 0; o.capTeam = -1;
+      // усі вийшли — прогрес захоплення втрачено (після 0,5 с, щоб мить поза об'єктом не скидала його)
+      o.absT = (o.absT || 0) + dt;
+      if (o.absT > 0.5) { o.capT = 0; o.capTeam = -1; }
     }
+  }
+  // тривога: ворог захоплює головну базу
+  const al = baseAlert();
+  for (const o of G.objs) if (o.kind === 'base' && o !== al) o.alarmed = false;
+  if (al) {
+    if (!al.alarmed) { al.alarmed = true; feed('⚠ ТРИВОГА! ' + TEAMS[al.capTeam].name + ' захоплюють ' + al.acc + '!', '#ff4040'); G.alarmT = 0; }
+    if ((G.alarmT = (G.alarmT || 0) - dt) <= 0) { G.alarmT = 0.7; Sfx.tone(980, 0.18, 0.12, 'square'); }
   }
   // утримання: +1 команді щодесять секунд за кожен об'єкт
   if ((G.holdT -= dt) <= 0) {
@@ -75,6 +86,7 @@ function captureObj(o, tm) {
   G.teamPts[tm] += CAP_BONUS;
   feed(TEAMS[tm].name + ' захопили ' + o.acc + (prev >= 0 && o.kind !== 'base' ? ' у ' + TEAMS[prev].gen : ''), TEAMS[tm].col);
   Sfx.tone(tm ? 740 : 620, 0.2, 0.12);
+  if (o.kind !== 'base') spawnGuards(o, tm);
   if (o.kind === 'base' && !G.over) {
     G.over = 'team' + tm;
     G.overReason = TEAMS[tm].name + ' захопили ворожу базу';
@@ -95,6 +107,7 @@ function objPad(o) {
   if (!o.pad) {
     if (o.kind === 'bld') { const x = o.ref.x + o.ref.w / 2; o.pad = { x, y: o.ref.y - 14, obj: o, label: 'дах будівлі' }; }
     else if (o.kind === 'bunker') { const x = o.ref.x + 60; o.pad = { x, y: gAt(G.W, x), obj: o, label: 'біля бліндажа' }; }
+    else if (o.kind === 'tunnel') { const e = o.ref.exits[0], x = clamp(e ? e.tx + 50 : o.x, 30, G.W.width - 30); o.pad = { x, y: gAt(G.W, x), obj: o, label: 'біля тунелю' }; }
   }
   return o.pad;
 }
@@ -116,11 +129,14 @@ function teamRespawn(h) {
   }
   if (!best) best = G.objs.find((o) => o.kind === 'base' && o.team === t);
   if (best.kind === 'bunker' && !best.ref.ruined) { h.x = best.ref.x; h.y = best.ref.y; h.hidden = best.ref; return; }
+  if (best.kind === 'tunnel' && best.ref.exits.length) { const e = best.ref.exits[0]; h.x = e.tx; h.y = e.ty; enterHide(h, best.ref); return; }
   if (best.kind === 'bld') { const b = best.ref; h.x = b.x + b.w / 2; h.y = b.y + b.h; return; }
   h.x = best.x; h.y = gAt(G.W, best.x);
 }
 // мета для бота-людини: найближчий не свій об'єкт (з перевагою вперед)
 function teamGoal(h) {
+  const al = baseAlert();
+  if (al && !h.guard) return al; // базу захоплюють — усі туди
   const t = h.player.team, f = fwdDir(h.player);
   let best = null, bs = 1e9;
   for (const o of G.objs) {
@@ -132,6 +148,33 @@ function teamGoal(h) {
   return best;
 }
 
+// головна база, яку зараз захоплює ворог
+function baseAlert() {
+  if (!G.objs) return null;
+  return G.objs.find((o) => o.kind === 'base' && o.capT > 0 && o.capTeam >= 0 && o.capTeam !== o.owner) || null;
+}
+// ---------- Охорона: 2 боти в щойно захопленому об'єкті (не відроджуються) ----------
+const GUARDS_PER_CAP = 2, GUARDS_MAX = 10;
+function spawnGuards(o, t) {
+  const alive = G.humans.filter((h) => h.guard && !h.dead && h.player.team === t).length;
+  for (let k = 0; k < GUARDS_PER_CAP && alive + k < GUARDS_MAX; k++) {
+    G.guardN = (G.guardN || 0) + 1;
+    const p = { name: 'Охоронець ' + TEAMS[t].short + G.guardN, color: TEAMS[t].cols[k % 2], role: 'human', bot: true, guard: true, cam: { x: 0, y: 0, wide: false }, idx: G.players.length, score: 0, team: t };
+    p.ctrl = new BotController(p, 1);
+    const h = makeHuman(p, o.x);
+    h.lives = 1; h.guard = o; h.weapon = makeWeapon('rifle'); h.grenades = 1; h.protT = 1;
+    if (o.kind === 'bld') { const b = o.ref; h.x = b.x + b.w * (0.3 + 0.4 * k); h.y = b.y + b.h; h.facing = k ? -1 : 1; }
+    else if (o.kind === 'tunnel' && o.ref.exits.length) { const e = o.ref.exits[k % o.ref.exits.length]; h.x = e.tx; h.y = e.ty; enterHide(h, o.ref); }
+    else { h.x = o.x + (k ? 20 : -20); h.y = gAt(G.W, h.x); }
+    G.humans.push(h); G.players.push(p); p.ent = h;
+  }
+  feed('У ' + o.acc + ' заступила охорона (' + TEAMS[t].name.toLowerCase() + ')', TEAMS[t].col);
+}
+// межі, в яких ходить охорона будівлі
+function guardBounds(o) {
+  if (!o || o.kind !== 'bld' || o.ref.ruined) return null;
+  return { x0: o.ref.x + 26, x1: o.ref.x + o.ref.w - 26 };
+}
 // ---------- Учасники ----------
 // у кожній команді щонайменше TEAM_HUMANS людей і TEAM_DRONES дронів — бракує, доповнюємо ботами
 function fillTeams(slots) {
@@ -222,21 +265,24 @@ const STOCK_START = 12, STOCK_MAX = 20, UGV_EVERY = 30, UGV_SPD = 110, UGV_HP = 
 function initSupply() {
   G.stock = [STOCK_START, STOCK_START];
   G.ugvs = [];
-  G.ugvT = [UGV_EVERY, UGV_EVERY];
-  // на старті кілька НРК уже в дорозі — підвіз іде регулярно з перших хвилин
-  for (const t of [0, 1]) for (const k of [0.35, 0.6, 0.85]) { spawnUgv(t, true); const u = G.ugvs[G.ugvs.length - 1]; const far = t ? 30 : G.W.width - 30; u.x = far + (baseX(t) - far) * k; u.y = gAt(G.W, u.x); }
+  G.ugvT = [3, 3]; // перший НРК — щойно з'явиться захоплений об'єкт
 }
 function baseX(t) { return t ? G.W.start2.x : G.W.start.x; }
-// НРК виїжджає з протилежного краю мапи й їде через усю мапу до своєї бази
-function spawnUgv(t, quiet) {
-  const W = G.W, x = t ? 30 : W.width - 30;
-  G.ugvs.push({ team: t, player: { team: t }, x, y: gAt(W, x), dir: t ? 1 : -1, hp: UGV_HP, ang: 0, wheel: 0 });
+// НРК виїжджає із захопленого об'єкта й їде до своєї бази
+function spawnUgv(t, quiet, x) {
+  const W = G.W;
+  G.ugvs.push({ team: t, player: { team: t }, x, y: gAt(W, x), dir: Math.sign(baseX(t) - x) || (t ? 1 : -1), hp: UGV_HP, ang: 0, wheel: 0 });
   if (!quiet) feed('НРК ' + TEAMS[t].gen + ' виїхав із підвозом', TEAMS[t].col);
 }
 function ugvRect(u) { return { x: u.x - 24, y: u.y - 20, w: 48, h: 20 }; }
 function updateSupply(dt) {
   const W = G.W;
-  for (const t of [0, 1]) if ((G.ugvT[t] -= dt) <= 0) { G.ugvT[t] = UGV_EVERY; spawnUgv(t, true); }
+  for (const t of [0, 1]) if ((G.ugvT[t] -= dt) <= 0) {
+    // їздять лише від захоплених об'єктів (не від бази й не впритул до неї)
+    const src = G.objs.filter((o) => o.owner === t && o.kind !== 'base' && Math.abs(o.x - baseX(t)) > 300);
+    if (!src.length) { G.ugvT[t] = 3; continue; }
+    G.ugvT[t] = UGV_EVERY; spawnUgv(t, true, pick(src).x);
+  }
   for (const u of G.ugvs) {
     if (u.dead) continue;
     u.x += u.dir * UGV_SPD * dt; u.wheel += dt * 10;
@@ -315,21 +361,16 @@ function collapseBuilding(b) {
   W.mounts = W.mounts.filter((m) => m.b !== b);
   for (let i = 0; i < 24; i++) G.parts.push({ type: 'smoke', x: rand(x0, x1), y: g - rand(0, b.h * 0.6), vx: rand(-30, 30), vy: rand(-40, -5), life: rand(2, 4), max: 4, size: rand(18, 34) });
   Sfx.boom(true);
-  // бліндаж: підвальний стає звичайним, інакше — новий посередині
-  let bunker = W.hides.find((sp) => sp.type === 'bunker' && sp.basement && sp.x > x0 && sp.x < x1);
-  if (bunker) { bunker.basement = false; bunker.ruined = false; bunker.hp = HIDE_HP.bunker; }
-  else { bunker = { type: 'bunker', x: cx, y: gAt(W, cx), hp: HIDE_HP.bunker }; W.hides.push(bunker); }
-  bunker.fromRuin = true;
   // тунель під руїнами з виходами в обидва боки
-  const a = bunker.x - 130, bb = bunker.x + 130;
+  const a = cx - 130, bb = cx + 130;
   const tun = { type: 'pipe', style: 'dug', a, b: bb, depth: TUN_DEPTH, exits: [{ x: a, dir: -1, kind: 'ramp' }, { x: bb, dir: 1, kind: 'ramp' }], dug: true };
   tun.exits.forEach((e) => tunExitGeo(W, tun, e));
   W.hides.push(tun);
   buildBuckets(W);
-  feed('Будівлю зруйновано — під руїнами бліндаж із тунелем', '#f2994a');
+  feed('Будівлю зруйновано — під руїнами підземний хід', '#f2994a');
   // командний режим: прапор зникає, об'єкт стає бліндажем (звідти теж можна запускати дрони)
   if (isTeam()) {
     const o = G.objs.find((x) => x.ref === b);
-    if (o) Object.assign(o, { kind: 'bunker', ref: bunker, x: bunker.x, owner: -1, capT: 0, capTeam: -1, pad: null, name: 'бліндаж у руїнах', acc: 'бліндаж у руїнах' });
+    if (o) Object.assign(o, { kind: 'tunnel', ref: tun, x: cx, owner: -1, capT: 0, capTeam: -1, pad: null, name: 'хід під руїнами', acc: 'хід під руїнами' });
   }
 }

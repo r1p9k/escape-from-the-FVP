@@ -112,7 +112,9 @@ const F = {
     dig(W, x, x + w, depth);
     W.covers.push({ type: 'trench', x: x + 16, w: w - 32, y: rim - 2, h: depth + 12 });
     const bx = x + (RND() < 0.5 ? w * 0.25 : w * 0.75);
-    W.hides.push({ type: 'bunker', x: bx });
+    // під окопом — підземний хід із лазами на обох кінцях (окремих бліндажів більше немає)
+    const ta = x + 50, tb = x + w - 50;
+    W.hides.push({ type: 'pipe', style: 'dug', a: ta, b: tb, depth: TUN_DEPTH, exits: [{ x: ta + 8, dir: -1, kind: 'shaft' }, { x: tb - 8, dir: 1, kind: 'shaft' }] });
     W.decor.push({ type: 'sandbags', x: x - 30, w: 40 }, { type: 'sandbags', x: x + w - 10, w: 40 });
     if (RND() < 0.3) W.pickups.push({ type: pickupType(), x: bx + 40 });
     return w;
@@ -246,7 +248,6 @@ function building(W, x, floors, w) {
     const k = randi(0, floors - 1);
     W.pickups.push({ type: pickupType(), x: x + rand(40, w - 40), y: g - k * FLOOR_H });
   }
-  if (RND() < 0.5) W.hides.push({ type: 'bunker', x: x + rand(40, w - 40), basement: true });
   // побут: на кожному поверсі 1–3 речі, на даху інколи цегла
   for (let k = 0; k < floors; k++) {
     for (let i = randi(1, 3); i > 0; i--) {
