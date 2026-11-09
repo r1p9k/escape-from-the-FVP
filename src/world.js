@@ -199,7 +199,9 @@ function building(W, x, floors, w) {
   const T = 14;
   const g = flatten(W, x - 20, x + w + 20);
   const roofY = g - floors * FLOOR_H;
-  W.backs.push({ x, y: roofY, w, h: g - roofY, seed: RND(), floors });
+  const bref = { x, y: roofY, w, h: g - roofY, seed: RND(), floors };
+  W.backs.push(bref);
+  const s0 = W.solids.length;
   for (const wx of [x, x + w - T]) {
     for (let k = 0; k < floors; k++) {
       const yb = g - k * FLOOR_H, top = yb - FLOOR_H;
@@ -254,6 +256,9 @@ function building(W, x, floors, w) {
     }
   }
   if (RND() < 0.4) W.props.push({ type: 'brick', x: x + 26 + rand(20, 60), y: roofY - 14 });
+  // частини будівлі знають, чия вони (для обвалу), і початкова площа конструкції
+  for (let i = s0; i < W.solids.length; i++) W.solids[i].bld = bref;
+  bref.area0 = W.solids.slice(s0).reduce((a, s) => a + s.w * s.h, 0);
   return w + 40;
 }
 

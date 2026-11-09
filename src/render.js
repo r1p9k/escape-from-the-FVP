@@ -149,7 +149,7 @@ function renderView(ctx, vp, p, t) {
   const x0 = cx - 120, x1 = cx + viewW + 120;
   const inX = (a, b) => b >= x0 && a <= x1;
 
-  for (const b of W.backs) if (inX(b.x, b.x + b.w)) { drawBack(ctx, b); if (b.net) drawNet(ctx, b.x + 8, b.y + 6, b.w - 16, Math.min(b.h - 12, 2 * FLOOR_H), b.x, true); }
+  for (const b of W.backs) if (inX(b.x, b.x + b.w)) { if (b.ruined) { drawRuinPile(ctx, b); continue; } drawBack(ctx, b); if (b.net) drawNet(ctx, b.x + 8, b.y + 6, b.w - 16, Math.min(b.h - 12, 2 * FLOOR_H), b.x, true); }
   for (const tr of W.trees) if (inX(tr.x - 60, tr.x + 60)) drawTrunk(ctx, tr);
   for (const d of W.decor) if (d.type === 'road' && inX(d.x, d.x + d.w)) drawDecor(ctx, d, W);
   const netHidden = (sp) => sp.net && isDrone && !droneHovering(drone, sp.x, sp.y - 10);
@@ -184,6 +184,7 @@ function renderView(ctx, vp, p, t) {
   }
   for (const m of W.mounts) if (inX(m.x - 40, m.x + 40)) drawMount(ctx, m);
   for (const th of G.throws) if (inX(th.x - 20, th.x + 20)) drawThrow(ctx, th, t);
+  if (G.ugvs) for (const u of G.ugvs) if (inX(u.x - 40, u.x + 40)) drawUgv(ctx, u, t);
   for (const v of W.vehicles) {
     if (v.dead || !inX(v.x - 60, v.x + 60)) continue;
     for (const o of [v.driver, v.gunner]) if (o && (!isDrone || humanVisibleToDrone(o, drone))) drawRider(ctx, v, o);
@@ -768,7 +769,7 @@ function drawLaunchMap(ctx, vw, vh, dp, c, t) {
     if (cv.type === 'trees') { ctx.fillStyle = '#3f6a32'; ctx.fillRect(sx(cv.x), sy(gAt(W, cv.x)) - 7, Math.max(2, sx(cv.x + cv.w) - sx(cv.x)), 6); }
     else if (cv.type === 'trench') { ctx.fillStyle = '#2a2418'; ctx.fillRect(sx(cv.x), sy(cv.y) + 1, Math.max(2, sx(cv.x + cv.w) - sx(cv.x)), 3); }
   }
-  for (const b of W.backs) { ctx.fillStyle = '#8c7d6c'; ctx.fillRect(sx(b.x), sy(b.y), Math.max(2, sx(b.x + b.w) - sx(b.x)), sy(b.y + b.h) - sy(b.y)); }
+  for (const b of W.backs) { if (b.ruined) continue; ctx.fillStyle = '#8c7d6c'; ctx.fillRect(sx(b.x), sy(b.y), Math.max(2, sx(b.x + b.w) - sx(b.x)), sy(b.y + b.h) - sy(b.y)); }
   ctx.textAlign = 'center'; ctx.font = FONT(9);
   if (G.mode === 'team') {
     // прапори об'єктів у кольорах команд
@@ -778,6 +779,7 @@ function drawLaunchMap(ctx, vw, vh, dp, c, t) {
       ctx.fillStyle = o.owner >= 0 ? TEAMS[o.owner].col : '#888'; ctx.fillRect(fx, fy - 12, 7, 5);
       if (o.kind === 'base') { ctx.fillStyle = TEAMS[o.team].col; ctx.fillText('БАЗА ' + TEAMS[o.team].short, fx, fy + 12); }
     }
+    for (const u of G.ugvs) { ctx.fillStyle = TEAMS[u.team].col; ctx.fillRect(sx(u.x) - 3, sy(u.y) - 6, 6, 5); }
   } else {
     ctx.fillStyle = '#9d9d96'; const shx = sx(W.shelter.x + 36);
     ctx.fillRect(shx, sy(W.shelter.y) - 12, Math.max(4, sx(W.shelter.x + 356) - shx), 12);
@@ -795,6 +797,34 @@ function drawLaunchMap(ctx, vw, vh, dp, c, t) {
     else if (sel) { ctx.fillStyle = '#f2c94c'; ctx.font = FONT(9); ctx.fillText('злет тут', Math.max(x, mx + 18), y - 13); }
   });
   ctx.textAlign = 'left';
+}
+// купа руїн на місці зруйнованої будівлі
+function drawRuinPile(ctx, b) {
+  const g = b.y + b.h;
+  ctx.fillStyle = '#6d5a4a';
+  ctx.beginPath(); ctx.moveTo(b.x - 10, g + 2);
+  for (let i = 0; i <= 12; i++) ctx.lineTo(b.x - 10 + ((b.w + 20) * i) / 12, g - 6 - Math.sin((i / 12) * Math.PI) * 26 - hash(b.x + i * 7) * 12);
+  ctx.lineTo(b.x + b.w + 10, g + 2); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#8a6b56';
+  for (let i = 0; i < 9; i++) ctx.fillRect(b.x + hash(b.x + i * 3) * b.w, g - 8 - hash(b.x - i) * 22, 10 + hash(i + b.x) * 14, 6);
+  ctx.strokeStyle = '#4a3a2c'; ctx.lineWidth = 3;
+  for (let i = 0; i < 3; i++) { const x = b.x + 30 + i * (b.w - 60) / 2; ctx.beginPath(); ctx.moveTo(x, g - 4); ctx.lineTo(x + 18 - hash(x) * 36, g - 40 - hash(x + 1) * 20); ctx.stroke(); }
+}
+// НРК з підвозом: гусениці, корпус, ящики, антена
+function drawUgv(ctx, u, t) {
+  const col = TEAMS[u.team].col;
+  ctx.save(); ctx.translate(u.x, u.y); ctx.rotate(u.ang); ctx.scale(u.dir, 1);
+  ctx.fillStyle = '#26281f'; roundRect(ctx, -24, -9, 48, 9, 4); ctx.fill();
+  ctx.fillStyle = '#4a4d40';
+  for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.arc(-18 + i * 9, -4.5, 3.2, 0, 7); ctx.fill(); }
+  ctx.fillStyle = '#4b5320'; ctx.fillRect(-20, -19, 40, 10);
+  ctx.fillStyle = col; ctx.fillRect(-20, -12, 40, 3);
+  ctx.fillStyle = '#7a5a32'; ctx.fillRect(-16, -27, 12, 8); ctx.fillRect(-2, -26, 11, 7);
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(14, -19); ctx.lineTo(16, -34); ctx.stroke();
+  ctx.fillStyle = Math.sin(t * 5) > 0 ? col : '#333'; ctx.beginPath(); ctx.arc(16, -35, 2, 0, 7); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = col; ctx.font = FONT(10); ctx.textAlign = 'center'; ctx.fillText('НРК ' + TEAMS[u.team].short, u.x, u.y - 42);
+  if (u.hp < UGV_HP) { ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(u.x - 16, u.y - 52, 32, 4); ctx.fillStyle = '#6fcf97'; ctx.fillRect(u.x - 16, u.y - 52, 32 * Math.max(0, u.hp) / UGV_HP, 4); }
 }
 // лопата в руках, коли людина копає
 function drawShovel(ctx, h, t) {
@@ -1131,8 +1161,9 @@ function drawHumanHud(ctx, vp, p, t) {
     else if (pk) tip = '[' + c.label('interact') + '] підібрати: ' + PICKUP_NAMES[pk.type] + (pk.type === 'fuel' && h.weapon ? ' (зброю не можна буде використати)' : '');
     else if (sp) tip = '[' + c.label('interact') + '] сховатися: ' + { bunker: 'бліндаж', burrow: 'нора', pipe: sp.style === 'sewer' ? 'каналізація' : 'тунель' }[sp.type];
     else if (pr) tip = L('interact') + ' взяти: ' + PROP_TYPES[pr.type].name.toLowerCase() + ' — можна кинути в дрон';
-    else if (ft) tip = L('interact') + ' забити фанерою (' + (ft.b.ply || 0) + ' лист.)' + (mt && !mt.bad ? '   ' + L('aim') + '+' + L('interact') + ' вогнева позиція' : '');
+    else if (ft) tip = L('interact') + ' залатати фанерою' + (mt && !mt.bad ? '   ' + L('aim') + '+' + L('interact') + ' вогнева позиція' : '');
     else if (mt && !mt.bad) tip = L('aim') + '+' + L('interact') + ' облаштувати вогневу позицію (станкова гвинтівка)';
+    else if (pilotSpot(h)) tip = L('slot1') + ' взяти дрон (запас команди: ' + G.stock[h.player.team] + ')';
     else if (ladderAt(h) && !h.onLadder) tip = '[' + c.label('up') + '] лізти драбиною';
     else if (canDigHere(h)) tip = '[' + c.label('interact') + '] копати тунель (лопата ' + h.shovel.toFixed(1) + ' м)';
   }
@@ -1231,7 +1262,7 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
   if (d && d.landed) centerText(ctx, d.inBush ? 'ЖДУН У КУЩАХ — тебе не видно' : 'Ждун на відкритому — сядь у кущі, щоб сховатися', vw / 2, vh * 0.22 + 26, 16, d.inBush ? '#6fcf97' : '#ddd');
   if (!d) {
     if (dp.left > 0) {
-      centerText(ctx, 'НОВИЙ ДРОН ЧЕРЕЗ ' + Math.max(0, dp.timer).toFixed(1) + ' с', vw / 2, Math.max(150, vh * 0.3), 22, '#fff');
+      centerText(ctx, dp.noStock ? 'НЕМАЄ ДРОНІВ — чекайте НРК з підвозом' : 'НОВИЙ ДРОН ЧЕРЕЗ ' + Math.max(0, dp.timer).toFixed(1) + ' с', vw / 2, Math.max(150, vh * 0.3), 22, '#fff');
       drawPrepHelp(ctx, vw, Math.max(150, vh * 0.3) + 32, dp, c);
       drawLaunchMap(ctx, vw, vh, dp, c, t);
     } else centerText(ctx, 'ДРОНИ ЗАКІНЧИЛИСЯ', vw / 2, vh / 2, 26, '#eb5757');
@@ -1246,7 +1277,7 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
     }
     centerText(ctx, d.battery <= 0 ? 'АКБ РОЗРЯДЖЕНО' : 'НЕМАЄ СИГНАЛУ — РЕБ', vw / 2, vh / 2, 26, '#ff6b6b');
   } else if (d.battery < 15 && Math.sin(t * 8) > 0) centerText(ctx, 'НИЗЬКИЙ ЗАРЯД', vw / 2, 40, 16, '#ff6b6b');
-  if (dp.left + (d ? 1 : 0) > 0) drawControlsBar(ctx, vw, droneControls(d, c), 306, vw - 8);
+  if (dp.left + (d ? 1 : 0) > 0) drawControlsBar(ctx, vw, droneControls(d, c).concat(dp.temp ? [c.label('slot1') + ' до людини'] : []), 306, vw - 8);
   ctx.restore();
 }
 
@@ -1311,6 +1342,7 @@ function humanControls(h, c) {
   if (h.canister) it.push(L('slot1') + ' викинути каністру');
   if (h.carry) it.push(L('fire') + ' кинути', L('slot1') + ' покласти');
   if (h.grenades > 0) it.push(L('slot3') + ' граната');
+  if (pilotSpot(h)) it.push(L('slot1') + ' взяти дрон');
   if (h.medkits > 0) it.push(L('slot2') + ' аптечка (5 с)');
   if (h.weapon) it.push(L('fire') + ' без позиції — перезарядити');
   return it;
@@ -1345,7 +1377,7 @@ function fmtTime(sec) { sec = Math.max(0, Math.ceil(sec)); return ((sec / 60) | 
 // табло командного режиму: час, рахунок і кількість об'єктів
 function drawTeamBoard(ctx, w) {
   const a = teamScore(0), b = teamScore(1);
-  const txt = fmtTime(G.timeLeft) + '    Сині ' + a + ' : ' + b + ' Жовті    🚩 ' + ownedCount(0) + ' : ' + ownedCount(1);
+  const txt = fmtTime(G.timeLeft) + '    Сині ' + a + ' : ' + b + ' Жовті    🚩 ' + ownedCount(0) + ' : ' + ownedCount(1) + '    🛸 ' + G.stock[0] + ' : ' + G.stock[1];
   ctx.font = FONT(16); ctx.textAlign = 'center';
   const y = G.opts && G.opts.controls !== false ? 112 : 22;
   const tw = ctx.measureText(txt).width + 28;

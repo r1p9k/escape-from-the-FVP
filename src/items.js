@@ -63,7 +63,32 @@ function throwGrenade(h) {
   feed(h.player.name + ': граната!', '#c9a227');
   Sfx.click();
 }
+// вхід у схованку біля точки (бліндаж, нора, вихід тунелю)
+function hideAtPoint(x, y) {
+  for (const sp of G.W.hides) {
+    if (sp.ruined) continue;
+    if (sp.type === 'pipe') {
+      for (const e of sp.exits) if (dist(x, y, e.tx, e.ty - 4) < 20) return { sp, e, x: e.tx, y: e.ty, name: sp.style === 'sewer' ? 'каналізацію' : 'тунель' };
+    } else if (dist(x, y, sp.x, sp.y - 5) < 24) return { sp, x: sp.x, y: sp.y, name: sp.type === 'bunker' ? 'бліндаж' : 'нору' };
+  }
+  return null;
+}
+// вибух гранати всередині схованки: тим, хто там, — дуже погано; схованка пошкоджена
+function grenadeInside(th) {
+  const it = th.inside, sp = it.sp;
+  explosionFx(it.x, it.y - 6, 45, 45);
+  Sfx.boom(false);
+  G.blastBy = th.owner ? th.owner.player : null;
+  for (const h of G.humans) {
+    if (h.dead || h.hidden !== sp) continue;
+    if (sp.type === 'pipe' && dist(h.x, h.y, it.e.bx, it.e.by) > 170 && dist(h.x, h.y, it.e.tx, it.e.ty) > 120) continue;
+    hurt(h, 120, 'blast');
+  }
+  G.blastBy = null;
+  if (sp.hp) { sp.hp--; if (sp.hp <= 0) ruinHide(sp); }
+}
 function grenadeBlast(th) {
+  if (th.inside) { grenadeInside(th); return; }
   const x = th.x, y = th.y;
   G.blastBy = th.owner ? th.owner.player : null;
   explosion(x, y, GRENADE_POWER, GRENADE_R);
@@ -88,6 +113,14 @@ function updateThrows(dt) {
   for (let i = G.throws.length - 1; i >= 0; i--) {
     const th = G.throws[i];
     if (th.kind === 'grenade' && (th.fuse -= dt) <= 0) { G.throws.splice(i, 1); grenadeBlast(th); continue; }
+    // граната, що котиться чи падає біля входу в схованку, залітає всередину
+    if (th.kind === 'grenade' && !th.inside && Math.hypot(th.vx, th.vy) < 380) {
+      const into = hideAtPoint(th.x, th.y);
+      if (into) {
+        th.inside = into; th.rest = true; th.x = into.x; th.y = into.y;
+        feed('Граната залетіла в ' + into.name + '!', '#c9a227');
+      }
+    }
     if (th.rest) continue;
     th.vy += THROW_G * dt; th.vx *= Math.exp(-0.15 * dt); th.rot += th.spin * dt;
     const steps = Math.max(1, Math.ceil((Math.hypot(th.vx, th.vy) * dt) / 5));
@@ -126,7 +159,7 @@ function updateThrows(dt) {
 function bldUnder(h) {
   const b = buildingAt(h.x, h.y);
   if (b) return b;
-  for (const x of G.W.backs) if (h.x > x.x && h.x < x.x + x.w && Math.abs(h.y - (x.y - 14)) < 5) return x; // на даху
+  for (const x of G.W.backs) if (!x.ruined && h.x > x.x && h.x < x.x + x.w && Math.abs(h.y - (x.y - 14)) < 5) return x; // на даху
   return null;
 }
 function uncovered(lo, hi, segs, min) {
@@ -188,15 +221,16 @@ function nearGap(h, b, mount) {
 }
 function fortTarget(h) {
   const b = bldUnder(h);
-  if (!b || !b.net) return null;
-  if (isTeam() && !hideOwnedBy(b, h.player.team)) return null;
+  if (!b) return null;
+  // командний режим: латає власник (без сітки), інакше — після сітки
+  if (isTeam() ? !hideOwnedBy(b, h.player.team) : !b.net) return null;
   const gp = nearGap(h, b, false);
   return gp ? { b, gp } : null;
 }
 function mountTarget(h) {
   const b = buildingAt(h.x, h.y);
-  if (!b || !b.net || !h.onGround) return null;
-  if (isTeam() && !hideOwnedBy(b, h.player.team)) return null;
+  if (!b || !h.onGround) return null;
+  if (isTeam() ? !hideOwnedBy(b, h.player.team) : !b.net) return null;
   const gp = nearGap(h, b, true);
   if (!gp) return null;
   const my = h.y - 38;
@@ -206,10 +240,12 @@ function mountTarget(h) {
   if (G.W.mounts.some((m) => Math.abs(m.x - x) < 30 && Math.abs(m.y - h.y) < 20)) return { b, gp, bad: 'Тут уже є вогнева позиція' };
   return { b, gp, x };
 }
+// латати можна скільки завгодно; великий пролом — частинами по 120 px біля людини
 function startPly(h, t) {
-  if (t.gp.w > 150 && t.gp.kind !== 'side') { tipOnce(h, 'Пролом завеликий для фанери'); return; }
-  if ((t.b.ply || 0) <= 0) { tipOnce(h, 'Фанера скінчилася'); return; }
-  h.working = { kind: 'ply', t: 0, dur: PLY_TIME, b: t.b, gp: t.gp };
+  const gp = t.gp;
+  let seg = { x: gp.x, y: gp.y, w: gp.w, h: gp.h };
+  if (gp.kind !== 'side' && gp.w > 120) seg = { x: clamp(h.x - 60, gp.x, gp.x + gp.w - 120), y: gp.y, w: 120, h: gp.h };
+  h.working = { kind: 'ply', t: 0, dur: PLY_TIME, b: t.b, gp, seg };
   h.vx = 0;
 }
 function startMount(h, t) {
@@ -228,10 +264,10 @@ function tickWork(h, c, dt) {
   if (D.kind === 'ply') {
     // отвір міг змінитися (вибух) — перевіряємо, що він ще є
     if (!bldGaps(D.b).some((x) => x.kind === gp.kind && Math.abs(x.x - gp.x) < 3 && Math.abs(x.y - gp.y) < 3)) return;
-    addSolid(W, { type: 'plywood', x: gp.x, y: gp.y, w: gp.w, h: gp.h, hp: 1, thin: gp.kind === 'floor' });
+    const sg = D.seg || gp;
+    addSolid(W, { type: 'plywood', x: sg.x, y: sg.y, w: sg.w, h: sg.h, hp: 1, thin: gp.kind === 'floor', bld: D.b });
     buildBuckets(W);
-    D.b.ply--;
-    feed(h.player.name + ' забив ' + (gp.kind === 'side' ? 'вікно' : 'пролом') + ' фанерою (лишилось ' + D.b.ply + ')', '#c9a36a');
+    feed(h.player.name + ' залатав ' + (gp.kind === 'side' ? 'вікно' : 'пролом') + ' фанерою', '#c9a36a');
   } else {
     W.mounts.push({ x: D.x, y: D.y, dir: gp.side, ammo: MOUNT_AMMO, b: D.b, user: null });
     D.b.mounts = (D.b.mounts || 0) + 1;
