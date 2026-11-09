@@ -33,14 +33,14 @@ const STANCE_ACC = { stand: 'стоячи — розкид', crouch: 'сидяч
 const AIM_SECTOR = { burrow: [-1.45, 0.15], bunker: [-0.6, 0.05], trench: [-1.45, -0.12] };
 const PACK_CAP = 4;      // місць у рюкзаку: аптечки, заряди РЕБ, детектор
 const DETECT_R = 650;    // радіус детектора дронів
-const PICKUP_NAMES = { rifle: 'Автомат', shotgun: 'Дробовик', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого', shovel: 'Лопата', grenade: 'Гранати' };
+const PICKUP_NAMES = { rifle: 'Автомат', shotgun: 'Дробовик', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого', shovel: 'Лопата', grenade: 'Гранати', ammo: 'Набої' };
 const SHOVEL_M = 5;      // на скільки метрів копання вистачає лопати
 const DIG_PX_M = 30;     // одиниць світу в метрі копання (людина ≈ 1,8 м)
 const DIG_SPD = 26;      // швидкість копання, одиниць/с
 const TUN_SPD = 72;      // хода зігнувшись у тунелі
 // зброя: ammo — усього набоїв, mag — скільки зараз у магазині
 function makeWeapon(type, ammo) { ammo = ammo == null ? WEAPONS[type].ammo : ammo; return { type, ammo, mag: Math.min(WEAPONS[type].mag, ammo) }; }
-const PLAYER_COLORS = ['#f2c94c', '#56ccf2', '#eb5757', '#6fcf97'];
+const PLAYER_COLORS = ['#f2c94c', '#56ccf2', '#eb5757', '#6fcf97', '#bb86fc', '#f2994a', '#2dd4bf', '#e879f9'];
 
 let G = null;
 
@@ -49,11 +49,12 @@ function newGame(slots, loc, opts) {
   const mode = opts.mode === 'dm' || opts.mode === 'team' ? opts.mode : 'escape';
   const W = makeWorld(loc, (Math.random() * 1e9) | 0, opts.len, mode === 'team');
   G = { W, opts, mode, timeLeft: (opts.dmMin || 10) * 60, players: [], humans: [], dps: [], drones: [], bullets: [], bombs: [], throws: [], mines: [], smokes: [], parts: [], rebs: [], feed: [], time: 0, over: null, overReason: '', overT: 0, stats: { dronesUsed: 0, shotDown: 0, deaths: 0 } };
+  if (mode === 'team') slots = fillTeams(slots); // мало учасників — решту заповнюють боти
   const nHum = slots.filter((s) => s.role === 'human').length;
   const nDr = slots.filter((s) => s.role === 'drone').length;
   let hi = 0;
   const tc = [0, 0], th = [0, 0];
-  if (mode === 'team') { initTeam(); initSupply(); }
+  if (mode === 'team') { initTeam(); initSupply(); baseOnlyPickups(); }
   slots.forEach((s, i) => {
     const p = { name: s.name, color: s.color, role: s.role, bot: !!s.bot, cam: { x: 0, y: 0, wide: false }, idx: i, score: 0, team: -1 };
     if (mode === 'team') { p.team = s.team === 1 ? 1 : s.team === 0 ? 0 : i % 2; p.color = TEAMS[p.team].cols[tc[p.team]++ % 2]; }
@@ -489,6 +490,7 @@ function packUsed(h) { return h.medkits + h.reb + (h.detector ? 1 : 0); }
 function canTake(h, p) {
   if (p.type === 'shovel') return h.shovel < SHOVEL_M * 2;
   if (p.type === 'grenade') return h.grenades < GRENADES_MAX;
+  if (p.type === 'ammo') return !!h.weapon && h.weapon.ammo < WEAPONS[h.weapon.type].ammo * 2;
   if (p.type === 'medkit') return h.medkits < MEDKIT_MAX && packUsed(h) < PACK_CAP;
   if (p.type === 'reb') return packUsed(h) < PACK_CAP;
   if (p.type === 'detector') return !h.detector && packUsed(h) < PACK_CAP;
@@ -511,6 +513,7 @@ function takePickup(h, p) {
   else if (p.type === 'medkit') h.medkits++;
   else if (p.type === 'detector') { h.detector = true; feed(h.player.name + ' знайшов детектор дронів — видно дрони крізь стіни й у кущах', '#5ad1c4'); }
   else if (p.type === 'fuel') { if (h.carry) dropCarry(h); h.canister = true; h.aiming = false; } // каністра займає руки
+  else if (p.type === 'ammo') { h.weapon.ammo += WEAPONS[h.weapon.type].ammo; feed(h.player.name + ': поповнив набої', '#ddd'); }
   else if (p.type === 'grenade') { h.grenades = Math.min(GRENADES_MAX, h.grenades + 2); feed(h.player.name + ': гранат ' + h.grenades, '#c9a227'); }
   else if (p.type === 'armor') h.armor = 100;
   else if (p.type === 'shovel') { h.shovel = Math.min(SHOVEL_M * 2, h.shovel + SHOVEL_M); feed(h.player.name + ' знайшов лопату — можна копати тунелі (' + h.shovel.toFixed(1) + ' м)', '#c8a26a'); }
@@ -1206,6 +1209,10 @@ function updateMines(dt) {
       if (v.dead) continue;
       if (Math.abs(v.x - m.x) < VEH[v.type].len / 2 + 8 && Math.abs(v.y - m.y) < 20) { trig = true; break; }
     }
+    if (!trig && G.ugvs) for (const u of G.ugvs) {
+      if (u.dead || (m.player && m.player.team === u.team)) continue;
+      if (Math.abs(u.x - m.x) < 30 && Math.abs(u.y - m.y) < 20) { trig = true; hurtUgv(u, UGV_HP * 2, m.player); break; }
+    }
     if (trig) { G.mines.splice(i, 1); G.blastBy = m.player; mineExplode(m.x, m.y); G.blastBy = null; }
   }
 }
@@ -1260,6 +1267,8 @@ function explodeDrone(d, direct, head) {
   G.blastBy = d.player;
   explosion(d.x, d.y, 130, 120, direct ? { h: direct, head } : null);
   G.blastBy = null;
+  // командний режим: вибух дрона збиває ворожі дрони поруч
+  if (isTeam()) for (const e of G.drones.slice()) if (!allyP(e.player, d.player) && dist(e.x, e.y, d.x, d.y) < 70) droneDowned(e, d.player);
   // хто пережив вибух поруч — зараховується для «Альоші»
   for (const h of G.humans) if (!h.dead && !h.saved && dist(h.x, h.y - 25, d.x, d.y) < 220) beat(h);
 }
@@ -1386,6 +1395,8 @@ function updateDrone(d, dt) {
     if (rectDist(d.x, d.y, vehRect(v)) < DRONE_R + 2) { explodeDrone(d); return; }
   }
   if (G.ugvs) for (const u of G.ugvs) if (!u.dead && u.team !== d.player.team && rectDist(d.x, d.y, ugvRect(u)) < DRONE_R + 2) { explodeDrone(d); return; }
+  // таран ворожого дрона
+  if (isTeam()) for (const e of G.drones) if (e !== d && !allyP(e.player, d.player) && dist(e.x, e.y, d.x, d.y) < DRONE_R * 2 + 3) { explodeDrone(d); return; }
 }
 
 function explosionFx(x, y, power, radius) {
@@ -1671,7 +1682,7 @@ function updatePickups(dt) {
   const h = pick(live), dir = G.mode === 'escape' ? 1 : G.mode === 'team' ? fwdDir(h.player) : pick([-1, 1]);
   let x = 0;
   for (let t = 0; t < 12; t++) { x = clamp(h.x + dir * rand(450, 1300), 300, W.width - 400); if (groundFree(x)) break; }
-  const type = weighted(HUMAN_BONUS);
+  const type = weighted(G.mode === 'team' ? TEAM_BONUS : HUMAN_BONUS); // у командах зброя й аптечки — лише на базах
   W.pickups.push({ type, x, y: gAt(W, x), timed: true, life: 45, max: 45 });
 }
 function applyAirBonus(d, type) {

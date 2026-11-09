@@ -301,6 +301,7 @@ function thinkDrone(b, s, dt) {
   } else m.lostT += dt;
   // командний режим: без людей у полі зору — полювати на ворожі НРК з підвозом
   const ugvT = !tgt && isTeam() ? nearestEnemyUgv(d, 900 * L.sense) : null;
+  const droneT = !tgt && !ugvT && isTeam() ? nearestEnemyDrone(d, 600 * L.sense) : null;
 
   let descend = false, gx, gy, attack = false, boost = false, weave = 0, aim = null;
   if (tgt) {
@@ -336,6 +337,12 @@ function thinkDrone(b, s, dt) {
     }
     // підрив поруч, якщо ціль лежить або ховається за бруствером
     if (dd < 26 || (attack && dd < 46 && lineOfSight(W, d.x, d.y, tx, ty))) b.tap(s, 'fire');
+  } else if (droneT) {
+    // таран ворожого дрона
+    const dd = dist(d.x, d.y, droneT.x, droneT.y);
+    gx = droneT.x + droneT.vx * 0.25 * L.lead * 2; gy = droneT.y + droneT.vy * 0.25 * L.lead * 2;
+    attack = dd < 260; boost = true;
+    if (dd < 40) b.tap(s, 'fire');
   } else if (ugvT) {
     const dd = dist(d.x, d.y, ugvT.x, ugvT.y - 10);
     gx = ugvT.x + ugvT.dir * UGV_SPD * 0.3; gy = ugvT.y - 12;

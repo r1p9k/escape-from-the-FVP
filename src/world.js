@@ -309,6 +309,14 @@ function makeWorld(loc, seed, lenId, team) {
   if (!team) {
     addSolid(W, { type: 'shelter', x: sx + 36, y: sg - 124, w: 320, h: 130 });
     W.decor.push({ type: 'sandbags', x: sx - 120, w: 50 });
+  } else {
+    // командний режим: бази — великі триповерхові будівлі на обох кінцях мапи
+    W.baseB = [];
+    for (const bx of [W.start.x - 210, W.start2.x - 210]) {
+      building(W, bx, 3, 420);
+      const b = W.backs[W.backs.length - 1];
+      b.base = true; W.baseB.push(b);
+    }
   }
 
   // гарантований мінімум знахідок і техніки
