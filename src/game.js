@@ -93,6 +93,13 @@ function makeHuman(p, x) {
 }
 function feed(text, color) { G.feed.push({ text, color: color || '#fff', t: 4 }); if (G.feed.length > 5) G.feed.shift(); }
 
+function inMouth(h) {
+  const T = h.tun;
+  if (!h.hidden || h.hidden.type !== 'pipe' || !T || T.ex < 0 || h.dead || h.digging) return false;
+  return h.y - gAt(G.W, h.x) < HUMAN_DIM[h.stance].h * 0.8; // глибина ніг під землею менша за зріст
+}
+// повністю під землею / у схованці — не видно й не влучити
+function covered(h) { return !!h.hidden && !inMouth(h); }
 function humanRect(h) {
   if (h.vehicle) { const T = VEH[h.vehicle.type]; return { x: h.vehicle.x - T.len / 2, y: h.vehicle.y - T.h - 20, w: T.len, h: T.h + 20 }; }
   const d = HUMAN_DIM[h.stance];
@@ -164,7 +171,7 @@ function humanVisibleToDrone(h, drone) {
   if (drone && ally(h, drone)) return !h.saved; // своїх дрон бачить завжди
   if (h.saved) return false;
   // з нори визирає — дрон помітить після пострілу або впритул
-  if (h.hidden) return !!(h.peek && drone && (h.reveal > 0 || dist(drone.x, drone.y, h.hidden.x, h.hidden.y - 8) < 160));
+  if (covered(h)) return !!(h.peek && drone && (h.reveal > 0 || dist(drone.x, drone.y, h.hidden.x, h.hidden.y - 8) < 160));
   const by = concealedBy(h);
   if (!by) return true;
   if (!drone) return false;
@@ -246,7 +253,9 @@ function updateHuman(h, dt) {
   }
 
   // режим прицілювання: людина стоїть, стрілки змінюють кут
-  h.aiming = c.held('aim') && h.onGround && !h.onLadder;
+  h.grenAim = c.held('slot3') && canGrenAim(h) && h.onGround && !h.onLadder;
+  if (h.grenAim && c.pressed('slot3') && !c.held('aim')) h.aimA = -0.55; // типовий кут кидка
+  h.aiming = (c.held('aim') || h.grenAim) && h.onGround && !h.onLadder;
   if (h.aiming) {
     if (c.cur.aimAngle !== undefined) setAimWorld(h, c.cur.aimAngle);
     else {
@@ -255,8 +264,6 @@ function updateHuman(h, dt) {
       const v = (c.held('down') ? 1 : 0) - (c.held('up') ? 1 : 0);
       h.aimA = clamp(h.aimA + v * 1.5 * dt, -1.45, 0.5);
     }
-    // з окопу — лише вгору через бруствер
-    if (inTrench(h)) h.aimA = clamp(h.aimA, AIM_SECTOR.trench[0], AIM_SECTOR.trench[1]);
     h.vx = approach(h.vx, 0, 2200 * dt);
     moveHuman(h, dt);
   } else {
@@ -266,6 +273,7 @@ function updateHuman(h, dt) {
       else if (h.stance === 'crouch') tryStance(h, 'stand');
       else if (h.onGround && !tryMantle(h)) { h.vy = -JUMP; h.onGround = false; }
     }
+    if (c.pressed('down') && !h.onLadder && shaftUnder(h)) { const sh = shaftUnder(h); enterHide(h, sh.sp); h.tun.ex = sh.sp.exits.indexOf(sh.e); h.tun.u = 1; h.onLadder = true; h.stance = 'stand'; return; }
     if (c.pressed('down') && !h.onLadder) {
       if (lad && h.onGround && h.stance === 'stand' && Math.abs(h.y - lad.top) < 5) { h.onLadder = true; h.x = lad.x; h.y += 6; }
       else if (h.stance === 'stand' && h.onGround && Math.abs(h.vx) > 140 && h.diveCd <= 0 && freeAt(h.x + h.facing * 20, h.y, HUMAN_DIM.prone)) {
@@ -305,6 +313,7 @@ function updateHuman(h, dt) {
     }
   }
 
+  if (runIntoRamp(h)) return;
   backpackInput(h, c);
   tickHeal(h, c, dt, ax !== 0 || h.aiming || !h.onGround);
   // порожні руки — зброя підбирається сама
@@ -335,7 +344,7 @@ function updateHuman(h, dt) {
   else if (h.alT > 0) { if (c.held('fire') && h.fireCd <= 0 && !h.canister) alioshaShot(h); }
   // стріляти можна лише з позиції (режим прицілювання)
   else if (h.aiming && c.held('fire') && h.weapon && h.canister && c.pressed('fire')) feed(h.player.name + ': руки зайняті каністрою — [' + c.label('slot1') + '] викинути', '#ccc');
-  else if (h.aiming && c.held('fire') && h.weapon && !h.canister && h.fireCd <= 0 && h.reloadT <= 0 && h.weapon.mag > 0) {
+  else if (h.aiming && !h.grenAim && c.held('fire') && h.weapon && !h.canister && h.fireCd <= 0 && h.reloadT <= 0 && h.weapon.mag > 0) {
     humanShoot(h, muzzle(h), h.stance);
   }
   // вогонь без позиції — перезарядити
@@ -365,6 +374,14 @@ function burrowMuzzle(h) {
 // з якої схованки можна стріляти
 function canPeek(sp) { return sp.type === 'burrow' || (sp.type === 'bunker' && !sp.basement && !sp.ruined); }
 // людина на дні окопу (нижче бруствера)
+// у окопі, цілячись, людина стає на вогневу сходинку: дуло й рука — над бруствером
+function trenchLift(h) {
+  if (!h.aiming || h.vehicle || h.hidden || h.onLadder || h.dead) return 0;
+  const c = G.W.covers.find((c) => c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y + 14);
+  if (!c) return 0;
+  const top = h.y - HUMAN_DIM[h.stance].h * (h.grenAim ? 0.82 : 0.68);
+  return Math.max(0, top - (c.y - 8));
+}
 function inTrench(h) {
   if (h.vehicle || h.hidden || h.onLadder) return false;
   return G.W.covers.some((c) => c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y + 14);
@@ -426,7 +443,7 @@ function setAimWorld(h, a) {
 }
 function muzzle(h) {
   const d = HUMAN_DIM[h.stance];
-  const y = h.stance === 'prone' ? h.y - 8 : h.y - d.h * 0.68;
+  const y = (h.stance === 'prone' ? h.y - 8 : h.y - d.h * 0.68) - trenchLift(h);
   const a = aimWorld(h);
   return { x: h.x + Math.cos(a) * 16, y: y + Math.sin(a) * 16 };
 }
@@ -493,6 +510,7 @@ function nearHide(h) {
 function packUsed(h) { return h.medkits + h.reb + (h.detector ? 1 : 0); }
 function canTake(h, p) {
   if (p.type === 'shovel') return h.shovel < SHOVEL_M * 2;
+  if (p.type === 'gasmask') return !h.gasmask;
   if (p.type === 'grenade') return h.grenades < GRENADES_MAX;
   if (p.type === 'ammo') return !!h.weapon && h.weapon.ammo < WEAPONS[h.weapon.type].ammo * 2;
   if (p.type === 'medkit') return h.medkits < MEDKIT_MAX && packUsed(h) < PACK_CAP;
@@ -519,6 +537,7 @@ function takePickup(h, p) {
   else if (p.type === 'fuel') { if (h.carry) dropCarry(h); h.canister = true; h.aiming = false; } // каністра займає руки
   else if (p.type === 'ammo') { h.weapon.ammo += WEAPONS[h.weapon.type].ammo; feed(h.player.name + ': поповнив набої', '#ddd'); }
   else if (p.type === 'grenade') { h.grenades = Math.min(GRENADES_MAX, h.grenades + 2); feed(h.player.name + ': гранат ' + h.grenades, '#c9a227'); }
+  else if (p.type === 'gasmask') { h.gasmask = true; feed(h.player.name + ' вдягнув протигаз — дим більше не шкодить', '#9fd3c7'); }
   else if (p.type === 'armor') h.armor = 100;
   else if (p.type === 'shovel') { h.shovel = Math.min(SHOVEL_M * 2, h.shovel + SHOVEL_M); feed(h.player.name + ' знайшов лопату — можна копати тунелі (' + h.shovel.toFixed(1) + ' м)', '#c8a26a'); }
   else { h.weapon = makeWeapon(p.type); h.reloadT = 0; }
@@ -562,6 +581,33 @@ function enterHide(h, sp) {
     feed(h.player.name + ' знайшов захований бонус «Альоша»!', '#f2c94c');
   }
   Sfx.click();
+}
+function shaftUnder(h) {
+  if (!h.onGround || h.vehicle || h.mount || h.carry) return null;
+  for (const sp of G.W.hides) {
+    if (sp.ruined || sp.type !== 'pipe') continue;
+    for (const e of sp.exits) if (e.kind === 'shaft' && Math.abs(h.x - e.tx) < 14 && Math.abs(h.y - e.ty) < 6) return { sp, e };
+  }
+  return null;
+}
+function rampUnder(x) {
+  for (const sp of G.W.hides) {
+    if (sp.ruined || sp.type !== 'pipe') continue;
+    for (const e of sp.exits) if (rampOpen(e, x)) return { sp, e };
+  }
+  return null;
+}
+// ступив на відкритий спуск — опинився в ньому (бігом — і далі бігом)
+function runIntoRamp(h) {
+  if (!h.onGround || h.vehicle || h.mount || h.onLadder || h.climb || h.diving || h.piloting) return false;
+  if (Math.abs(h.y - gAt(G.W, h.x)) > 3) return false;
+  const r = rampUnder(h.x);
+  if (!r) return false;
+  const run = h.vx;
+  enterHide(h, r.sp);
+  const T = h.tun; T.ex = r.sp.exits.indexOf(r.e); T.u = rampU(r.e, h.x);
+  const p = tunExitPos(r.e, T.u); h.x = p.x; h.y = p.y; h.vx = run;
+  return true;
 }
 function hideEntrance(h) {
   const sp = h.hidden;
@@ -607,19 +653,42 @@ function tunnelControl(h, sp, c, dt) {
   h.vx = 0;
   if (h.digging) { tickDig(h, c, dt); return; }
   if (T.ex >= 0) {
-    const e = sp.exits[T.ex];
+    const e = sp.exits[T.ex], ramp = e.kind === 'ramp';
+    h.onLadder = !ramp;
+    h.stance = !ramp || sp.tall || T.u > 0.45 ? 'stand' : 'crouch';
+    // у відкритому отворі: «Позиція» — цілитися й стріляти назовні, граната — [слот 3]
+    h.grenAim = inMouth(h) && c.held('slot3') && canGrenAim(h);
+    if (h.grenAim && c.pressed('slot3') && !c.held('aim')) h.aimA = -0.55;
+    h.aiming = inMouth(h) && (c.held('aim') || h.grenAim);
+    if (h.aiming) { h.onLadder = false; h.grenA = h.grenAim ? aimWorld(h) : h.grenA; }
+    if (h.aiming) {
+      if (c.cur.aimAngle !== undefined) setAimWorld(h, c.cur.aimAngle);
+      else {
+        if (c.pressed('left')) h.facing = -1;
+        if (c.pressed('right')) h.facing = 1;
+        const v = (c.held('down') ? 1 : 0) - (c.held('up') ? 1 : 0);
+        h.aimA += v * 1.5 * dt;
+      }
+      h.aimA = clamp(h.aimA, -1.45, 0.15); // з ями в землю не постріляєш
+      if (!h.grenAim && c.held('fire') && h.weapon && h.fireCd <= 0 && h.reloadT <= 0 && h.weapon.mag > 0) humanShoot(h, muzzle(h), 'crouch');
+      else if (c.pressed('fire') && h.weapon && h.reloadT <= 0 && h.weapon.mag < Math.min(WEAPONS[h.weapon.type].mag, h.weapon.ammo)) startReload(h);
+      h.vx = 0;
+      return;
+    }
     let v = (c.held('up') ? 1 : 0) - (c.held('down') ? 1 : 0);
-    if (e.kind === 'ramp' && ax) v = ax === e.dir ? 1 : -1;
-    T.u = clamp(T.u + (v * TUN_SPD * (sp.tall ? 1.5 : 1) * dt) / e.len, 0, 1);
-    if (e.kind === 'ramp' && v) h.facing = v > 0 ? e.dir : -e.dir; else if (ax) h.facing = ax;
+    if (ramp && ax) v = ax === e.dir ? 1 : -1;
+    const spd = ramp ? (c.held('sprint') && h.stamina > 0 && !h.exhausted ? SPRINT * 0.8 : RUN * 0.75) : 120;
+    T.u = clamp(T.u + (v * spd * dt) / e.len, 0, 1);
+    if (ramp && v) h.facing = v > 0 ? e.dir : -e.dir; else if (ax) h.facing = ax;
     const p = tunExitPos(e, T.u); h.x = p.x; h.y = p.y;
-    h.anim += Math.abs(v) * dt * 9; h.vx = v ? 60 * h.facing : 0;
-    if (T.u <= 0 && v < 0) { T.ex = -1; h.x = e.bx; h.y = e.by; return; }
-    // нагорі: «Дія» або ще трохи натиснути вгору — вилізти
+    h.anim += Math.abs(v) * dt * (ramp ? spd * 0.06 : 8); h.vx = v && ramp ? spd * h.facing : 0;
+    if (T.u <= 0 && v < 0) { T.ex = -1; h.x = e.bx; h.y = e.by; h.onLadder = false; h.stance = sp.tall ? 'stand' : 'crouch'; return; }
+    // нагорі: «Дія» або далі в той самий бік — вийти (спуском — на бігу, без зупинки)
     T.push = T.u >= 1 && v > 0 ? T.push + dt : 0;
-    if ((c.pressed('interact') && T.u > 0.75) || T.push > 0.3) leaveTunnel(h, e);
+    if ((c.pressed('interact') && T.u > 0.75) || T.push > (ramp ? 0.01 : 0.15)) { const run = h.vx; leaveTunnel(h, e); if (ramp) h.vx = run; }
     return;
   }
+  h.onLadder = false; h.aiming = false;
   // галерея
   if (ax) h.facing = ax;
   const atEnd = ax < 0 ? h.x <= sp.a + 0.5 : ax > 0 ? h.x >= sp.b - 0.5 : false;
@@ -637,7 +706,7 @@ function tunnelControl(h, sp, c, dt) {
   if (c.pressed('up')) {
     const i = sp.exits.findIndex((e) => Math.abs(e.bx - h.x) < 14);
     if (i >= 0) { T.ex = i; T.u = 0; h.x = sp.exits[i].bx; }
-    else if (h.shovel > 0) startDigExit(h, sp);
+    else if (h.shovel > 0) startDigExit(h, sp, (h.facing < 0 && h.x <= sp.a + 3) || (h.facing > 0 && h.x >= sp.b - 3) ? 'ramp' : 'shaft');
     else tipOnce(h, 'Тут виходу немає');
   }
 }
@@ -646,8 +715,8 @@ function tipOnce(h, text) {
   if (G.time - (h.tipT || -9) > 2.5) { h.tipT = G.time; feed(h.player.name + ': ' + text, '#ccc'); }
 }
 function leaveTunnel(h, e) {
-  h.hidden = null; h.tun = null; h.x = e.tx + (e.kind === 'ramp' ? e.dir * 6 : 0); h.y = gAt(G.W, h.x);
-  h.vx = 0; h.vy = 0; h.onGround = true;
+  h.hidden = null; h.tun = null; h.x = e.tx + (e.kind === 'ramp' ? e.dir * 7 : 0); h.y = gAt(G.W, h.x);
+  h.vx = 0; h.vy = 0; h.onGround = true; h.onLadder = false;
   if (!tryStance(h, 'stand')) h.stance = 'crouch'; // вийшов — випрямився (якщо є місце)
   Sfx.click();
 }
@@ -660,6 +729,12 @@ function digGallery(h, sp, dir, dt) {
   const lim = dir < 0 ? 20 : W.width - 20;
   let d = Math.min(DIG_SPD * dt, h.shovel * DIG_PX_M, Math.abs(lim - (dir < 0 ? sp.a : sp.b)));
   if (d <= 0) return;
+  const nx = dir < 0 ? sp.a - d - 4 : sp.b + d + 4;
+  if (rockIn(nx - 2, nx + 2)) {
+    // лопати лишилося мало — вихід біля каменю докопується сам
+    if (h.shovel < 3 && !sp.exits.some((o) => Math.abs(o.bx - h.x) < 30)) { feed(h.player.name + ': камінь, лопата майже зношена — докопуєш вихід', '#c8a26a'); h.digging = { kind: 'auto', sp, dir, t: 0, dur: 1, e: null }; return; }
+    tipOnce(h, 'Камінь — лопатою не прокопати. [' + h.player.ctrl.label('up') + '] — вихід тут'); return;
+  }
   if (dir < 0) sp.a -= d; else sp.b += d;
   h.shovel = Math.max(0, h.shovel - d / DIG_PX_M);
   h.x = dir < 0 ? sp.a : sp.b; h.digT = 0.2; h.anim += dt * 6;
@@ -695,6 +770,8 @@ function tickAutoExit(h, D, c, dt) {
     const e = tunExitGeo(W, sp, { x: end, dir, kind: 'ramp' });
     const lim = dir < 0 ? 20 : W.width - 20;
     if (sp.exits.some((o) => Math.abs(o.tx - e.tx) < 30 && o.dir === dir)) { h.digging = null; return; } // вихід уже є
+    const rk = rockIn(Math.min(e.bx, e.tx), Math.max(e.bx, e.tx)) || rockIn(end + dir * 2, end + dir * 6);
+    if (rk) { const sh = tunExitGeo(W, sp, { x: end - dir * 2, dir, kind: 'shaft' }); D.e = sh; D.t = 0; D.dur = sh.len / DIG_SPD; return; }
     if (exitBlocked(W, e) && Math.abs(lim - end) > 1) {
       const d = Math.min(DIG_SPD * dt, Math.abs(lim - end));
       if (dir < 0) sp.a -= d; else sp.b += d;
@@ -726,9 +803,10 @@ function mergeTunnels(sp, o) {
   feed('Тунелі з\'єднано', '#c8a26a');
 }
 // новий спуск із галереї нагору (у бік погляду)
-function startDigExit(h, sp) {
-  const W = G.W, e = tunExitGeo(W, sp, { x: h.x, dir: h.facing, kind: 'ramp' });
+function startDigExit(h, sp, kind) {
+  const W = G.W, e = tunExitGeo(W, sp, { x: h.x, dir: h.facing, kind: kind || 'shaft' });
   if (sp.exits.some((o) => Math.abs(o.tx - e.tx) < 40)) { tipOnce(h, 'Поруч уже є вихід'); return; }
+  if (rockIn(Math.min(e.bx, e.tx) - 6, Math.max(e.bx, e.tx) + 6)) { if (kind === 'ramp') { startDigExit(h, sp, 'shaft'); return; } tipOnce(h, 'Там камінь — не прокопати'); return; } // на пологий спуск не вистачає місця — лаз
   if (pointSolid(W, e.tx, e.ty - 12, solidsNear(W, e.tx - 10, e.tx + 10))) { tipOnce(h, 'Нагорі щось заважає копати'); return; }
   const cost = e.len / DIG_PX_M;
   if (h.shovel < cost) { tipOnce(h, 'На новий вихід лопати не вистачить (треба ' + cost.toFixed(1) + ' м)'); return; }
@@ -742,6 +820,7 @@ function startDigEntry(h) {
   if (fresh) sp = { type: 'pipe', style: 'dug', a: bx, b: bx, depth: TUN_DEPTH, exits: [], dug: true };
   const e = tunExitGeo(W, sp, { x: clamp(bx, Math.min(sp.a, bx), Math.max(sp.b, bx)), dir: -h.facing, kind: 'ramp' });
   if (!fresh && sp.exits.some((o) => Math.abs(o.tx - e.tx) < 40)) { tipOnce(h, 'Поруч уже є вхід у тунель'); return; }
+  if (rockIn(Math.min(e.bx, e.tx, bx) - 6, Math.max(e.bx, e.tx, bx) + 6)) { tipOnce(h, 'Тут камінь — не прокопати'); return; }
   const cost = (e.len + (fresh ? 0 : Math.max(0, sp.a - bx, bx - sp.b))) / DIG_PX_M;
   if (h.shovel < cost) { tipOnce(h, 'Лопати не вистачить на спуск (треба ' + cost.toFixed(1) + ' м)'); return; }
   h.digging = { kind: 'entry', sp, e, fresh, bx, t: 0, dur: (cost * DIG_PX_M) / DIG_SPD, cost };
@@ -868,6 +947,7 @@ function hurt(h, dmg, src) {
   h.hp -= dmg; h.hurtT = 0.4;
   if (h.hp <= 0) {
     h.hp = 0; h.dead = true; h.alT = 0;
+    if (src === 'blast' || src === 'mine' || src === 'head') gibHuman(h, src); // в епіцентрі — на шматки, трохи далі — відриває частину
     if (h.piloting) { const dp = G.dps.find((x) => x.temp && x.human === h); if (dp) endPilot(dp); }
     if (h.vehicle) exitVehicle(h, true);
     h.hidden = null; h.hideAnim = null; h.stance = 'prone';
@@ -886,7 +966,7 @@ function hurt(h, dmg, src) {
 // відновлення: з останньої схованки чи будівлі з маскувальною сіткою, інакше зі старту
 function respawnHuman(h) {
   const W = G.W, sp = h.spawn;
-  Object.assign(h, { dead: false, hp: 100, stance: 'stand', vx: 0, vy: 0, armor: 0, weapon: null, hidden: null, vehicle: null, seat: null,
+  Object.assign(h, { gasmask: false, lost: null, gibbed: false, dead: false, hp: 100, stance: 'stand', vx: 0, vy: 0, armor: 0, weapon: null, hidden: null, vehicle: null, seat: null,
     gasT: 0, smokeT: 0, reveal: 0, openTime: 0, diving: false, climb: null, onLadder: false, aiming: false, hideAnim: null, hurtT: 0, stamina: 1, exhausted: false, protT: 3, tun: null, digging: null, carry: null, mount: null, working: null, grenades: Math.max(1, h.grenades) });
   if (G.mode === 'team') { h.hidden = null; teamRespawn(h); }
   else if (sp && sp.hide && !sp.hide.ruined) { h.x = sp.hide.x; h.y = sp.hide.y; h.hidden = sp.hide; }
@@ -894,6 +974,34 @@ function respawnHuman(h) {
   else { h.x = G.mode === 'dm' ? randomSpawnX() : W.start.x; h.y = gAt(W, h.x); }
   h.onGround = true; h.healT = 0; h.canister = false;
   feed(h.player.name + ' повернувся в гру', '#6fcf97');
+}
+
+// розліт тіла на шматки від вибуху: голова в шоломі, тулуб, руки, ноги + бризки
+const GIB_FULL_R = 28, GIB_PART_R = 85; // епіцентр — тіло на шматки; ближче за GIB_PART_R — відриває одну частину
+function gibHuman(h, src) {
+  const b = G.lastBlast || { x: h.x, y: h.y + 20, power: 100 };
+  const H = HUMAN_DIM[h.stance].h, cy = h.y - H * 0.5;
+  const d = dist(b.x, b.y, h.x, cy);
+  const full = src === 'head' || (src === 'blast' && d < GIB_FULL_R);
+  if (!full && src === 'blast' && d > GIB_PART_R) return; // далеко — тіло ціле
+  const HY = { head: -0.85, torso: -0.45, arm: -0.6, leg: -0.15 };
+  const k = clamp(b.power / 110, 0.7, 1.2);
+  const fly = (kind, sp) => {
+    const px = h.x + rand(-5, 5), py = h.y + H * HY[kind];
+    let dx = px - b.x, dy = py - b.y; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l;
+    G.parts.push({ type: 'gib', kind, x: px, y: py, vx: dx * sp + rand(-35, 35), vy: Math.min(dy * sp, 0) - rand(110, 200), rot: rand(0, 6.28), spin: rand(-10, 10),
+      life: 9, max: 9, col: h.player.color, facing: h.facing, blood: 0.5 });
+  };
+  if (!full) {
+    // відірвало одну кінцівку чи голову; тіло лишається
+    const kind = src === 'mine' ? 'leg' : pick(['head', 'arm', 'arm', 'leg', 'leg']);
+    h.lost = kind; fly(kind, rand(90, 170) * k);
+    for (let i = 0; i < 10; i++) G.parts.push({ type: 'debris', x: h.x + rand(-6, 6), y: h.y + H * HY[kind], vx: rand(-140, 140), vy: rand(-200, -30), life: rand(0.4, 0.9), max: 0.9, col: '#8a1c1c' });
+    return;
+  }
+  h.gibbed = true;
+  for (const kind of ['head', 'torso', 'arm', 'arm', 'leg', 'leg']) fly(kind, rand(140, 260) * k * (kind === 'torso' ? 0.6 : 1));
+  for (let i = 0; i < 18; i++) G.parts.push({ type: 'debris', x: h.x + rand(-8, 8), y: cy + rand(-12, 12), vx: rand(-260, 260), vy: rand(-340, -40), life: rand(0.5, 1.1), max: 1.1, col: RND() < 0.7 ? '#8a1c1c' : '#5d6c3b' });
 }
 
 // ---------- Маскувальна сітка ----------
@@ -965,7 +1073,7 @@ function updateBullets(dt) {
       }
       // командний режим: кулі влучають у ворожих людей (кілька влучань — смерть)
       if (!hit && isTeam() && b.owner) for (const o of G.humans) {
-        if (o.dead || o.saved || o.hidden || o.vehicle || o.protT > 0 || allyP(o.player, b.owner.player)) continue;
+        if (o.dead || o.saved || covered(o) || o.vehicle || o.protT > 0 || allyP(o.player, b.owner.player)) continue;
         if (rectDist(b.x, b.y, humanRect(o)) > 1) continue;
         hit = true; o.lastHitBy = b.owner.player;
         hurt(o, b.dmg * (o.armor > 0 ? 0.6 : 1), 'bullet');
@@ -1158,7 +1266,7 @@ function updateBombs(dt) {
       b.x += (b.vx * dt) / steps; b.y += (b.vy * dt) / steps;
       if (pointSolid(W, b.x, b.y, solidsNear(W, b.x - 4, b.x + 4))) { hit = true; b.y -= 3; break; }
       for (const h of G.humans) {
-        if (h.dead || h.saved || h.hidden || allyP(h.player, b.player)) continue;
+        if (h.dead || h.saved || covered(h) || allyP(h.player, b.player)) continue;
         if (rectDist(b.x, b.y, humanRect(h)) < 3) { hit = true; hitH = h; break; }
       }
       for (const v of W.vehicles) if (!v.dead && rectDist(b.x, b.y, vehRect(v)) < 2) { hit = true; hitV = v; break; }
@@ -1168,7 +1276,9 @@ function updateBombs(dt) {
     if (!hit) continue;
     G.bombs.splice(i, 1);
     G.blastBy = b.player;
-    if (b.type === 'frag') explosion(b.x, b.y, 80, 90);
+    const into = b.type === 'frag' && !hitH && !hitV ? hideAtPoint(b.x, b.y) : null;
+    if (into && into.e) { feed('Скид залетів у ' + into.name + '!', '#ff8a5a'); grenadeInside({ inside: into, owner: { player: b.player } }); }
+    else if (b.type === 'frag') explosion(b.x, b.y, 80, 90);
     else if (b.type === 'mine') {
       if (hitH || hitV) mineExplode(b.x, b.y);
       else { G.mines.push({ x: b.x, y: b.y + 3, arm: 0.8, seed: Math.random() * 10, player: b.player }); Sfx.tone(180, 0.06, 0.1); }
@@ -1189,7 +1299,7 @@ function updateBombs(dt) {
     if (h.dead || h.saved) continue;
     if (h.hidden) {
       const e = hideEntrance(h);
-      const smoked = G.smokes.some((s) => dist(s.x, s.y + 30, e.x, e.y) < s.r || dist(s.x, s.y + 30, h.x, h.y) < s.r);
+      const smoked = !h.gasmask && G.smokes.some((s) => dist(s.x, s.y + 30, e.x, e.y) < s.r || dist(s.x, s.y + 30, h.x, h.y) < s.r);
       if (smoked) {
         if (h.smokeT === 0) feed(h.player.name + ': дим у схованці — вилазь!', '#bbb');
         h.smokeT += dt;
@@ -1203,7 +1313,7 @@ function updateBombs(dt) {
     }
     h.smokeT = 0;
     // відкритий дим: хто не вибрався за SMOKE_SAFE секунд, втрачає здоров'я
-    const inside = inSmoke(h.x, h.y - 20);
+    const inside = !h.gasmask && inSmoke(h.x, h.y - 20); // у протигазі дим не шкодить
     if (inside) h.gasT += dt; else { h.gasT = Math.max(0, h.gasT - dt * 2); if (h.gasT < SMOKE_SAFE) h.gasWarned = false; }
     if (h.gasT > SMOKE_SAFE) {
       if (!h.gasWarned) { h.gasWarned = true; feed(h.player.name + ' задихається в диму', '#bbb'); }
@@ -1239,10 +1349,11 @@ function updateMines(dt) {
 }
 // вибух міни: поруч — мінус 50% здоров'я без броні (15 у броні), далі до MINE_R — менше; техніка — знищена ходова
 function mineExplode(x, y) {
+  G.lastBlast = { x, y, power: 90 };
   explosionFx(x, y - 4, 45, 50);
   Sfx.boom(false);
   for (const h of G.humans) {
-    if (h.dead || h.saved || h.hidden || h.vehicle || h.alT > 0) continue;
+    if (h.dead || h.saved || covered(h) || h.vehicle || h.alT > 0) continue;
     const dd = dist(h.x, h.y - 8, x, y);
     if (dd > MINE_R) continue;
     const near = dd < MINE_TRIGGER + 8, armored = h.armor > 0;
@@ -1302,11 +1413,11 @@ function shootDownDrone(d, by) {
 }
 function acquireLock(d) {
   const h = d.lockOn;
-  if (h && !h.dead && !h.saved && !h.hidden && dist(h.x, h.y - 25, d.x, d.y) < 520) return true;
+  if (h && !h.dead && !h.saved && !covered(h) && dist(h.x, h.y - 25, d.x, d.y) < 520) return true;
   d.lockOn = null;
   let best = null, bd = 230;
   for (const x of G.humans) {
-    if (x.dead || x.saved || x.hidden || ally(x, d)) continue;
+    if (x.dead || x.saved || covered(x) || ally(x, d)) continue;
     const dd = dist(x.x, x.y - 25, d.x, d.y);
     if (dd < bd && humanVisibleToDrone(x, d) && lineOfSight(G.W, d.x, d.y, x.x, x.y - 25)) { bd = dd; best = x; }
   }
@@ -1408,7 +1519,7 @@ function updateDrone(d, dt) {
   }
   // цілі (свої люди — не ціль)
   for (const h of G.humans) {
-    if (h.dead || h.saved || h.hidden || h.vehicle || ally(h, d)) continue;
+    if (h.dead || h.saved || covered(h) || h.vehicle || ally(h, d)) continue;
     if (rectDist(d.x, d.y, humanRect(h)) < DRONE_R) { explodeDrone(d, h, isHeadHit(d, h)); return; }
   }
   for (const v of W.vehicles) {
@@ -1431,6 +1542,7 @@ function explosionFx(x, y, power, radius) {
 }
 function explosion(x, y, power, radius, direct) {
   const W = G.W;
+  G.lastBlast = { x, y, power };
   Sfx.boom(power > 60);
   explosionFx(x, y, power, radius);
   // техніка: броня приймає удар, люди всередині лише поранені
@@ -1448,7 +1560,7 @@ function explosion(x, y, power, radius, direct) {
   // люди
   for (const h of G.humans) {
     if (h.dead || h.saved || h.vehicle || shielded.has(h)) continue;
-    if (h.hidden) {
+    if (covered(h)) {
       const e = hideEntrance(h);
       if (h.peek) { if (dist(x, y, e.x, e.y) < 65) hurt(h, power * 0.7, 'blast'); } // визирнув — вразливіший
       else if (dist(x, y, e.x, e.y) < 45) hurt(h, power * 0.35, 'blast');
@@ -1578,13 +1690,21 @@ function updateGame(dt) {
     if (p.vx !== undefined) {
       p.x += p.vx * dt; p.y += p.vy * dt;
       if (p.type === 'debris' || p.type === 'spark' || p.type === 'gun' || p.type === 'leaf') p.vy += (p.type === 'leaf' ? 400 : 900) * dt;
+      if (p.type === 'gib') {
+        p.vy += 1100 * dt; p.rot += p.spin * dt;
+        if (p.vy > 0) {
+          const sy = landSurface(p.x, p.y - p.vy * dt - 2);
+          if (p.y >= sy - 2) { p.y = sy - 2; p.vy = -p.vy * 0.28; p.vx *= 0.55; p.spin *= 0.5; if (Math.abs(p.vy) < 40) { p.vy = 0; p.vx *= 0.8; } }
+        }
+        if (p.blood > 0 && RND() < dt * 20) { p.blood -= dt; G.parts.push({ type: 'debris', x: p.x, y: p.y, vx: rand(-30, 30), vy: rand(-40, 10), life: 0.5, max: 0.5, col: '#7a1a1a' }); }
+      }
       if (p.type === 'fire') { p.vx *= 0.92; p.vy *= 0.92; }
       if (p.type === 'gun') p.rot += dt * 10;
     }
   }
   // відкритість людей (для стрілки дрона)
   for (const h of G.humans) {
-    if (h.dead || h.saved || h.hidden || humanConcealed(h)) h.openTime = 0;
+    if (h.dead || h.saved || covered(h) || humanConcealed(h)) h.openTime = 0;
     else h.openTime += dt;
   }
   updateCameras(dt);
@@ -1638,7 +1758,9 @@ function backpackInput(h, c) {
     else if (h.hp >= 100) feed(h.player.name + ': здоров\'я повне', '#ccc');
     else { h.healT = 0.001; feed(h.player.name + ' перев\'язується…', '#9c9'); }
   }
-  if (c.pressed('slot3') && !h.hidden && !h.vehicle && !h.mount) throwGrenade(h);
+  if (h.grenAim) h.grenA = aimWorld(h);
+  if (!c.held('slot3') && c.prev.slot3 && h.grenA != null && (!h.hidden || inMouth(h)) && !h.vehicle && !h.mount) throwGrenade(h, h.grenA);
+  if (!c.held('slot3')) { h.grenA = null; h.grenAim = false; }
 }
 function dropCanister(h) {
   h.canister = false;

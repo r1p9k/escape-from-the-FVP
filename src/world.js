@@ -68,7 +68,7 @@ const TUN_H = 40;       // висота галереї (людина йде зі
 const TUN_H_TALL = 64;  // високий хід — на повний зріст
 const TUN_DEPTH_TALL = 78;
 function tunH(sp) { return sp.tall ? TUN_H_TALL : TUN_H; }
-const TUN_K = 1.15;     // нахил спуску (вертикаль на одиницю горизонталі)
+const TUN_K = 0.6;      // нахил спуску (вертикаль на одиницю горизонталі)
 function tunFloor(W, sp, x) { return gAt(W, x) + sp.depth; }
 // геометрія виходу: основа на підлозі галереї, верх на поверхні
 function tunExitGeo(W, sp, e) {
@@ -81,6 +81,30 @@ function tunExitGeo(W, sp, e) {
   }
   e.len = Math.max(10, Math.hypot(e.tx - e.bx, e.ty - e.by));
   return e;
+}
+// відкрита частина пологого спуску: проміжок над похилою підлогою (туди можна забігти, а можна перестрибнути)
+function rampOpen(e, x) {
+  if (e.kind !== 'ramp') return false;
+  const lo = Math.min(e.bx, e.tx), hi = Math.max(e.bx, e.tx);
+  return x > lo && x < hi && Math.abs(x - e.tx) > 5;
+}
+function rampU(e, x) { return clamp((x - e.bx) / ((e.tx - e.bx) || 1), 0, 1); }
+// каміння під землею: лопатою не прокопати (кілька на мапу)
+function rockIn(x0, x1) {
+  const W = G.W;
+  if (!W || !W.rocks) return null;
+  for (const r of W.rocks) if (x1 > r.a && x0 < r.b) return r;
+  return null;
+}
+function placeRocks(W, width) {
+  W.rocks = [];
+  const n = Math.max(2, Math.round(width / 5500));
+  for (let k = 0, tries = 0; k < n && tries < 80; tries++) {
+    const w = rand(55, 110), a = rand(500, width - 500 - w), b = a + w;
+    if (W.hides.some((h) => (h.type === 'pipe' ? b > h.a - 200 && a < h.b + 200 : Math.abs(h.x - (a + b) / 2) < 120))) continue;
+    if (W.rocks.some((r) => b > r.a - 400 && a < r.b + 400)) continue;
+    W.rocks.push({ a, b, top: rand(6, 16), h: rand(70, 110), seed: RND() }); k++;
+  }
 }
 function tunExitPos(e, u) { return { x: lerp(e.bx, e.tx, u), y: lerp(e.by, e.ty, u) }; }
 // входи в схованку (для тунелю — верх кожного виходу)
@@ -115,9 +139,9 @@ const F = {
     dig(W, x, x + w, depth);
     W.covers.push({ type: 'trench', x: x + 16, w: w - 32, y: rim - 2, h: depth + 12 });
     const bx = x + (RND() < 0.5 ? w * 0.25 : w * 0.75);
-    // під окопом — підземний хід із лазами на обох кінцях (окремих бліндажів більше немає)
+    // під окопом — підземний хід: пологі спуски на кінцях, посередині — лаз із драбиною просто з окопу
     const ta = x + 50, tb = x + w - 50;
-    W.hides.push({ type: 'pipe', style: 'dug', a: ta, b: tb, depth: TUN_DEPTH, exits: [{ x: ta + 8, dir: -1, kind: 'shaft' }, { x: tb - 8, dir: 1, kind: 'shaft' }] });
+    W.hides.push({ type: 'pipe', style: 'dug', a: ta, b: tb, depth: TUN_DEPTH, exits: [{ x: ta + 8, dir: -1, kind: 'ramp' }, { x: tb - 8, dir: 1, kind: 'ramp' }, { x: (ta + tb) / 2, dir: 1, kind: 'shaft' }] });
     W.decor.push({ type: 'sandbags', x: x - 30, w: 40 }, { type: 'sandbags', x: x + w - 10, w: 40 });
     if (RND() < 0.3) W.pickups.push({ type: pickupType(), x: bx + 40 });
     return w;
@@ -130,15 +154,14 @@ const F = {
 
   // виритий тунель: галерея під землею, виходи — похилі спуски або вертикальні лази
   tunnel(W, x) {
-    const len = rand(200, 380), a = x + 55, b = a + len;
-    flatten(W, x, b + 55);
-    const ex = (px, dir) => ({ x: px, dir, kind: RND() < 0.7 ? 'ramp' : 'shaft' });
-    const exits = [ex(a + 6, -1), ex(b - 6, 1)];
-    if (len > 280 && RND() < 0.4) exits.push({ x: lerp(a, b, rand(0.4, 0.6)), dir: RND() < 0.5 ? -1 : 1, kind: RND() < 0.5 ? 'ramp' : 'shaft' });
-    // частина ходів — високі, на повний зріст (глибші)
-    const tall = RND() < 0.4;
+    // частина ходів — високі, на повний зріст (глибші); на кінцях — пологі спуски, посередині — лази з драбинами
+    const tall = RND() < 0.4, m = (tall ? TUN_DEPTH_TALL : TUN_DEPTH) / TUN_K + 30;
+    const len = rand(220, 400), a = x + m, b = a + len;
+    flatten(W, x, b + m);
+    const exits = [{ x: a + 6, dir: -1, kind: 'ramp' }, { x: b - 6, dir: 1, kind: 'ramp' }];
+    if (len > 250 && RND() < 0.7) exits.push({ x: lerp(a, b, rand(0.4, 0.6)), dir: RND() < 0.5 ? -1 : 1, kind: 'shaft' });
     W.hides.push({ type: 'pipe', style: 'dug', a, b, depth: tall ? TUN_DEPTH_TALL : TUN_DEPTH, tall, exits });
-    return len + 110;
+    return len + m * 2;
   },
 
   // каналізація: бетонний колектор глибше, вниз — лазами з люками
@@ -198,7 +221,7 @@ const F = {
   },
 };
 
-function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25, shovel: 0.35, grenade: 0.6 }); }
+function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25, shovel: 0.35, grenade: 0.6, gasmask: 0.4 }); }
 // предмети побуту в будівлях (їх можна кидати)
 const PROP_KINDS = { jar: 3, chair: 2, stool: 1.5, pot: 1.5, brick: 1.2, tv: 0.8, iron: 1 };
 
@@ -336,6 +359,7 @@ function makeWorld(loc, seed, lenId, team) {
   }
 
   buildBuckets(W);
+  placeRocks(W, width);
   // фінальні висоти (рельєф міг змінитися після розміщення)
   for (const p of W.pickups) if (p.y == null) p.y = surfaceY(W, p.x);
   for (const v of W.vehicles) {

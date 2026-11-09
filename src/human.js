@@ -83,6 +83,12 @@ function drawHead(ctx, c, tilt, team, opts) {
   dot(ctx, { x: 0, y: 0 }, 5.2, HCOL.skin);
   ctx.fillStyle = HCOL.skin; ctx.beginPath(); ctx.arc(5.2, 1.2, 1.5, 0, 7); ctx.fill(); // ніс
   ctx.fillStyle = HCOL.line; ctx.fillRect(2.4, -0.4, 1.6, 1.6);                       // око
+  if (opts.mask) {
+    // протигаз: гумова маска, скельце, фільтр біля рота
+    ctx.fillStyle = '#2f3a38'; ctx.beginPath(); ctx.ellipse(2.6, 1, 4.2, 4.6, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#9fd3c7'; ctx.beginPath(); ctx.arc(3.4, -0.6, 1.4, 0, 7); ctx.fill();
+    ctx.fillStyle = '#4b5a57'; roundRect(ctx, 4.6, 2.2, 3.4, 3.8, 1); ctx.fill();
+  }
   if (opts.goggles) { ctx.fillStyle = '#111'; roundRect(ctx, 0.5, -1.6, 5.6, 3.2, 1.2); ctx.fill(); ctx.fillStyle = '#5ad1c4'; ctx.fillRect(3.6, -0.8, 1.6, 1.4); }
   // шолом із чохлом і смугою кольору гравця
   ctx.fillStyle = HCOL.line; ctx.beginPath(); ctx.arc(-0.4, -0.6, 7.6, Math.PI * 0.93, Math.PI * 2.07); ctx.closePath(); ctx.fill();
@@ -131,10 +137,11 @@ function armAngles(ctx, sh, a1, a2, col) {
 function drawHuman(ctx, h, t, alpha) {
   ctx.save();
   ctx.globalAlpha = h.protT > 0 ? alpha * (0.45 + 0.35 * Math.sin(t * 20)) : alpha; // мерехтить, поки діє захист після відновлення
-  ctx.translate(h.x, h.y);
+  ctx.translate(h.x, h.y - trenchLift(h));
   ctx.scale(h.facing, 1);
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   const C = humanCols(h);
+  if (h.dead && h.gibbed) { ctx.restore(); return; } // розірвало вибухом — шматки малюються як частинки
   if (h.dead) drawBodyDead(ctx, h, C);
   else if (h.stance === 'prone') drawBodyProne(ctx, h, t, C);
   else drawBodyUpright(ctx, h, t, C);
@@ -255,7 +262,7 @@ function drawBodyUpright(ctx, h, t, C) {
   let tilt = lean * 0.6;
   if (h.aiming && (gun || prop)) tilt = clamp(h.aimA * 0.45, -0.5, 0.3);
   if (h.onLadder) tilt = -0.25;
-  drawHead(ctx, rot(H, lean, 1.6, -TL - 6.6), tilt, C.team, { goggles: h.piloting });
+  drawHead(ctx, rot(H, lean, 1.6, -TL - 6.6), tilt, C.team, { goggles: h.piloting, mask: h.gasmask && !h.piloting });
   if (gun) drawGunAt(ctx, h.weapon.type, gun.B, gun.ang);
   if (prop) drawProp(ctx, h.carry, prop.x, prop.y + 6, h.aiming ? h.aimA : 0);
   if (extra) {
@@ -294,7 +301,7 @@ function drawBodyProne(ctx, h, t, C) {
   limb(ctx, L0, 5, C.pantsD); boot(ctx, L0[2], Math.PI / 2 + 0.3, HCOL.boot);
   ctx.save(); ctx.translate(H.x, H.y); ctx.rotate(lean); drawTorso(ctx, h, C, TL); ctx.restore();
   limb(ctx, L1, 5, C.pants); boot(ctx, L1[2], Math.PI / 2 + 0.3, HCOL.boot);
-  drawHead(ctx, rot(H, lean, 1.6, -TL - 6.4), h.aiming ? clamp(h.aimA * 0.5, -0.4, 0.1) - 0.15 : -0.2, C.team, {});
+  drawHead(ctx, rot(H, lean, 1.6, -TL - 6.4), h.aiming ? clamp(h.aimA * 0.5, -0.4, 0.1) - 0.15 : -0.2, C.team, { mask: h.gasmask });
   armTo(ctx, Sh, front, C.uni);
   if (gun) drawGunAt(ctx, h.weapon.type, gun.B, gun.ang); // приклад біля щоки
 }
@@ -303,14 +310,40 @@ function drawBodyProne(ctx, h, t, C) {
 function drawBodyDead(ctx, h, C) {
   const H = { x: 3, y: -5 }, lean = -1.5, TL = RIG.torso;
   const Sh = rot(H, lean, 1, -TL + 3);
+  const lost = h.lost, stump = (p, r) => { ctx.fillStyle = '#7a1a1a'; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill(); };
   armAngles(ctx, Sh, -1.75, -1.45, C.uniD);
   const legPts = (a1, a2) => { const k = seg(H, a1, RIG.thigh); return [H, k, seg(k, a2, RIG.shin)]; };
   const L0 = legPts(Math.PI / 2 - 0.35, Math.PI / 2 + 0.2), L1 = legPts(Math.PI / 2 - 0.12, Math.PI / 2 + 0.05);
   limb(ctx, L0, 5.4, C.pantsD); boot(ctx, L0[2], -1.2, '#2a2a2a');
   ctx.save(); ctx.translate(H.x, H.y); ctx.rotate(lean); drawTorso(ctx, h, C, TL); ctx.restore();
-  limb(ctx, L1, 5.4, C.pants); boot(ctx, L1[2], -1.3, '#2a2a2a');
-  drawHead(ctx, rot(H, lean, 1.6, -TL - 6.4), lean + 0.25, C.team, { dead: true });
-  armAngles(ctx, Sh, -1.4, -1.9, C.uni);
+  if (lost === 'leg') { stump(H, 3.4); ctx.fillStyle = 'rgba(110,20,20,0.6)'; ctx.beginPath(); ctx.ellipse(H.x + 10, H.y + 4, 9, 2.4, 0, 0, 7); ctx.fill(); }
+  else { limb(ctx, L1, 5.4, C.pants); boot(ctx, L1[2], -1.3, '#2a2a2a'); }
+  const hp = rot(H, lean, 1.6, -TL - 6.4);
+  if (lost === 'head') { stump(rot(H, lean, 1, -TL - 1), 3.6); ctx.fillStyle = 'rgba(110,20,20,0.6)'; ctx.beginPath(); ctx.ellipse(hp.x - 4, H.y + 4, 10, 2.4, 0, 0, 7); ctx.fill(); }
+  else drawHead(ctx, hp, lean + 0.25, C.team, { dead: true, mask: h.gasmask });
+  if (lost === 'arm') stump(Sh, 3); else armAngles(ctx, Sh, -1.4, -1.9, C.uni);
+}
+
+// ---- шматок тіла, що летить після вибуху ----
+function drawGib(ctx, p) {
+  const k = Math.min(1, p.life / 1.5); // наприкінці тьмяніє
+  ctx.save(); ctx.globalAlpha = k; ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.scale(p.facing || 1, 1);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (p.kind === 'head') drawHead(ctx, { x: 0, y: 0 }, 0, p.col, { dead: false });
+  else if (p.kind === 'torso') {
+    ctx.fillStyle = HCOL.line; roundRect(ctx, -7.2, -9, 14.4, 17, 4); ctx.fill();
+    ctx.fillStyle = HCOL.uni; roundRect(ctx, -6, -8, 12, 15, 3.4); ctx.fill();
+    ctx.fillStyle = HCOL.pack; roundRect(ctx, -11, -7, 5.4, 11, 2); ctx.fill();
+    ctx.fillStyle = HCOL.rig; ctx.fillRect(0.5, -5, 5, 8);
+    ctx.fillStyle = '#7a1a1a'; ctx.beginPath(); ctx.ellipse(0, 8, 5, 2.4, 0, 0, 7); ctx.fill();
+  } else if (p.kind === 'arm') {
+    limb(ctx, [{ x: -8, y: 0 }, { x: 0, y: 1 }, { x: 8, y: -1 }], 4.4, HCOL.uni); dot(ctx, { x: 8, y: -1 }, 2.2, HCOL.glove);
+    ctx.fillStyle = '#7a1a1a'; ctx.beginPath(); ctx.arc(-8, 0, 2.4, 0, 7); ctx.fill();
+  } else {
+    limb(ctx, [{ x: -10, y: 0 }, { x: 0, y: 1 }, { x: 10, y: 0 }], 5.4, HCOL.pants); boot(ctx, { x: 10, y: 0 }, 0, HCOL.boot);
+    ctx.fillStyle = '#7a1a1a'; ctx.beginPath(); ctx.arc(-10, 0, 2.8, 0, 7); ctx.fill();
+  }
+  ctx.restore();
 }
 
 // ---- людина в техніці: сидить ----

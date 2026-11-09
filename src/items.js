@@ -46,18 +46,33 @@ function dropCarry(h) {
   h.carry = null;
 }
 function throwAngle(h) { return h.aiming ? aimWorld(h) : h.facing > 0 ? -0.55 : Math.PI + 0.55; }
-function handPos(h) { return { x: h.x + h.facing * 8, y: h.y - HUMAN_DIM[h.stance].h * 0.82 }; }
+function handPos(h) { return { x: h.x + h.facing * 8, y: h.y - HUMAN_DIM[h.stance].h * 0.82 - trenchLift(h) }; }
+// чи можна зараз цілитися гранатою (затиснута кнопка гранати)
+function canGrenAim(h) { return h.grenades > 0 && !h.carry && !h.canister && !h.mount && !h.vehicle && h.grenadeCd <= 0; }
+// куди полетить граната: точки дуги (та сама фізика, що й у кидка)
+function grenadePath(h) {
+  const a = aimWorld(h), p = handPos(h), W = G.W, pts = [{ x: p.x, y: p.y }];
+  let x = p.x, y = p.y, vx = Math.cos(a) * GRENADE_SPD + h.vx * 0.3, vy = Math.sin(a) * GRENADE_SPD;
+  const dt = 1 / 60;
+  for (let i = 0; i < 150; i++) {
+    vy += THROW_G * dt; vx *= Math.exp(-0.15 * dt);
+    const nx = x + vx * dt, ny = y + vy * dt;
+    if (nx < 5 || nx > W.width - 5 || pointSolid(W, nx, ny, solidsNear(W, nx - 4, nx + 4))) { pts.push({ x, y, end: true }); return pts; }
+    x = nx; y = ny; if (i % 2) pts.push({ x, y });
+  }
+  pts.push({ x, y }); return pts;
+}
 function throwCarry(h) {
   const T = PROP_TYPES[h.carry], a = throwAngle(h), p = handPos(h);
   G.throws.push({ kind: 'prop', type: h.carry, x: p.x, y: p.y, vx: Math.cos(a) * T.spd + h.vx * 0.3, vy: Math.sin(a) * T.spd, rot: 0, spin: rand(-12, 12), owner: h });
   h.carry = null; h.fireCd = 0.35;
   Sfx.noise_(0.12, 0.08, 900, 'bandpass');
 }
-function throwGrenade(h) {
+function throwGrenade(h, ang) {
   if (h.grenades <= 0) { tipOnce(h, 'Гранат немає'); return; }
   if (h.canister || h.carry) { tipOnce(h, 'Руки зайняті'); return; }
   if (h.grenadeCd > 0) return;
-  const a = throwAngle(h), p = handPos(h);
+  const a = ang != null ? ang : throwAngle(h), p = handPos(h);
   h.grenades--; h.grenadeCd = 0.8;
   G.throws.push({ kind: 'grenade', x: p.x, y: p.y, vx: Math.cos(a) * GRENADE_SPD + h.vx * 0.3, vy: Math.sin(a) * GRENADE_SPD, rot: 0, spin: rand(-10, 10), fuse: GRENADE_FUSE, owner: h });
   feed(h.player.name + ': граната!', '#c9a227');
@@ -68,7 +83,11 @@ function hideAtPoint(x, y) {
   for (const sp of G.W.hides) {
     if (sp.ruined) continue;
     if (sp.type === 'pipe') {
-      for (const e of sp.exits) if (dist(x, y, e.tx, e.ty - 4) < 20) return { sp, e, x: e.tx, y: e.ty, name: sp.style === 'sewer' ? 'каналізацію' : 'тунель' };
+      for (const e of sp.exits) {
+        const nm = sp.style === 'sewer' ? 'каналізацію' : 'тунель';
+        if (rampOpen(e, x) && Math.abs(y - gAt(G.W, x)) < 16) { const p = tunExitPos(e, rampU(e, x)); return { sp, e, x: p.x, y: p.y, name: nm }; }
+        if (dist(x, y, e.tx, e.ty - 4) < 20) return { sp, e, x: e.tx, y: e.ty, name: nm };
+      }
     } else if (dist(x, y, sp.x, sp.y - 5) < 24) return { sp, x: sp.x, y: sp.y, name: sp.type === 'bunker' ? 'бліндаж' : 'нору' };
   }
   return null;
@@ -81,7 +100,7 @@ function grenadeInside(th) {
   G.blastBy = th.owner ? th.owner.player : null;
   for (const h of G.humans) {
     if (h.dead || h.hidden !== sp) continue;
-    if (sp.type === 'pipe' && dist(h.x, h.y, it.e.bx, it.e.by) > 170 && dist(h.x, h.y, it.e.tx, it.e.ty) > 120) continue;
+    if (sp.type === 'pipe' && dist(h.x, h.y, it.e.bx, it.e.by) > 170 && dist(h.x, h.y, it.x, it.y) > 120) continue;
     hurt(h, 120, 'blast');
   }
   G.blastBy = null;
@@ -114,7 +133,8 @@ function updateThrows(dt) {
     const th = G.throws[i];
     if (th.kind === 'grenade' && (th.fuse -= dt) <= 0) { G.throws.splice(i, 1); grenadeBlast(th); continue; }
     // граната, що котиться чи падає біля входу в схованку, залітає всередину
-    if (th.kind === 'grenade' && !th.inside && Math.hypot(th.vx, th.vy) < 380) {
+    th.age = (th.age || 0) + dt;
+    if (th.kind === 'grenade' && !th.inside && Math.hypot(th.vx, th.vy) < 380 && th.age > 0.35) {
       const into = hideAtPoint(th.x, th.y);
       if (into) {
         th.inside = into; th.rest = true; th.x = into.x; th.y = into.y;
@@ -330,7 +350,7 @@ function meleeTarget(h) {
   if (h.dead || h.hidden || h.vehicle || h.mount || h.canister) return null;
   let best = null, bd = MELEE_REACH;
   for (const o of G.humans) {
-    if (o === h || o.dead || o.saved || o.hidden || o.vehicle || !isTeam() || allyP(o.player, h.player)) continue;
+    if (o === h || o.dead || o.saved || covered(o) || o.vehicle || !isTeam() || allyP(o.player, h.player)) continue;
     const dx = Math.abs(o.x - h.x);
     if (dx < bd && Math.abs(o.y - h.y) < 30) { bd = dx; best = { kind: 'h', o }; }
   }
