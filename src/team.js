@@ -9,7 +9,10 @@ const TEAMS = [
   { name: 'Сині', gen: 'синіх', short: 'С', col: '#4f9bff', cols: ['#56ccf2', '#2f80ed'] },
   { name: 'Жовті', gen: 'жовтих', short: 'Ж', col: '#f2c94c', cols: ['#f2c94c', '#f2994a'] },
 ];
-const CAP_TIME = 15, CAP_DECAY = 0.5, HOLD_EVERY = 10, CAP_BONUS = 2;
+const CAP_TIME = 15, HOLD_EVERY = 10, CAP_BONUS = 2;
+const TEAM_HUMANS = 4, TEAM_DRONES = 3;      // мінімум у кожній команді (решту доповнюють боти)
+const BASE_ONLY = { rifle: 1, shotgun: 1, medkit: 1, grenade: 1, ammo: 1 }; // це лежить лише на базах
+const TEAM_BONUS = { armor: 0.6, reb: 0.4, detector: 0.7, shovel: 0.6 };
 
 function isTeam() { return !!G && G.mode === 'team'; }
 // однакова команда (для гравців); поза командним режимом — ніхто не союзник
@@ -20,17 +23,18 @@ function fwdDir(p) { return isTeam() && p.team === 1 ? -1 : 1; }
 function initTeam() {
   const W = G.W;
   G.teamPts = [0, 0]; G.holdT = HOLD_EVERY;
+  const B = W.baseB || [];
   G.objs = [
-    { kind: 'base', x: W.start.x, owner: 0, team: 0, capT: 0, capTeam: -1, n: [0, 0], name: 'база синіх', acc: 'базу синіх' },
-    { kind: 'base', x: W.start2.x, owner: 1, team: 1, capT: 0, capTeam: -1, n: [0, 0], name: 'база жовтих', acc: 'базу жовтих' },
+    { kind: 'base', ref: B[0], x: B[0] ? B[0].x + B[0].w / 2 : W.start.x, owner: 0, team: 0, capT: 0, capTeam: -1, n: [0, 0], name: 'база синіх', acc: 'базу синіх' },
+    { kind: 'base', ref: B[1], x: B[1] ? B[1].x + B[1].w / 2 : W.start2.x, owner: 1, team: 1, capT: 0, capTeam: -1, n: [0, 0], name: 'база жовтих', acc: 'базу жовтих' },
   ];
-  for (const b of W.backs) G.objs.push({ kind: 'bld', ref: b, x: b.x + b.w / 2, owner: -1, capT: 0, capTeam: -1, n: [0, 0], name: 'будівля', acc: 'будівлю' });
+  for (const b of W.backs) if (!b.base) G.objs.push({ kind: 'bld', ref: b, x: b.x + b.w / 2, owner: -1, capT: 0, capTeam: -1, n: [0, 0], name: 'будівля', acc: 'будівлю' });
   for (const sp of W.hides) if (sp.type === 'bunker' && !sp.basement) G.objs.push({ kind: 'bunker', ref: sp, x: sp.x, owner: -1, capT: 0, capTeam: -1, n: [0, 0], name: 'бліндаж', acc: 'бліндаж' });
   G.objs.sort((a, b) => a.x - b.x);
 }
 // чи людина «тримає» об'єкт
 function objHas(o, h) {
-  if (o.kind === 'bld') return bldUnder(h) === o.ref;
+  if (o.kind === 'bld' || (o.kind === 'base' && o.ref)) return bldUnder(h) === o.ref;
   if (o.kind === 'bunker') return h.hidden === o.ref || (!h.hidden && Math.abs(h.x - o.ref.x) < 40 && Math.abs(h.y - o.ref.y) < 30);
   return !h.hidden && Math.abs(h.x - o.x) < 80 && Math.abs(h.y - gAt(G.W, o.x)) < 50;
 }
@@ -55,8 +59,8 @@ function updateTeam(dt) {
       o.capT += dt * n[tm];
       if (o.capT >= CAP_TIME) captureObj(o, tm);
     } else if (!(n[0] && n[1])) {
-      o.capT = Math.max(0, o.capT - dt * CAP_DECAY);
-      if (o.capT <= 0) o.capTeam = -1;
+      // усі вийшли — прогрес захоплення втрачено
+      o.capT = 0; o.capTeam = -1;
     }
   }
   // утримання: +1 команді щодесять секунд за кожен об'єкт
@@ -128,6 +132,56 @@ function teamGoal(h) {
   return best;
 }
 
+// ---------- Учасники ----------
+// у кожній команді щонайменше TEAM_HUMANS людей і TEAM_DRONES дронів — бракує, доповнюємо ботами
+function fillTeams(slots) {
+  const out = slots.map((s, i) => Object.assign({}, s, { team: s.team === 1 ? 1 : s.team === 0 ? 0 : i % 2 }));
+  let k = 0;
+  for (const t of [0, 1]) for (const role of ['human', 'drone']) {
+    const need = (role === 'human' ? TEAM_HUMANS : TEAM_DRONES) - out.filter((s) => s.team === t && s.role === role).length;
+    for (let i = 0; i < need; i++) { k++; out.push({ bot: true, role, team: t, level: 1, scheme: 'fill' + k, name: 'Бот ' + TEAMS[t].short + k, color: TEAMS[t].col }); }
+  }
+  return out;
+}
+// зброя, набої, аптечки й гранати — лише на базах (стартовий запас; далі довозять НРК)
+function baseOnlyPickups() {
+  const W = G.W;
+  W.pickups = W.pickups.filter((p) => !BASE_ONLY[p.type]);
+  for (const t of [0, 1]) {
+    const bx = baseX(t);
+    for (const type of ['rifle', 'rifle', 'shotgun', 'ammo', 'medkit', 'grenade']) { const x = basePickupX(t); W.pickups.push({ type, x, y: gAt(W, x) }); }
+  }
+}
+// вільне місце для знахідки на першому поверсі бази (не впритул до інших)
+function basePickupX(t) {
+  const bx = baseX(t);
+  let x = bx;
+  for (let k = 0; k < 14; k++) {
+    x = bx + rand(-160, 160);
+    if (!G.W.pickups.some((p) => !p.taken && Math.abs(p.x - x) < 38)) break;
+  }
+  return x;
+}
+// ворожий дрон збито дроном (вибухом чи тараном)
+function droneDowned(e, by) {
+  if (!G.drones.includes(e)) return;
+  if (e.hp > 3) { e.hp -= 3; return; }
+  removeDrone(e);
+  G.stats.shotDown++;
+  feed(by.name + ' збив ворожий дрон (' + e.player.name + ')', TEAMS[by.team].col);
+  explosion(e.x, e.y, 30, 55);
+  by.score++;
+}
+function nearestEnemyDrone(d, r) {
+  let best = null, bd = r;
+  for (const e of G.drones) {
+    if (e === d || allyP(e.player, d.player) || e.onPad) continue;
+    const dd = dist(d.x, d.y, e.x, e.y);
+    if (dd < bd) { bd = dd; best = e; }
+  }
+  return best;
+}
+
 // ---------- Людина бере керування дроном ----------
 // Тільки у своїй будівлі, бліндажі чи на базі (там є точка злету). Після вибуху дрона — назад до людини.
 function pilotSpot(h) {
@@ -164,7 +218,7 @@ function endPilot(dp) {
 }
 
 // ---------- Підвіз: НРК везуть дрони й зброю на базу ----------
-const STOCK_START = 8, STOCK_MAX = 14, UGV_EVERY = 30, UGV_SPD = 110, UGV_HP = 100, UGV_DRONES = 4;
+const STOCK_START = 12, STOCK_MAX = 20, UGV_EVERY = 30, UGV_SPD = 110, UGV_HP = 100, UGV_DRONES = 6;
 function initSupply() {
   G.stock = [STOCK_START, STOCK_START];
   G.ugvs = [];
@@ -198,10 +252,10 @@ function deliverUgv(u) {
   const got = Math.min(UGV_DRONES, STOCK_MAX - G.stock[t]);
   G.stock[t] += got;
   // зброя й припаси біля бази (не більше 4 штук, щоб не завалити)
-  const near = W.pickups.filter((p) => !p.taken && Math.abs(p.x - bx) < 140).length;
-  for (let i = 0; i < 2 && near + i < 4; i++) {
-    const x = bx + rand(-90, 90);
-    W.pickups.push({ type: weighted({ rifle: 1, shotgun: 0.6, grenade: 1.2, medkit: 0.8 }), x, y: gAt(W, x) });
+  const near = W.pickups.filter((p) => !p.taken && Math.abs(p.x - bx) < 180).length;
+  for (let i = 0; i < 3 && near + i < 7; i++) {
+    const x = basePickupX(t);
+    W.pickups.push({ type: weighted({ rifle: 0.7, shotgun: 0.5, ammo: 1.5, grenade: 1, medkit: 1 }), x, y: gAt(W, x) });
   }
   feed('НРК ' + TEAMS[t].gen + ' доставив ' + got + ' дрони й зброю на базу', TEAMS[t].col);
   Sfx.tone(520, 0.12, 0.08);
@@ -242,7 +296,7 @@ function bldArea(b) {
   return a;
 }
 function checkCollapse(b) {
-  if (!b || b.ruined || !b.area0) return;
+  if (!b || b.ruined || !b.area0 || b.base) return; // база не падає
   if (bldArea(b) < b.area0 * COLLAPSE_AT) collapseBuilding(b);
 }
 function collapseBuilding(b) {

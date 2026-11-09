@@ -93,8 +93,14 @@ const FONT = (sz, w) => (w || 'bold') + ' ' + sz + 'px "Segoe UI", system-ui, sa
 
 function layoutViews(n, w, h) {
   if (n <= 3) return Array.from({ length: n }, (_, i) => ({ x: 0, y: Math.round((i * h) / n), w, h: Math.round(h / n) }));
-  const hw = Math.round(w / 2), hh = Math.round(h / 2);
-  return [{ x: 0, y: 0, w: hw, h: hh }, { x: hw, y: 0, w: w - hw, h: hh }, { x: 0, y: hh, w: hw, h: h - hh }, { x: hw, y: hh, w: w - hw, h: h - hh }];
+  // 4 — 2×2, 5–6 — 3×2, 7–8 — 4×2
+  const cols = n <= 4 ? 2 : n <= 6 ? 3 : 4, rows = 2, out = [];
+  for (let i = 0; i < n; i++) {
+    const c = i % cols, r = (i / cols) | 0;
+    const x0 = Math.round((c * w) / cols), x1 = Math.round(((c + 1) * w) / cols), y0 = Math.round((r * h) / rows), y1 = Math.round(((r + 1) * h) / rows);
+    out.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+  }
+  return out;
 }
 
 function renderGame(ctx, w, h, t) {
@@ -588,7 +594,7 @@ function drawLadder(ctx, l) {
   for (let y = l.bottom - 10; y > l.top - 4; y -= 14) { ctx.moveTo(l.x - 9, y); ctx.lineTo(l.x + 9, y); }
   ctx.stroke();
 }
-const PICKUP_STYLE = { rifle: ['#3b4a2f', 'АК'], shotgun: ['#5a3d24', 'ДР'], reb: ['#5b3b8a', 'РЕБ'], medkit: ['#e8e8e8', '+'], fuel: ['#a8322d', 'ПАЛ'], armor: ['#4a5568', 'БР'], detector: ['#22625c', 'ДЕТ'], pack: ['#6b5a3a', 'РЮК'], shovel: ['#7a5a32', 'ЛОП'], grenade: ['#4d5a2a', 'ГРН'] };
+const PICKUP_STYLE = { rifle: ['#3b4a2f', 'АК'], shotgun: ['#5a3d24', 'ДР'], reb: ['#5b3b8a', 'РЕБ'], medkit: ['#e8e8e8', '+'], fuel: ['#a8322d', 'ПАЛ'], armor: ['#4a5568', 'БР'], detector: ['#22625c', 'ДЕТ'], pack: ['#6b5a3a', 'РЮК'], shovel: ['#7a5a32', 'ЛОП'], grenade: ['#4d5a2a', 'ГРН'], ammo: ['#6b5d2a', 'НАБ'] };
 // маскувальна сітка: зелено-коричнева сітка з «листям»
 function drawNet(ctx, x, y, w, h, seed, light) {
   ctx.save();
@@ -774,7 +780,7 @@ function drawLaunchMap(ctx, vw, vh, dp, c, t) {
   if (G.mode === 'team') {
     // прапори об'єктів у кольорах команд
     for (const o of G.objs) {
-      const fx = sx(o.x), fy = sy(o.kind === 'bld' ? o.ref.y : gAt(W, o.x)) - 2;
+      const fx = sx(o.x), fy = sy(o.kind === 'bld' || (o.kind === 'base' && o.ref) ? o.ref.y : gAt(W, o.x)) - 2;
       ctx.strokeStyle = '#ddd'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx, fy - 12); ctx.stroke();
       ctx.fillStyle = o.owner >= 0 ? TEAMS[o.owner].col : '#888'; ctx.fillRect(fx, fy - 12, 7, 5);
       if (o.kind === 'base') { ctx.fillStyle = TEAMS[o.team].col; ctx.fillText('БАЗА ' + TEAMS[o.team].short, fx, fy + 12); }
@@ -1099,10 +1105,10 @@ function drawHumanHud(ctx, vp, p, t) {
     if (o && !h.dead) {
       if (o.capT > 0 && o.capTeam >= 0) {
         const k = o.capT / CAP_TIME, mine = o.capTeam === tm;
-        centerText(ctx, (mine ? 'ЗАХОПЛЕННЯ: ' : 'ВОРОГ ЗАХОПЛЮЄ: ') + Math.round(k * 100) + '%' + (o.n[0] && o.n[1] ? ' — тут вороги!' : ''), vw / 2, 150, 20, TEAMS[o.capTeam].col);
-        bar(ctx, vw / 2 - 110, 160, 220, 9, k, TEAMS[o.capTeam].col);
-      } else if (o.n[0] && o.n[1]) centerText(ctx, 'Тут вороги — захоплення стоїть', vw / 2, 150, 18, '#f2994a');
-      else if (o.owner === tm) centerText(ctx, 'Тут ваш прапор', vw / 2, 150, 15, TEAMS[tm].col);
+        centerText(ctx, (mine ? 'ЗАХОПЛЕННЯ: ' : 'ВОРОГ ЗАХОПЛЮЄ: ') + Math.round(k * 100) + '%' + (o.n[0] && o.n[1] ? ' — тут вороги!' : ''), vw / 2, vh - 82, 20, TEAMS[o.capTeam].col);
+        bar(ctx, vw / 2 - 110, vh - 72, 220, 9, k, TEAMS[o.capTeam].col);
+      } else if (o.n[0] && o.n[1]) centerText(ctx, 'Тут вороги — захоплення стоїть', vw / 2, vh - 82, 18, '#f2994a');
+      else if (o.owner === tm) centerText(ctx, 'Тут ваш прапор', vw / 2, vh - 82, 15, TEAMS[tm].col);
     }
   } else {
     const dleft = Math.max(0, (G.W.shelter.x - h.x) / 10) | 0;
@@ -1392,6 +1398,7 @@ function drawObjFlag(ctx, o, t) {
   let x, y, hgt = 34;
   if (o.kind === 'bld') { x = o.ref.x + o.ref.w - 22; y = o.ref.y - 14; }
   else if (o.kind === 'bunker') { x = o.ref.x + 34; y = o.ref.y; hgt = 30; }
+  else if (o.ref) { x = o.ref.x + o.ref.w - 30; y = o.ref.y - 14; hgt = 50; }
   else { x = o.x; y = gAt(G.W, o.x); hgt = 70; }
   if (o.owner >= 0) {
     const col = TEAMS[o.owner].col, wv = Math.sin(t * 4 + x) * 2;
