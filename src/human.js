@@ -80,16 +80,11 @@ function gunPoint(B, ang, u, v) { return { x: B.x + Math.cos(ang) * u - Math.sin
 // ---- голова з шоломом (центр голови, нахил) ----
 function drawHead(ctx, c, tilt, team, opts) {
   ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(tilt);
+  if (hspHead(ctx, team)) { drawFaceGear(ctx, opts); ctx.restore(); return; }
   dot(ctx, { x: 0, y: 0 }, 5.2, HCOL.skin);
   ctx.fillStyle = HCOL.skin; ctx.beginPath(); ctx.arc(5.2, 1.2, 1.5, 0, 7); ctx.fill(); // ніс
   ctx.fillStyle = HCOL.line; ctx.fillRect(2.4, -0.4, 1.6, 1.6);                       // око
-  if (opts.mask) {
-    // протигаз: гумова маска, скельце, фільтр біля рота
-    ctx.fillStyle = '#2f3a38'; ctx.beginPath(); ctx.ellipse(2.6, 1, 4.2, 4.6, 0, 0, 7); ctx.fill();
-    ctx.fillStyle = '#9fd3c7'; ctx.beginPath(); ctx.arc(3.4, -0.6, 1.4, 0, 7); ctx.fill();
-    ctx.fillStyle = '#4b5a57'; roundRect(ctx, 4.6, 2.2, 3.4, 3.8, 1); ctx.fill();
-  }
-  if (opts.goggles) { ctx.fillStyle = '#111'; roundRect(ctx, 0.5, -1.6, 5.6, 3.2, 1.2); ctx.fill(); ctx.fillStyle = '#5ad1c4'; ctx.fillRect(3.6, -0.8, 1.6, 1.4); }
+  drawFaceGear(ctx, opts);
   // шолом із чохлом і смугою кольору гравця
   ctx.fillStyle = HCOL.line; ctx.beginPath(); ctx.arc(-0.4, -0.6, 7.6, Math.PI * 0.93, Math.PI * 2.07); ctx.closePath(); ctx.fill();
   ctx.fillStyle = opts.dead ? '#555' : HCOL.helm; ctx.beginPath(); ctx.arc(-0.4, -0.6, 6.6, Math.PI * 0.95, Math.PI * 2.05); ctx.closePath(); ctx.fill();
@@ -99,8 +94,17 @@ function drawHead(ctx, c, tilt, team, opts) {
   ctx.restore();
 }
 
+function drawFaceGear(ctx, opts) {
+  if (opts.mask) {
+    ctx.fillStyle = '#2f3a38'; ctx.beginPath(); ctx.ellipse(2.6, 1, 4.2, 4.6, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#9fd3c7'; ctx.beginPath(); ctx.arc(3.4, -0.6, 1.4, 0, 7); ctx.fill();
+    ctx.fillStyle = '#4b5a57'; roundRect(ctx, 4.6, 2.2, 3.4, 3.8, 1); ctx.fill();
+  }
+  if (opts.goggles) { ctx.fillStyle = '#111'; roundRect(ctx, 0.5, -1.6, 5.6, 3.2, 1.2); ctx.fill(); ctx.fillStyle = '#5ad1c4'; ctx.fillRect(3.6, -0.8, 1.6, 1.4); }
+}
 // ---- тулуб у локальних координатах (стегна — 0,0; вгору — -y) ----
 function drawTorso(ctx, h, C, len) {
+  if (hspTorso(ctx, len)) return;
   // рюкзак ззаду
   ctx.fillStyle = HCOL.line; roundRect(ctx, -12.6, -len + 1.4, 8.2, 14.6, 3); ctx.fill();
   ctx.fillStyle = HCOL.pack; roundRect(ctx, -11.6, -len + 2.4, 6.2, 12.6, 2.4); ctx.fill();
@@ -124,13 +128,17 @@ function drawTorso(ctx, h, C, len) {
 // ---- руки: дальня (за тілом) і ближня ----
 function armTo(ctx, sh, target, col, gloveCol) {
   const r = ik2(sh, target, RIG.upper, RIG.fore, -1);
-  limb(ctx, [sh, r.j, r.e], 4.6, col);
-  dot(ctx, r.e, 2.3, gloveCol || HCOL.glove);
+  if (!hspLimb(ctx, [sh, r.j, r.e], col === HSP.far ? 'armF' : 'armN')) { limb(ctx, [sh, r.j, r.e], 4.6, col); dot(ctx, r.e, 2.3, gloveCol || HCOL.glove); }
   return r;
 }
 function armAngles(ctx, sh, a1, a2, col) {
   const el = seg(sh, a1, RIG.upper), hd = seg(el, a2, RIG.fore);
-  limb(ctx, [sh, el, hd], 4.6, col); dot(ctx, hd, 2.3, HCOL.glove);
+  if (!hspLimb(ctx, [sh, el, hd], col === HSP.far ? 'armF' : 'armN')) { limb(ctx, [sh, el, hd], 4.6, col); dot(ctx, hd, 2.3, HCOL.glove); }
+}
+// нога з черевиком: спрайти, якщо аркуш готовий, інакше — вектор
+function legBoot(ctx, L, w, col, ang, far, bootCol) {
+  if (hspLimb(ctx, L, far ? 'legF' : 'legN')) { hspBoot(ctx, L[2], ang, far); return; }
+  limb(ctx, L, w, col); boot(ctx, L[2], ang, bootCol || HCOL.boot);
 }
 
 // =============== головне малювання ===============
@@ -141,6 +149,7 @@ function drawHuman(ctx, h, t, alpha) {
   ctx.scale(h.facing, 1);
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   const C = humanCols(h);
+  hspBegin(h, C); ctx.imageSmoothingQuality = 'high';
   if (h.dead && h.gibbed) { ctx.restore(); return; } // розірвало вибухом — шматки малюються як частинки
   if (h.dead) drawBodyDead(ctx, h, C);
   else if (h.stance === 'prone') drawBodyProne(ctx, h, t, C);
@@ -251,14 +260,13 @@ function drawBodyUpright(ctx, h, t, C) {
   else if (!front || h.canister) armAngles(ctx, ShB, swing(Math.PI) - (crouch ? 0.2 : 0), swing(Math.PI) + 0.35 + 0.3 * sp, C.uniD);
   const legPts = (l) => { const k = seg(H, l.t, RIG.thigh); return [H, k, seg(k, l.s, RIG.shin)]; };
   const L0 = legPts(legs[0]), L1 = legPts(legs[1]);
-  limb(ctx, L0, 5.6, C.pantsD); boot(ctx, L0[2], h.onLadder ? 0 : Math.min(0.5, Math.max(-0.4, legs[0].s * 0.4)), HCOL.boot);
+  legBoot(ctx, L0, 5.6, C.pantsD, h.onLadder ? 0 : Math.min(0.5, Math.max(-0.4, legs[0].s * 0.4)), true);
   ctx.save(); ctx.translate(H.x, H.y); ctx.rotate(lean);
   if (gunBack && h.weapon) { ctx.save(); ctx.translate(-9, -TL + 2); ctx.rotate(1.15); drawGunShape(ctx, h.weapon.type); ctx.restore(); } // зброя за спиною
   drawTorso(ctx, h, C, TL);
   ctx.restore();
-  limb(ctx, L1, 5.6, C.pants); boot(ctx, L1[2], h.onLadder ? 0 : Math.min(0.5, Math.max(-0.4, legs[1].s * 0.4)), HCOL.boot);
-  // наколінник
-  ctx.fillStyle = HCOL.rigD; ctx.beginPath(); ctx.arc(L1[1].x + 1, L1[1].y, 2.2, 0, 7); ctx.fill();
+  legBoot(ctx, L1, 5.6, C.pants, h.onLadder ? 0 : Math.min(0.5, Math.max(-0.4, legs[1].s * 0.4)), false);
+  if (!HSP.ready) { ctx.fillStyle = HCOL.rigD; ctx.beginPath(); ctx.arc(L1[1].x + 1, L1[1].y, 2.2, 0, 7); ctx.fill(); } // наколінник
   let tilt = lean * 0.6;
   if (h.aiming && (gun || prop)) tilt = clamp(h.aimA * 0.45, -0.5, 0.3);
   if (h.onLadder) tilt = -0.25;
@@ -298,9 +306,9 @@ function drawBodyProne(ctx, h, t, C) {
   // дальня рука збоку не видна (лише без зброї — спирається на землю)
   if (!gun) armTo(ctx, { x: Sh.x - 0.5, y: Sh.y + 0.5 }, back, C.uniD);
   const L0 = legPts(legs[0]), L1 = legPts(legs[1]);
-  limb(ctx, L0, 5, C.pantsD); boot(ctx, L0[2], Math.PI / 2 + 0.3, HCOL.boot);
+  legBoot(ctx, L0, 5, C.pantsD, Math.PI / 2 + 0.3, true);
   ctx.save(); ctx.translate(H.x, H.y); ctx.rotate(lean); drawTorso(ctx, h, C, TL); ctx.restore();
-  limb(ctx, L1, 5, C.pants); boot(ctx, L1[2], Math.PI / 2 + 0.3, HCOL.boot);
+  legBoot(ctx, L1, 5, C.pants, Math.PI / 2 + 0.3, false);
   drawHead(ctx, rot(H, lean, 1.6, -TL - 6.4), h.aiming ? clamp(h.aimA * 0.5, -0.4, 0.1) - 0.15 : -0.2, C.team, { mask: h.gasmask });
   armTo(ctx, Sh, front, C.uni);
   if (gun) drawGunAt(ctx, h.weapon.type, gun.B, gun.ang); // приклад біля щоки
@@ -314,10 +322,10 @@ function drawBodyDead(ctx, h, C) {
   armAngles(ctx, Sh, -1.75, -1.45, C.uniD);
   const legPts = (a1, a2) => { const k = seg(H, a1, RIG.thigh); return [H, k, seg(k, a2, RIG.shin)]; };
   const L0 = legPts(Math.PI / 2 - 0.35, Math.PI / 2 + 0.2), L1 = legPts(Math.PI / 2 - 0.12, Math.PI / 2 + 0.05);
-  limb(ctx, L0, 5.4, C.pantsD); boot(ctx, L0[2], -1.2, '#2a2a2a');
+  legBoot(ctx, L0, 5.4, C.pantsD, -1.2, true, '#2a2a2a');
   ctx.save(); ctx.translate(H.x, H.y); ctx.rotate(lean); drawTorso(ctx, h, C, TL); ctx.restore();
   if (lost === 'leg') { stump(H, 3.4); ctx.fillStyle = 'rgba(110,20,20,0.6)'; ctx.beginPath(); ctx.ellipse(H.x + 10, H.y + 4, 9, 2.4, 0, 0, 7); ctx.fill(); }
-  else { limb(ctx, L1, 5.4, C.pants); boot(ctx, L1[2], -1.3, '#2a2a2a'); }
+  else legBoot(ctx, L1, 5.4, C.pants, -1.3, false, '#2a2a2a');
   const hp = rot(H, lean, 1.6, -TL - 6.4);
   if (lost === 'head') { stump(rot(H, lean, 1, -TL - 1), 3.6); ctx.fillStyle = 'rgba(110,20,20,0.6)'; ctx.beginPath(); ctx.ellipse(hp.x - 4, H.y + 4, 10, 2.4, 0, 0, 7); ctx.fill(); }
   else drawHead(ctx, hp, lean + 0.25, C.team, { dead: true, mask: h.gasmask });
@@ -326,6 +334,7 @@ function drawBodyDead(ctx, h, C) {
 
 // ---- шматок тіла, що летить після вибуху ----
 function drawGib(ctx, p) {
+  HSP.v = 'n';
   const k = Math.min(1, p.life / 1.5); // наприкінці тьмяніє
   ctx.save(); ctx.globalAlpha = k; ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.scale(p.facing || 1, 1);
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -352,13 +361,14 @@ function drawRider(ctx, v, h) {
   const off = h.seat === 'gunner' ? -T.len * 0.15 : T.len * 0.05;
   const x = v.x + off * v.dir, y = v.y - (v.type === 'car' ? T.h - 6 : T.h - 4);
   const C = humanCols(h);
+  hspBegin(h, C);
   ctx.save(); ctx.translate(x, y); ctx.scale(v.dir, 1); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   const H = { x: 0, y: 0 }, lean = h.seat === 'gunner' ? 0.05 : 0.18, TL = RIG.torso;
   const Sh = rot(H, lean, 1, -TL + 3);
   const tgt = h.seat === 'gunner' ? { x: -T.len * 0.15 * 0 + 9, y: -T.h * 0 - 16 } : { x: 13, y: -8 };
   armTo(ctx, { x: Sh.x - 1, y: Sh.y + 0.5 }, { x: tgt.x - 3, y: tgt.y + 1 }, C.uniD);
   const k = seg(H, Math.PI / 2 - 0.15, RIG.thigh), a = seg(k, 0.15, RIG.shin * 0.8);
-  limb(ctx, [H, k, a], 5.6, C.pants); boot(ctx, a, 0, HCOL.boot);
+  legBoot(ctx, [H, k, a], 5.6, C.pants, 0, false);
   ctx.save(); ctx.translate(H.x, H.y); ctx.rotate(lean); drawTorso(ctx, h, C, TL); ctx.restore();
   drawHead(ctx, rot(H, lean, 1.6, -TL - 6.6), lean * 0.5, C.team, {});
   armTo(ctx, Sh, tgt, C.uni);
