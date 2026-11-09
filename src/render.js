@@ -161,6 +161,7 @@ function renderView(ctx, vp, p, t) {
   const netHidden = (sp) => sp.net && isDrone && !droneHovering(drone, sp.x, sp.y - 10);
   for (const sp of W.hides) if (sp.type !== 'pipe' && inX(sp.x - 40, sp.x + 40) && !netHidden(sp)) drawHideBack(ctx, sp);
   drawGround(ctx, W, x0, x1, cy + viewH + 20, theme);
+  for (const r of W.rocks || []) if (inX(r.a - 20, r.b + 20)) drawRock(ctx, r, W);
   for (const sp of W.hides) if (sp.type === 'pipe' && inX(sp.a - 330, sp.b + 330)) drawTunnel(ctx, sp, W);
   for (const sp of W.hides) if (sp.type !== 'pipe' && inX(sp.x - 40, sp.x + 40) && !netHidden(sp)) { drawHideFront(ctx, sp); if (sp.net) drawNet(ctx, sp.x - 30, sp.y - (sp.type === 'bunker' ? 36 : 16), 60, sp.type === 'bunker' ? 36 : 16, sp.x); }
   for (const d of W.decor) if (d.type !== 'road' && inX(d.x - 20, d.x + 80)) drawDecor(ctx, d, W);
@@ -177,7 +178,7 @@ function renderView(ctx, vp, p, t) {
   // люди
   for (const h of G.humans) {
     if (!inX(h.x - 40, h.x + 40) || h.saved) continue;
-    if (h.hidden) {
+    if (h.hidden && !inMouth(h)) {
       if (h.hideAnim) drawHideAnim(ctx, h, t);          // заповзає в нору / заходить у бліндаж
       else if (h.peek && (!isDrone || humanVisibleToDrone(h, drone))) drawPeek(ctx, h, !isDrone);
       else if (G.mode === 'team' ? allyP(h.player, p) : !isDrone) drawHiddenMark(ctx, h, t); // свої бачать, де він сидить
@@ -216,8 +217,19 @@ function renderView(ctx, vp, p, t) {
     ctx.beginPath(); ctx.ellipse(bm.x, bm.y, 3.5, 5, Math.atan2(bm.vy, bm.vx) - Math.PI / 2, 0, 7); ctx.fill();
   }
   if (!isDrone) for (const h of G.humans) {
-    if (!h.aiming || h.dead || h.saved || (h.hidden && !h.peek)) continue;
+    if (!h.aiming || h.dead || h.saved || (h.hidden && !h.peek && !inMouth(h))) continue;
     if (h.vehicle && h.seat !== 'gunner') continue;
+    if (h.grenAim) {
+      // граната: пунктирна дуга до місця падіння
+      const pts = grenadePath(h);
+      ctx.strokeStyle = h.player.color; ctx.globalAlpha = 0.8; ctx.lineWidth = 2.2; ctx.setLineDash([5, 6]);
+      ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.stroke();
+      ctx.setLineDash([]);
+      const e = pts[pts.length - 1];
+      ctx.beginPath(); ctx.arc(e.x, e.y - 2, 7, 0, 7); ctx.stroke();
+      ctx.globalAlpha = 1;
+      continue;
+    }
     let mx, my;
     if (h.peek) { const m = burrowMuzzle(h); mx = m.x; my = m.y; }
     else if (h.mount) { const m = mountMuzzle(h); mx = m.x; my = m.y; }
@@ -395,6 +407,26 @@ function drawHideFront(ctx, sp) {
   }
 }
 // тунель у розрізі: виритий окоп під землею з кріпленням або бетонний колектор
+// камінь у ґрунті (видно в розрізі), кілька каменів визирають на поверхню
+function drawRock(ctx, r, W) {
+  const n = 14, cx = (r.a + r.b) / 2, rx = (r.b - r.a) / 2;
+  const g = gAt(W, cx), cy = g + r.top + r.h / 2, ry = r.h / 2;
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2, k = 0.86 + 0.1 * Math.sin(r.seed * 50 + i * 1.1) + 0.04 * Math.sin(i * 3.3 + r.seed * 20);
+    pts.push({ x: cx + Math.cos(a) * rx * k, y: Math.max(g + 3, cy + Math.sin(a) * ry * k) });
+  }
+  ctx.fillStyle = '#5d5f5c'; ctx.strokeStyle = '#2b2c2a'; ctx.lineWidth = 2;
+  ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = '#7b7d79'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(cx - rx * 0.5, cy - ry * 0.2); ctx.lineTo(cx - rx * 0.1, cy + ry * 0.1); ctx.lineTo(cx + rx * 0.3, cy - ry * 0.25);
+  ctx.moveTo(cx + rx * 0.1, cy + ry * 0.45); ctx.lineTo(cx + rx * 0.45, cy + ry * 0.2); ctx.stroke();
+  for (let i = 0; i < 3; i++) {
+    const x = r.a + (r.b - r.a) * (0.2 + 0.3 * i) + Math.sin(r.seed * 9 + i) * 6, y = gAt(W, x), s = 5 + ((r.seed * 13 + i * 3) % 4);
+    ctx.fillStyle = '#6e706c'; ctx.strokeStyle = '#2b2c2a'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.ellipse(x, y + 1, s * 1.4, s, 0, Math.PI, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+}
 function drawTunnel(ctx, sp, W) {
   const sewer = sp.style === 'sewer', H = tunH(sp);
   const fl = (x) => tunFloor(W, sp, x);
@@ -594,7 +626,7 @@ function drawLadder(ctx, l) {
   for (let y = l.bottom - 10; y > l.top - 4; y -= 14) { ctx.moveTo(l.x - 9, y); ctx.lineTo(l.x + 9, y); }
   ctx.stroke();
 }
-const PICKUP_STYLE = { rifle: ['#3b4a2f', 'АК'], shotgun: ['#5a3d24', 'ДР'], reb: ['#5b3b8a', 'РЕБ'], medkit: ['#e8e8e8', '+'], fuel: ['#a8322d', 'ПАЛ'], armor: ['#4a5568', 'БР'], detector: ['#22625c', 'ДЕТ'], pack: ['#6b5a3a', 'РЮК'], shovel: ['#7a5a32', 'ЛОП'], grenade: ['#4d5a2a', 'ГРН'], ammo: ['#6b5d2a', 'НАБ'] };
+const PICKUP_STYLE = { rifle: ['#3b4a2f', 'АК'], shotgun: ['#5a3d24', 'ДР'], reb: ['#5b3b8a', 'РЕБ'], medkit: ['#e8e8e8', '+'], fuel: ['#a8322d', 'ПАЛ'], armor: ['#4a5568', 'БР'], detector: ['#22625c', 'ДЕТ'], pack: ['#6b5a3a', 'РЮК'], shovel: ['#7a5a32', 'ЛОП'], grenade: ['#4d5a2a', 'ГРН'], gasmask: ['#3f5552', 'ПРГ'], ammo: ['#6b5d2a', 'НАБ'] };
 // маскувальна сітка: зелено-коричнева сітка з «листям»
 function drawNet(ctx, x, y, w, h, seed, light) {
   ctx.save();
@@ -936,6 +968,7 @@ function drawParticles(ctx, x0, x1) {
       case 'tracer': ctx.strokeStyle = 'rgba(255,225,120,' + k + ')'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x2, p.y2); ctx.stroke(); break;
       case 'leaf': ctx.fillStyle = 'rgba(70,100,40,' + Math.min(1, k * 2) + ')'; ctx.fillRect(p.x - 2, p.y - 1.5, 4, 3); break;
       case 'gun': ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.fillStyle = '#222'; ctx.fillRect(-10, -2, 20, 4); ctx.restore(); break;
+      case 'gib': drawGib(ctx, p); break;
     }
   }
 }
@@ -971,6 +1004,7 @@ function drawHumanHud(ctx, vp, p, t) {
   ctx.fillText('Рюкзак: ' + packUsed(h) + '/' + PACK_CAP, 16, 181);
   if (h.detector) { ctx.fillStyle = '#5ad1c4'; ctx.fillText('ДЕТЕКТОР', 110, 181); }
   if (h.shovel > 0) { ctx.fillStyle = '#c8a26a'; ctx.fillText('Лопата ' + h.shovel.toFixed(1) + ' м', h.detector ? 186 : 110, 181); }
+  if (h.gasmask) { ctx.fillStyle = '#9fd3c7'; ctx.fillText('ПРОТИГАЗ', 16, 199); }
   ctx.fillStyle = '#fff';
   ctx.fillText((G.mode !== 'escape' ? 'Рахунок: ' + p.score : 'Життя: ' + '♥'.repeat(Math.max(0, h.lives)) + '♡'.repeat(Math.max(0, HUMAN_LIVES - h.lives))) + '  Сітки: ' + h.nets + '  Гранати: ' + h.grenades + ' [' + c.label('slot3') + ']', 16, 163);
   bar(ctx, 16, 34, 194, 11, h.hp / 100, h.hp > 35 ? '#6fcf97' : '#eb5757');
@@ -999,7 +1033,7 @@ function drawHumanHud(ctx, vp, p, t) {
     bar(ctx, 70, 99, 150, 10, v.fuel / tank, v.fuel / tank > 0.25 ? '#f2c94c' : '#eb5757');
   } else if (h.weapon && !h.vehicle) {
     ctx.fillStyle = h.aiming ? '#6fcf97' : '#ccc';
-    ctx.fillText(h.aiming ? 'ПОЗИЦІЯ ' + Math.round(-h.aimA * 57) + '° · ' + STANCE_ACC[h.peek ? h.hidden.type : h.stance] + (inTrench(h) ? ' · з окопу — лише вгору' : '') : 'Тримай [' + c.label('aim') + '] — позиція', 16, 108);
+    ctx.fillText(h.grenAim ? 'ГРАНАТА ' + Math.round(-h.aimA * 57) + '° — відпусти [' + c.label('slot3') + '], щоб кинути' : h.aiming ? 'ПОЗИЦІЯ ' + Math.round(-h.aimA * 57) + '° · ' + STANCE_ACC[h.peek ? h.hidden.type : h.stance] + (inTrench(h) ? ' · з окопу' : '') : 'Тримай [' + c.label('aim') + '] — позиція', 16, 108);
   }
   // дим: відлік до отруєння
   if (h.hidden && h.smokeT > 0 && !h.dead) {
@@ -1034,9 +1068,9 @@ function drawHumanHud(ctx, vp, p, t) {
   }
   // відкрита місцевість
   if (!h.dead && !h.saved) {
-    if (h.hidden || humanConcealed(h)) {
+    if (covered(h) || humanConcealed(h)) {
       ctx.textAlign = 'right'; ctx.fillStyle = '#8fd'; ctx.font = FONT(12);
-      ctx.fillText(h.hidden ? 'СХОВАНИЙ' : 'МАСКУВАННЯ', vw - 16, 56);
+      ctx.fillText(covered(h) ? 'СХОВАНИЙ' : 'МАСКУВАННЯ', vw - 16, 56);
     } else {
       const k = h.openTime / OPEN_TIME;
       bar(ctx, vw - 178, 46, 170, 8, k, k >= 1 ? '#eb5757' : '#f2994a');
@@ -1131,7 +1165,7 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
     ctx.stroke();
     // стрілки на людей, що довго на відкритому
     for (const h of G.humans) {
-      if (h.dead || h.saved || h.hidden || h.openTime < OPEN_TIME || allyP(h.player, p)) continue;
+      if (h.dead || h.saved || covered(h) || h.openTime < OPEN_TIME || allyP(h.player, p)) continue;
       const hs = toScreen(h.x, h.y - 25);
       const m = 34;
       const onScreen = hs.x > vp.x + m && hs.x < vp.x + vp.w - m && hs.y > vp.y + m && hs.y < vp.y + vp.h - m;
@@ -1248,10 +1282,14 @@ function drawControlsBar(ctx, vw, items, left, right) {
 }
 function tunnelTip(h, c) {
   const L = (a) => '[' + c.label(a) + ']', sp = h.hidden, T = h.tun;
-  if (T.ex >= 0) return L('up') + L('down') + ' по виходу   ' + (T.u > 0.75 ? L('interact') + ' вилізти' : '');
+  if (T.ex >= 0) {
+    const ramp = sp.exits[T.ex].kind === 'ramp';
+    return (ramp ? L('left') + L('right') + ' спуском' : L('up') + L('down') + ' драбиною') + (inMouth(h) ? '   ' + L('aim') + '+' + L('fire') + ' вогонь з отвору   ' + L('slot3') + ' граната' : '');
+  }
   const atExit = sp.exits.some((e) => Math.abs(e.bx - h.x) < 14);
   let s = L('left') + L('right') + ' іти тунелем' + (atExit ? '   ' + L('up') + ' до виходу' : '');
-  if (h.shovel > 0) s += (atExit ? '' : '   ' + L('up') + ' прокопати вихід') + '   на краю ' + L('down') + '+' + L('left') + L('right') + ' копати далі';
+  const atEdge = (h.facing < 0 && h.x <= sp.a + 3) || (h.facing > 0 && h.x >= sp.b - 3);
+  if (h.shovel > 0) s += (atEdge && !atExit ? '   ' + L('up') + ' пологий вихід' : atExit ? '' : '   ' + L('up') + ' лаз із драбиною') + '   на краю ' + L('down') + '+' + L('left') + L('right') + ' копати далі';
   return s;
 }
 function humanControls(h, c) {

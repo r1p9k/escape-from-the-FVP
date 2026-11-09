@@ -55,7 +55,7 @@ function botShootTarget(h, drone, td, L) {
   if (!isTeam()) return null;
   let best = null, bd = range * 0.75;
   for (const o of G.humans) {
-    if (o.dead || o.saved || o.hidden || o.vehicle || allyP(o.player, h.player)) continue;
+    if (o.dead || o.saved || covered(o) || o.vehicle || allyP(o.player, h.player)) continue;
     const dd = dist(h.x, h.y - 30, o.x, o.y - 25);
     if (dd < bd && Math.abs(o.x - h.x) > 30 && lineOfSight(G.W, h.x, h.y - 34, o.x, o.y - 25)) { bd = dd; best = o; }
   }
@@ -118,6 +118,17 @@ function thinkHuman(b, s, dt) {
       m.hideT = 0;
       return;
     }
+    // з відкритого виходу тунелю — стріляти по дрону чи ворогу
+    const mt = sp.type === 'pipe' && inMouth(h) && h.weapon && h.weapon.mag > 0 ? botShootTarget(h, visibleThreat ? threat : null, td, L) : null;
+    if (mt) {
+      const mz = muzzle(h), a = botAim(b, mz.x, mz.y, mt, WEAPONS[h.weapon.type].speed);
+      if (aimRel(a) < 0.15) {
+        s.aim = true; s.aimAngle = a; m.aimT += dt;
+        if (m.aimT > 0.35 - 0.15 * L.react) s.fire = true;
+        m.hideT = 0;
+        return;
+      }
+    }
     m.aimT = 0;
     // охорона й захоплення: сидіти в тунелі, поки він не наш (або тут тривога)
     const atO = isTeam() ? objAt(h) : null;
@@ -126,7 +137,8 @@ function thinkHuman(b, s, dt) {
       // тунелем — до найдальшого вперед виходу, там вилізти, коли тихо
       const T = h.tun;
       let ti = 0;
-      sp.exits.forEach((e, i) => { if ((e.tx - sp.exits[ti].tx) * fwdDir(b.p) > 0) ti = i; });
+      const gd = m.goDir || fwdDir(b.p);
+      sp.exits.forEach((e, i) => { if ((e.tx - sp.exits[ti].tx) * gd > 0) ti = i; });
       const tgt = sp.exits[ti];
       if (h.digging) return;
       if (T.ex >= 0 && T.ex !== ti) s.down = true;
@@ -144,6 +156,7 @@ function thinkHuman(b, s, dt) {
   }
 
   m.hideCd -= dt; m.noVehT -= dt; m.hideT = 0;
+  if (Math.abs(h.vx) > 20) m.goDir = Math.sign(h.vx);
   const fwd = fwdDir(b.p);
   let dir = fwd;    // куди бігти
   let stop = false; // зупинитися й причаїтися
@@ -214,7 +227,7 @@ function thinkHuman(b, s, dt) {
     let foe = null, fd = 380;
     for (const o of G.humans) {
       if (o.dead || o.saved || o.vehicle || allyP(o.player, h.player)) continue;
-      const tx = o.hidden ? null : o.x;
+      const tx = covered(o) ? null : o.x;
       if (tx == null) continue;
       const dd = Math.abs(tx - h.x);
       if (dd > 110 && dd < fd && Math.abs(o.y - h.y) < 120 && lineOfSight(W, h.x, h.y - 40, o.x, o.y - 20)) { fd = dd; foe = o; }
@@ -350,7 +363,7 @@ function thinkDrone(b, s, dt) {
   if (alB) {
     let ab = null, abd = 1e9;
     for (const h of G.humans) {
-      if (h.dead || h.saved || h.hidden || ally(h, d) || Math.abs(h.x - alB.x) > 450) continue;
+      if (h.dead || h.saved || covered(h) || ally(h, d) || Math.abs(h.x - alB.x) > 450) continue;
       const dd = dist(d.x, d.y, h.x, h.y);
       if (dd < abd) { abd = dd; ab = h; }
     }
