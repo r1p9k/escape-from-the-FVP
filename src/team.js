@@ -12,7 +12,7 @@ const TEAMS = [
 const CAP_TIME = 15, HOLD_EVERY = 10, CAP_BONUS = 2;
 const TEAM_HUMANS = 4, TEAM_DRONES = 3;      // мінімум у кожній команді (решту доповнюють боти)
 const BASE_ONLY = { rifle: 1, shotgun: 1, medkit: 1, grenade: 1, ammo: 1 }; // це лежить лише на базах
-const TEAM_BONUS = { armor: 0.6, reb: 0.4, detector: 0.7, shovel: 0.6 };
+const TEAM_BONUS = { armor: 0.6, reb: 0.4, detector: 0.7 };
 
 function isTeam() { return !!G && G.mode === 'team'; }
 // однакова команда (для гравців); поза командним режимом — ніхто не союзник
@@ -36,12 +36,18 @@ function initTeam() {
 // чи людина «тримає» об'єкт
 function objHas(o, h) {
   if (o.kind === 'bld' || (o.kind === 'base' && o.ref)) return bldUnder(h) === o.ref;
-  if (o.kind === 'tunnel') return h.hidden === o.ref;
+  if (o.kind === 'tunnel') return !h.hidden && !h.vehicle && pipeAt(G.W, h.x, h.y) === o.ref;
   if (o.kind === 'bunker') return h.hidden === o.ref || (!h.hidden && Math.abs(h.x - o.ref.x) < 40 && Math.abs(h.y - o.ref.y) < 30);
   return !h.hidden && Math.abs(h.x - o.x) < 80 && Math.abs(h.y - gAt(G.W, o.x)) < 50;
 }
 // об'єкт (будівля чи бліндаж) належить команді
 function hideOwnedBy(ref, t) { const o = G.objs.find((x) => x.ref === ref); return !!o && o.owner === t; }
+// поставити людину в галерею тунелю
+function tunSpawn(h, sp, k) {
+  h.hidden = null;
+  h.x = clamp(sp.a + 20 + (k % 6) * 26, sp.a + 10, Math.max(sp.a + 10, sp.b - 10)); h.y = tunFloor(G.W, sp, h.x);
+  h.stance = sp.tall ? 'stand' : 'crouch'; h.autoCrouch = !sp.tall; h.vx = 0; h.vy = 0;
+}
 function objAt(h) { return G.objs ? G.objs.find((o) => objHas(o, h)) : null; }
 function teamScore(t) {
   let s = G.teamPts[t];
@@ -129,7 +135,7 @@ function teamRespawn(h) {
   }
   if (!best) best = G.objs.find((o) => o.kind === 'base' && o.team === t);
   if (best.kind === 'bunker' && !best.ref.ruined) { h.x = best.ref.x; h.y = best.ref.y; h.hidden = best.ref; return; }
-  if (best.kind === 'tunnel' && best.ref.exits.length) { const e = best.ref.exits[0]; h.x = e.tx; h.y = e.ty; enterHide(h, best.ref); return; }
+  if (best.kind === 'tunnel') { tunSpawn(h, best.ref, 0); return; }
   if (best.kind === 'bld') { const b = best.ref; h.x = b.x + b.w / 2; h.y = b.y + b.h; return; }
   h.x = best.x; h.y = gAt(G.W, best.x);
 }
@@ -164,7 +170,7 @@ function spawnGuards(o, t) {
     const h = makeHuman(p, o.x);
     h.lives = 1; h.guard = o; h.weapon = makeWeapon('rifle'); h.grenades = 1; h.protT = 1;
     if (o.kind === 'bld') { const b = o.ref; h.x = b.x + b.w * (0.3 + 0.4 * k); h.y = b.y + b.h; h.facing = k ? -1 : 1; }
-    else if (o.kind === 'tunnel' && o.ref.exits.length) { const e = o.ref.exits[k % o.ref.exits.length]; h.x = e.tx; h.y = e.ty; enterHide(h, o.ref); }
+    else if (o.kind === 'tunnel') tunSpawn(h, o.ref, k);
     else { h.x = o.x + (k ? 20 : -20); h.y = gAt(G.W, h.x); }
     G.humans.push(h); G.players.push(p); p.ent = h;
   }
@@ -366,6 +372,7 @@ function collapseBuilding(b) {
   const tun = { type: 'pipe', style: 'dug', a, b: bb, depth: TUN_DEPTH_TALL, tall: true, exits: [{ x: a, dir: -1, kind: 'ramp' }, { x: bb, dir: 1, kind: 'ramp' }], dug: true };
   tun.exits.forEach((e) => tunExitGeo(W, tun, e));
   W.hides.push(tun);
+  cavDirty(W);
   buildBuckets(W);
   feed('Будівлю зруйновано — під руїнами підземний хід', '#f2994a');
   // командний режим: прапор зникає, об'єкт стає бліндажем (звідти теж можна запускати дрони)

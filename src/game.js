@@ -34,7 +34,6 @@ const AIM_SECTOR = { burrow: [-1.45, 0.15], bunker: [-0.6, 0.05], trench: [-1.45
 const PACK_CAP = 4;      // місць у рюкзаку: аптечки, заряди РЕБ, детектор
 const DETECT_R = 650;    // радіус детектора дронів
 const PICKUP_NAMES = { rifle: 'Автомат', shotgun: 'Дробовик', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого', shovel: 'Лопата', grenade: 'Гранати', ammo: 'Набої' };
-const SHOVEL_M = 50;     // на скільки метрів копання вистачає лопати
 const DIG_PX_M = 30;     // одиниць світу в метрі копання (людина ≈ 1,8 м)
 const DIG_SPD = 13;      // швидкість копання, одиниць/с (повільно)
 const TUN_SPD = 72;      // хода зігнувшись у тунелі
@@ -82,7 +81,7 @@ function makeHuman(p, x) {
   return {
     player: p, x, y: gAt(G.W, x), vx: 0, vy: 0, stance: 'stand', facing: 1, onGround: true, onThin: false, wasGround: true,
     hp: 100, stamina: 1, staminaDelay: 0, exhausted: false, climb: null, onLadder: false, dropT: 0,
-    vehicle: null, seat: null, hidden: null, tun: null, digging: null, shovel: 0, weapon: null, reb: 1, fireCd: 0,
+    vehicle: null, seat: null, hidden: null, tun: null, digging: null, shovel: Infinity, weapon: null, reb: 1, fireCd: 0,
     carry: null, mount: null, working: null, grenades: G.mode === 'team' ? 3 : GRENADES_START, grenadeCd: 0, piloting: false,
     openTime: 0, reveal: 0, hurtT: 0, dead: false, saved: false, anim: 0,
     aimA: -0.5, aiming: false, diving: false, diveCd: 0, canister: false, smokeT: 0, gasT: 0, gasWarned: false,
@@ -93,13 +92,38 @@ function makeHuman(p, x) {
 }
 function feed(text, color) { G.feed.push({ text, color: color || '#fff', t: 4 }); if (G.feed.length > 5) G.feed.shift(); }
 
-function inMouth(h) {
-  const T = h.tun;
-  if (!h.hidden || h.hidden.type !== 'pipe' || !T || T.ex < 0 || h.dead || h.digging) return false;
-  return h.y - gAt(G.W, h.x) < HUMAN_DIM[h.stance].h * 0.8; // глибина ніг під землею менша за зріст
+// повністю під землею (у тунелі): згори не видно, доки нема прямої видимості
+function buried(h) {
+  if (h.hidden || h.vehicle || h.dead || h.saved) return false;
+  const g = gAt(G.W, h.x);
+  return h.y > g + 6 && h.y - HUMAN_DIM[h.stance].h > g - 2;
 }
-// повністю під землею / у схованці — не видно й не влучити
-function covered(h) { return !!h.hidden && !inMouth(h); }
+function seenUnder(h, x, y) { return !buried(h) || lineOfSight(G.W, x, y, h.x, h.y - HUMAN_DIM[h.stance].h * 0.6); }
+// у схованці (нора, бліндаж) — не видно й не влучити
+function covered(h) { return !!h.hidden; }
+// чи влазить тіло між земляними стінами тунелю: у кожному стовпчику — проміжок, де є підлога (сходинка ≤ 15) і місце для голови
+function earthFits(x, y, dim) {
+  const W = G.W;
+  if (!W.pipes.length) return true;
+  const hw = dim.w / 2 - 2;
+  for (const cx of [x - hw, x, x + hw]) {
+    let ok = false;
+    for (const s of cavSpans(W, cx, true)) {
+      if (s.bot < y - 18 || s.top > y - 2) continue;
+      if (s.top <= Math.min(y, s.bot) - dim.h + 2) { ok = true; break; }
+    }
+    if (!ok) return false;
+  }
+  return true;
+}
+// проміжок (підлога й стеля) у стовпчику x біля ніг y
+function humanSpan(x, y) {
+  const S = cavSpans(G.W, x, true);
+  for (const s of S) if (y >= s.top - 2 && y <= s.bot + 14) return s;
+  let best = S[0];
+  for (const s of S) if (s.bot <= y + 14) best = s;
+  return best;
+}
 function humanRect(h) {
   if (h.vehicle) { const T = VEH[h.vehicle.type]; return { x: h.vehicle.x - T.len / 2, y: h.vehicle.y - T.h - 20, w: T.len, h: T.h + 20 }; }
   const d = HUMAN_DIM[h.stance];
@@ -108,6 +132,7 @@ function humanRect(h) {
 function vehRect(v) { const T = VEH[v.type]; return { x: v.x - T.len / 2, y: v.y - T.h, w: T.len, h: T.h }; }
 
 function freeAt(x, y, dim) {
+  if (!earthFits(x, y, dim)) return false;
   const r = { x: x - dim.w / 2 + 1, y: y - dim.h + 1, w: dim.w - 2, h: dim.h - 2 };
   for (const s of solidsNear(G.W, r.x, r.x + r.w)) {
     if (s.thin) continue;
@@ -172,6 +197,8 @@ function humanVisibleToDrone(h, drone) {
   if (h.saved) return false;
   // з нори визирає — дрон помітить після пострілу або впритул
   if (covered(h)) return !!(h.peek && drone && (h.reveal > 0 || dist(drone.x, drone.y, h.hidden.x, h.hidden.y - 8) < 160));
+  // у тунелі: дрон бачить, лише зазирнувши в отвір (пряма видимість)
+  if (buried(h)) return !!drone && dist(drone.x, drone.y, h.x, h.y) < 520 && seenUnder(h, drone.x, drone.y);
   const by = concealedBy(h);
   if (!by) return true;
   if (!drone) return false;
@@ -240,6 +267,9 @@ function updateHuman(h, dt) {
   if (h.digging) { tickDig(h, c, dt); moveHuman(h, dt); checkShelter(h); return; }
   if (h.working) { tickWork(h, c, dt); h.vx = 0; moveHuman(h, dt); checkShelter(h); return; }
   const ax = c.axisX;
+  // сам пригнувся в низькому ході — вийшов на простір і випростався
+  if (h.autoCrouch) { if (h.stance !== 'crouch') h.autoCrouch = false; else if (h.onGround && tryStance(h, 'stand')) h.autoCrouch = false; }
+  if (h.wallT > 0) h.wallT -= dt;
   const lad = ladderAt(h);
   if (h.onLadder && !lad) h.onLadder = false;
   h.diveCd -= dt;
@@ -273,7 +303,6 @@ function updateHuman(h, dt) {
       else if (h.stance === 'crouch') tryStance(h, 'stand');
       else if (h.onGround && !tryMantle(h)) { h.vy = -JUMP; h.onGround = false; }
     }
-    if (c.pressed('down') && !h.onLadder && shaftUnder(h)) { const sh = shaftUnder(h); enterHide(h, sh.sp); h.tun.ex = sh.sp.exits.indexOf(sh.e); h.tun.u = 1; h.onLadder = true; h.stance = 'stand'; return; }
     if (c.pressed('down') && !h.onLadder) {
       if (lad && h.onGround && h.stance === 'stand' && Math.abs(h.y - lad.top) < 5) { h.onLadder = true; h.x = lad.x; h.y += 6; }
       else if (h.stance === 'stand' && h.onGround && Math.abs(h.vx) > 140 && h.diveCd <= 0 && freeAt(h.x + h.facing * 20, h.y, HUMAN_DIM.prone)) {
@@ -313,7 +342,7 @@ function updateHuman(h, dt) {
     }
   }
 
-  if (runIntoRamp(h)) return;
+  if (ax && !h.aiming && !h.onLadder) tunnelDig(h, ax, dt); // уперся в кінець тунелю чи завал — копає далі
   backpackInput(h, c);
   tickHeal(h, c, dt, ax !== 0 || h.aiming || !h.onGround);
   // порожні руки — зброя підбирається сама
@@ -333,6 +362,9 @@ function updateHuman(h, dt) {
         else if (pr) takeProp(h, pr);
         else if (ft) startPly(h, ft);
         else if (h.carry) dropCarry(h);
+        else if (rubbleAt(h)) startRubble(h, rubbleAt(h));
+        else if (patchAt(h)) startPatch(h, patchAt(h));
+        else if (pipeAt(W, h.x, h.y)) startDigExit(h, pipeAt(W, h.x, h.y));
         else if (canDigHere(h)) startDigEntry(h);
       }
     }
@@ -449,8 +481,15 @@ function muzzle(h) {
 }
 
 function moveHuman(h, dt) {
-  const W = G.W, d = HUMAN_DIM[h.stance], hw = d.w / 2;
+  const W = G.W;
+  let d = HUMAN_DIM[h.stance], hw = d.w / 2;
+  const ox = h.x;
   h.x = clamp(h.x + h.vx * dt, 10, W.width - 10);
+  // земляні стіни й стеля тунелю: у низький хід — пригнутися самому
+  if (h.x !== ox && !earthFits(h.x, h.y, d)) {
+    if (h.stance === 'stand' && earthFits(h.x, h.y, HUMAN_DIM.crouch)) { h.stance = 'crouch'; h.autoCrouch = true; d = HUMAN_DIM.crouch; hw = d.w / 2; }
+    else { h.x = ox; h.wallT = 0.1; h.vx = 0; }
+  }
   for (const s of solidsNear(W, h.x - 60, h.x + 60)) {
     if (s.thin) continue;
     if (h.y > s.y + 0.5 && h.y - d.h < s.y + s.h && h.x + hw > s.x && h.x - hw < s.x + s.w) {
@@ -464,11 +503,12 @@ function moveHuman(h, dt) {
   h.vy = Math.min(1400, h.vy + GRAV * dt);
   h.y += h.vy * dt;
   h.onGround = false; h.onThin = false;
-  const gy = gAt(W, h.x);
+  const sp = humanSpan(h.x, prevY), gy = sp.surf ? gAt(W, h.x) : sp.bot;
   if (h.y >= gy || (h.wasGround && h.vy >= 0 && gy - h.y < 12 && prevY >= gy - 12)) {
     if (h.vy > 950) hurt(h, (h.vy - 950) * 0.08, 'fall');
     h.y = gy; h.vy = 0; h.onGround = true;
   }
+  if (sp.top > -1e8 && h.vy < 0 && h.y - d.h < sp.top) { h.y = sp.top + d.h; h.vy = 0; } // стеля тунелю
   for (const s of solidsNear(W, h.x - 30, h.x + 30)) {
     if (h.x + hw <= s.x || h.x - hw >= s.x + s.w) continue;
     if (h.vy >= 0 && prevY <= s.y + 1 && h.y >= s.y) {
@@ -500,16 +540,13 @@ function nearPickup(h) {
 function nearHide(h) {
   for (const sp of G.W.hides) {
     if (sp.ruined) continue;
-    if (sp.type === 'pipe') {
-      for (const e of sp.exits) if (Math.abs(h.x - e.tx) < 26 && Math.abs(h.y - e.ty) < 40) return sp;
-    } else if (Math.abs(h.x - sp.x) < 28 && Math.abs(h.y - sp.y) < 40) return sp;
+    if (sp.type !== 'pipe' && Math.abs(h.x - sp.x) < 28 && Math.abs(h.y - sp.y) < 40) return sp;
   }
   return null;
 }
 // ---------- Рюкзак: 4 місця (аптечки, заряди РЕБ, детектор) ----------
 function packUsed(h) { return h.medkits + h.reb + (h.detector ? 1 : 0); }
 function canTake(h, p) {
-  if (p.type === 'shovel') return h.shovel < SHOVEL_M * 2;
   if (p.type === 'gasmask') return !h.gasmask;
   if (p.type === 'grenade') return h.grenades < GRENADES_MAX;
   if (p.type === 'ammo') return !!h.weapon && h.weapon.ammo < WEAPONS[h.weapon.type].ammo * 2;
@@ -522,7 +559,7 @@ function canTake(h, p) {
 // чи є в рюкзаку загиблого щось, що можна забрати
 function packGain(h, k) {
   const room = packUsed(h) < PACK_CAP;
-  return !!((k.weapon && !h.weapon) || (k.shovel > 0.2 && h.shovel < SHOVEL_M * 2) || (room && k.detector && !h.detector) || (room && k.medkits > 0 && h.medkits < MEDKIT_MAX) || (room && k.reb > 0));
+  return !!((k.weapon && !h.weapon) || (room && k.detector && !h.detector) || (room && k.medkits > 0 && h.medkits < MEDKIT_MAX) || (room && k.reb > 0));
 }
 function takePickup(h, p) {
   if (!canTake(h, p)) {
@@ -539,7 +576,6 @@ function takePickup(h, p) {
   else if (p.type === 'grenade') { h.grenades = Math.min(GRENADES_MAX, h.grenades + 2); feed(h.player.name + ': гранат ' + h.grenades, '#c9a227'); }
   else if (p.type === 'gasmask') { h.gasmask = true; feed(h.player.name + ' вдягнув протигаз — дим більше не шкодить', '#9fd3c7'); }
   else if (p.type === 'armor') h.armor = 100;
-  else if (p.type === 'shovel') { h.shovel = Math.min(SHOVEL_M * 2, h.shovel + SHOVEL_M); feed(h.player.name + ' знайшов лопату — можна копати тунелі (' + h.shovel.toFixed(1) + ' м)', '#c8a26a'); }
   else { h.weapon = makeWeapon(p.type); h.reloadT = 0; }
   Sfx.click();
 }
@@ -547,10 +583,9 @@ function takePack(h, p) {
   const k = p.pack, got = [];
   if (k.weapon && !h.weapon) { h.weapon = k.weapon; k.weapon = null; h.reloadT = 0; got.push(WEAPONS[h.weapon.type].name.toLowerCase()); }
   if (k.detector && !h.detector && packUsed(h) < PACK_CAP) { h.detector = true; k.detector = false; got.push('детектор'); }
-  if (k.shovel > 0.2 && h.shovel < SHOVEL_M * 2) { const n = Math.min(k.shovel, SHOVEL_M * 2 - h.shovel); h.shovel += n; k.shovel -= n; got.push('лопата'); }
   while (k.medkits > 0 && h.medkits < MEDKIT_MAX && packUsed(h) < PACK_CAP) { k.medkits--; h.medkits++; got.push('аптечка'); }
   while (k.reb > 0 && packUsed(h) < PACK_CAP) { k.reb--; h.reb++; got.push('РЕБ'); }
-  if (!k.weapon && !k.detector && !k.medkits && !k.reb && !(k.shovel > 0.2)) p.taken = true;
+  if (!k.weapon && !k.detector && !k.medkits && !k.reb) p.taken = true;
   feed(h.player.name + ' забрав із рюкзака: ' + got.join(', '), '#9c9');
   Sfx.click();
 }
@@ -561,53 +596,22 @@ function dropPack(h) {
   if (h.mount) leaveMount(h);
   h.working = null; h.grenades = 0;
   if (h.canister) { h.canister = false; W.pickups.push({ type: 'fuel', x, y: surfaceY(W, x) }); }
-  const k = { weapon: h.weapon, medkits: h.medkits, reb: h.reb, detector: h.detector, shovel: h.shovel };
-  h.weapon = null; h.medkits = 0; h.reb = 0; h.detector = false; h.shovel = 0; h.digging = null; h.reloadT = 0; h.healT = 0;
-  if (!k.weapon && !k.medkits && !k.reb && !k.detector && !(k.shovel > 0.2)) return;
+  const k = { weapon: h.weapon, medkits: h.medkits, reb: h.reb, detector: h.detector };
+  h.weapon = null; h.medkits = 0; h.reb = 0; h.detector = false; h.digging = null; h.reloadT = 0; h.healT = 0;
+  if (!k.weapon && !k.medkits && !k.reb && !k.detector) return;
   W.pickups.push({ type: 'pack', x, y: surfaceY(W, x), pack: k, life: 150, max: 150 });
   feed(h.player.name + ' втратив рюкзак — його можна підібрати', '#ccc');
 }
 function enterHide(h, sp) {
   if (h.carry) dropCarry(h);
   h.hidden = sp; h.vx = 0; h.vy = 0; h.onLadder = false; h.aiming = false; h.peek = false;
-  if (sp.type === 'pipe') {
-    let bi = 0, bd = 1e9;
-    sp.exits.forEach((e, i) => { const dd = Math.abs(h.x - e.tx) + Math.abs(h.y - e.ty); if (dd < bd) { bd = dd; bi = i; } });
-    h.tun = { ex: bi, u: 1, push: 0 }; h.stance = sp.tall ? 'stand' : 'crouch'; // у високому ході — на повний зріст
-  } else h.hideAnim = { dir: 'in', t: 0, dur: 0.5, sp, fx: h.x, facing: h.facing };
+  h.hideAnim = { dir: 'in', t: 0, dur: 0.5, sp, fx: h.x, facing: h.facing };
   h.smokeT = 0;
   if (sp.bonus === 'aliosha') {
     sp.bonus = null; h.alCharges++;
     feed(h.player.name + ' знайшов захований бонус «Альоша»!', '#f2c94c');
   }
   Sfx.click();
-}
-function shaftUnder(h) {
-  if (!h.onGround || h.vehicle || h.mount || h.carry) return null;
-  for (const sp of G.W.hides) {
-    if (sp.ruined || sp.type !== 'pipe') continue;
-    for (const e of sp.exits) if (e.kind === 'shaft' && Math.abs(h.x - e.tx) < 14 && Math.abs(h.y - e.ty) < 6) return { sp, e };
-  }
-  return null;
-}
-function rampUnder(x) {
-  for (const sp of G.W.hides) {
-    if (sp.ruined || sp.type !== 'pipe') continue;
-    for (const e of sp.exits) if (rampOpen(e, x)) return { sp, e };
-  }
-  return null;
-}
-// ступив на відкритий спуск — опинився в ньому (бігом — і далі бігом)
-function runIntoRamp(h) {
-  if (!h.onGround || h.vehicle || h.mount || h.onLadder || h.climb || h.diving || h.piloting) return false;
-  if (Math.abs(h.y - gAt(G.W, h.x)) > 3) return false;
-  const r = rampUnder(h.x);
-  if (!r) return false;
-  const run = h.vx;
-  enterHide(h, r.sp);
-  const T = h.tun; T.ex = r.sp.exits.indexOf(r.e); T.u = rampU(r.e, h.x);
-  const p = tunExitPos(r.e, T.u); h.x = p.x; h.y = p.y; h.vx = run;
-  return true;
 }
 function hideEntrance(h) {
   const sp = h.hidden;
@@ -620,8 +624,7 @@ function humanHidden(h, c, dt) {
   const sp = h.hidden;
   if (c.held('aim') && c.pressed('interact')) { placeNet(h); return; }
   backpackInput(h, c);
-  tickHeal(h, c, dt, sp.type === 'pipe' && (c.axisX !== 0 || c.held('up') || c.held('down')));
-  if (sp.type === 'pipe') { tunnelControl(h, sp, c, dt); if (c.pressed('special')) activateReb(h); return; }
+  tickHeal(h, c, dt, false);
   h.x = sp.x; h.y = sp.y;
   // з нори можна визирнути й стріляти: тримати «Позицію»
   h.peek = canPeek(sp) && !h.hideAnim && c.held('aim') && !c.pressed('interact');
@@ -646,113 +649,104 @@ function humanHidden(h, c, dt) {
   if (c.pressed('special')) activateReb(h);
 }
 
-// ---------- Тунелі й лопата ----------
-// рух у тунелі: галерея (ліво/право), виходи (вгору/вниз; спуском — і стрілкою в його бік)
-function tunnelControl(h, sp, c, dt) {
-  const W = G.W, T = h.tun, ax = c.axisX;
-  h.vx = 0;
-  if (h.digging) { tickDig(h, c, dt); return; }
-  if (T.ex >= 0) {
-    const e = sp.exits[T.ex], ramp = e.kind === 'ramp';
-    h.onLadder = !ramp;
-    h.stance = !ramp || sp.tall || T.u > 0.45 ? 'stand' : 'crouch';
-    // у відкритому отворі: «Позиція» — цілитися й стріляти назовні, граната — [слот 3]
-    h.grenAim = inMouth(h) && c.held('slot3') && canGrenAim(h);
-    if (h.grenAim && c.pressed('slot3') && !c.held('aim')) h.aimA = -0.55;
-    h.aiming = inMouth(h) && (c.held('aim') || h.grenAim);
-    if (h.aiming) { h.onLadder = false; h.grenA = h.grenAim ? aimWorld(h) : h.grenA; }
-    if (h.aiming) {
-      if (c.cur.aimAngle !== undefined) setAimWorld(h, c.cur.aimAngle);
-      else {
-        if (c.pressed('left')) h.facing = -1;
-        if (c.pressed('right')) h.facing = 1;
-        const v = (c.held('down') ? 1 : 0) - (c.held('up') ? 1 : 0);
-        h.aimA += v * 1.5 * dt;
-      }
-      h.aimA = clamp(h.aimA, -1.45, 0.15); // з ями в землю не постріляєш
-      if (!h.grenAim && c.held('fire') && h.weapon && h.fireCd <= 0 && h.reloadT <= 0 && h.weapon.mag > 0) humanShoot(h, muzzle(h), 'crouch');
-      else if (c.pressed('fire') && h.weapon && h.reloadT <= 0 && h.weapon.mag < Math.min(WEAPONS[h.weapon.type].mag, h.weapon.ammo)) startReload(h);
-      h.vx = 0;
-      return;
-    }
-    let v = (c.held('up') ? 1 : 0) - (c.held('down') ? 1 : 0);
-    if (ramp && ax) v = ax === e.dir ? 1 : -1;
-    const spd = ramp ? (c.held('sprint') && h.stamina > 0 && !h.exhausted ? SPRINT * 0.8 : RUN * 0.75) : 120;
-    T.u = clamp(T.u + (v * spd * dt) / e.len, 0, 1);
-    if (ramp && v) h.facing = v > 0 ? e.dir : -e.dir; else if (ax) h.facing = ax;
-    const p = tunExitPos(e, T.u); h.x = p.x; h.y = p.y;
-    h.anim += Math.abs(v) * dt * (ramp ? spd * 0.06 : 8); h.vx = v && ramp ? spd * h.facing : 0;
-    if (T.u <= 0 && v < 0) { T.ex = -1; h.x = e.bx; h.y = e.by; h.onLadder = false; h.stance = sp.tall ? 'stand' : 'crouch'; return; }
-    // нагорі: «Дія» або далі в той самий бік — вийти (спуском — на бігу, без зупинки)
-    T.push = T.u >= 1 && v > 0 ? T.push + dt : 0;
-    if ((c.pressed('interact') && T.u > 0.75) || T.push > (ramp ? 0.01 : 0.15)) { const run = h.vx; leaveTunnel(h, e); if (ramp) h.vx = run; }
-    return;
-  }
-  h.onLadder = false; h.aiming = false;
-  // галерея
-  if (ax) h.facing = ax;
-  const atEnd = ax < 0 ? h.x <= sp.a + 0.5 : ax > 0 ? h.x >= sp.b - 0.5 : false;
-  if (atEnd) {
-    const ramp = sp.exits.findIndex((e) => e.kind === 'ramp' && e.dir === ax && Math.abs(e.bx - h.x) < 10);
-    if (ramp >= 0 && !c.held('down')) { T.ex = ramp; T.u = 0; h.x = sp.exits[ramp].bx; return; }
-    // кінець галереї — копати далі лопатою
-    if (h.shovel > 0) digGallery(h, sp, ax, dt);
-    else if (c.pressed('left') || c.pressed('right')) tipOnce(h, 'Кінець тунелю. Лопатою можна копати далі');
-  } else {
-    h.x = clamp(h.x + ax * TUN_SPD * (sp.tall ? 1.6 : 1) * dt, sp.a, sp.b);
-    h.anim += Math.abs(ax) * dt * 9; h.vx = ax * 60;
-  }
-  h.y = tunFloor(W, sp, h.x);
-  if (c.pressed('up')) {
-    const i = sp.exits.findIndex((e) => Math.abs(e.bx - h.x) < 14);
-    if (i >= 0) { T.ex = i; T.u = 0; h.x = sp.exits[i].bx; }
-    else if (h.shovel > 0) startDigExit(h, sp, (h.facing < 0 && h.x <= sp.a + 3) || (h.facing > 0 && h.x >= sp.b - 3) ? 'ramp' : 'shaft');
-    else tipOnce(h, 'Тут виходу немає');
-  }
-}
+// ---------- Тунелі й лопата (у кожного своя, безлімітна) ----------
 function tipOnce(h, text) {
   if (h.player.bot) return; // ботам підказки не потрібні
   if (G.time - (h.tipT || -9) > 2.5) { h.tipT = G.time; feed(h.player.name + ': ' + text, '#ccc'); }
 }
-function leaveTunnel(h, e) {
-  h.hidden = null; h.tun = null; h.x = e.tx + (e.kind === 'ramp' ? e.dir * 7 : 0); h.y = gAt(G.W, h.x);
-  h.vx = 0; h.vy = 0; h.onGround = true; h.onLadder = false;
-  if (!tryStance(h, 'stand')) h.stance = 'crouch'; // вийшов — випрямився (якщо є місце)
-  Sfx.click();
-}
 function digDirt(x, y) {
   if (RND() < 0.5) G.parts.push({ type: 'dust', x: x + rand(-6, 6), y: y - rand(4, 14), vx: rand(-60, 60), vy: rand(-90, -30), life: 0.5, max: 0.5, size: 5, dirt: true });
 }
-// продовжити галерею
-function digGallery(h, sp, dir, dt) {
-  const W = G.W;
-  const lim = dir < 0 ? 20 : W.width - 20;
-  let d = Math.min(DIG_SPD * dt, h.shovel * DIG_PX_M, Math.abs(lim - (dir < 0 ? sp.a : sp.b)));
-  if (d <= 0) return;
-  const nx = dir < 0 ? sp.a - d - 4 : sp.b + d + 4;
-  if (rockIn(nx - 2, nx + 2)) {
-    // лопати лишилося мало — вихід біля каменю докопується сам
-    if (h.shovel < 3 && !sp.exits.some((o) => Math.abs(o.bx - h.x) < 30)) { feed(h.player.name + ': камінь, лопата майже зношена — докопуєш вихід', '#c8a26a'); h.digging = { kind: 'auto', sp, dir, t: 0, dur: 1, e: null }; return; }
-    tipOnce(h, 'Камінь — лопатою не прокопати. [' + h.player.ctrl.label('up') + '] — вихід тут'); return;
+// завал (обвалене перекриття) біля людини: у тунелі — збоку, нагорі — під ногами в ямі
+function rubbleAt(h, dir) {
+  for (const sp of G.W.pipes) for (const br of sp.breaks || []) {
+    if (br.fill <= 0.02) continue;
+    const f = tunFloor(G.W, sp, h.x), top = f - br.fill * tunH(sp);
+    if (h.x >= br.a - 2 && h.x <= br.b + 2 && Math.abs(h.y - top) < 6) return { sp, br };
+    const side = dir ? [dir] : [-1, 1];
+    for (const s of side) if (Math.abs(h.x + s * 12 - (s > 0 ? br.a : br.b)) < 8 && h.y > top + 4 && Math.abs(h.y - f) < 6) return { sp, br };
   }
-  if (dir < 0) sp.a -= d; else sp.b += d;
-  h.shovel = Math.max(0, h.shovel - d / DIG_PX_M);
-  h.x = dir < 0 ? sp.a : sp.b; h.digT = 0.2; h.anim += dt * 6;
-  digDirt(h.x + dir * 10, tunFloor(W, sp, h.x));
-  if (mergeTouching(sp, dir)) return;
-  // лопата скінчилася — вихід у кінці тунелю докопується сам
-  if (h.shovel <= 0) {
-    feed(h.player.name + ': лопата зношена — докопуєш вихід', '#c8a26a');
-    h.digging = { kind: 'auto', sp, dir, t: 0, dur: 1, e: null };
-  }
+  return null;
 }
-// наткнувся на інший виритий тунель — з'єднати
-function mergeTouching(sp, dir) {
-  for (const o of G.W.hides) {
-    if (o === sp || o.type !== 'pipe' || o.depth !== sp.depth) continue;
-    if ((dir > 0 && o.a >= sp.a && o.a - sp.b < 3) || (dir < 0 && o.b <= sp.b && sp.a - o.b < 3)) { mergeTunnels(sp, o); return true; }
+// розкопаний пролом без перекриття — залатати
+function patchAt(h) {
+  for (const sp of G.W.pipes) for (const br of sp.breaks || []) {
+    if (br.fill > 0.4 || h.x < br.a - 26 || h.x > br.b + 26) continue;
+    const g = gAt(G.W, h.x), f = tunFloor(G.W, sp, h.x);
+    if (Math.abs(h.y - g) < 6 || Math.abs(h.y - f) < 6) return { sp, br };
+  }
+  return null;
+}
+function startRubble(h, r) { h.digging = { kind: 'rubble', sp: r.sp, br: r.br, t: 0 }; h.vx = 0; }
+function startPatch(h, r) { h.digging = { kind: 'patch', sp: r.sp, br: r.br, t: 0, dur: 3 }; h.vx = 0; }
+// уперся в кінець галереї або в завал — копати далі (лопата не зношується)
+function tunnelDig(h, dir, dt) {
+  const W = G.W;
+  if (!h.onGround || !(h.wallT > 0)) return;
+  const rb = rubbleAt(h, dir);
+  if (rb) { digRubble(h, rb.br, dt); return; }
+  const sp = pipeAt(W, h.x, h.y);
+  if (!sp || Math.abs(h.y - tunFloor(W, sp, h.x)) > 5) return;
+  const hw = HUMAN_DIM[h.stance].w / 2;
+  if (dir > 0 ? h.x + hw < sp.b - 6 : h.x - hw > sp.a + 6) return; // ще не в кінці
+  if (dir > 0 && sp.b < h.x) sp.b = h.x; else if (dir < 0 && sp.a > h.x) sp.a = h.x; // стоїть на майданчику під спуском
+  const end = dir > 0 ? sp.b : sp.a;
+  const lim = dir < 0 ? 20 : W.width - 20;
+  const d = Math.min(DIG_SPD * dt, Math.abs(lim - end));
+  if (d <= 0) return;
+  const nx = end + dir * (d + 4);
+  if (rockIn(nx - 2, nx + 2)) { tipOnce(h, 'Камінь — лопатою не прокопати. [' + h.player.ctrl.label('interact') + '] — вихід тут'); return; }
+  if (dir < 0) sp.a -= d; else sp.b += d;
+  h.digT = 0.2; h.anim += dt * 6;
+  digDirt(end + dir * 6, tunFloor(W, sp, end));
+  cavDirty(W);
+  joinCavities(sp, dir);
+}
+function digRubble(h, br, dt) {
+  br.fill = Math.max(0, br.fill - dt * 0.28);
+  h.digT = 0.2; h.anim += dt * 6;
+  digDirt(h.x + h.facing * 10, h.y);
+  cavDirty(G.W);
+  if (br.fill <= 0.02) { br.fill = 0; tipOnce(h, 'Завал розкопано — тепер залатати перекриття [' + h.player.ctrl.label('interact') + ']'); }
+}
+// прокопав до іншої порожнини (тунель, колектор, спуск) — з'єднати
+function joinCavities(sp, dir) {
+  const W = G.W, end = dir > 0 ? sp.b : sp.a, f = tunFloor(W, sp, end), H = tunH(sp);
+  if (sp.links && sp.links.some((l) => end >= l.x1 - 2 && end <= l.x2 + 2)) return true; // перехід уже є
+  for (const o of W.pipes) {
+    if (o === sp) continue;
+    const iv = [];
+    pipeSpans(W, o, end + dir * 3, iv, false);
+    const hit = iv.find(([t, b]) => t < f && b > f - H); // їхня порожнина перетинається з нашою галереєю
+    if (!hit) continue;
+    // та сама глибина (у тому числі вліз у їхній спуск) — один тунель
+    const ins = end + dir * 3;
+    if (o.depth === sp.depth && ins >= o.a - 60 && ins <= o.b + 60) { if (dir > 0) sp.b = Math.max(sp.b, o.a); else sp.a = Math.min(sp.a, o.b); mergeTunnels(sp, o); return true; }
+    // інша глибина — похилий перехід від нашої підлоги до їхньої
+    const fo = Math.min(hit[1], f + 200), dx = Math.max(12, Math.abs(fo - f) / 0.8);
+    const l = dir > 0 ? { x1: end - 4, x2: end + dx, y1: f, y2: fo } : { x1: end - dx, x2: end + 4, y1: fo, y2: f };
+    l.h = Math.max(H, tunH(o)) + 16; // на схилі потрібен запас над головою
+    (sp.links || (sp.links = [])).push(l);
+    if (dir > 0) sp.b = Math.max(sp.b, end); else sp.a = Math.min(sp.a, end);
+    cavDirty(W);
+    feed('Прокопано до сусіднього ходу', '#c8a26a');
+    return true;
   }
   return false;
+}
+function mergeTunnels(sp, o) {
+  sp.a = Math.min(sp.a, o.a); sp.b = Math.max(sp.b, o.b);
+  sp.exits.push(...o.exits);
+  if (o.links) (sp.links || (sp.links = [])).push(...o.links);
+  if (o.breaks) (sp.breaks || (sp.breaks = [])).push(...o.breaks);
+  G.W.hides = G.W.hides.filter((x) => x !== o);
+  // командний режим: об'єкт-тунель, що злився, тепер — частина іншого
+  if (G.objs) {
+    const oo = G.objs.find((x) => x.ref === o);
+    if (oo) { if (G.objs.some((x) => x.ref === sp)) G.objs = G.objs.filter((x) => x !== oo); else Object.assign(oo, { ref: sp, x: (sp.a + sp.b) / 2, pad: null }); }
+  }
+  cavDirty(G.W);
+  feed('Тунелі з\'єднано', '#c8a26a');
 }
 // над виходом щось стоїть (стіна, будівля, техніка) — там не вилізти
 function exitBlocked(W, e) {
@@ -760,103 +754,103 @@ function exitBlocked(W, e) {
   for (const s of list) if (!s.thin && s.x < e.tx + 14 && s.x + s.w > e.tx - 14 && s.y < e.ty + 2 && s.y + s.h > e.ty - 50) return true;
   return W.vehicles.some((v) => !v.dead && Math.abs(v.x - e.tx) < VEH[v.type].len / 2 + 10);
 }
-// автовихід: спершу (якщо треба) галерея далі, поки нагорі перешкода, потім спуск нагору — у тому ж темпі
-function tickAutoExit(h, D, c, dt) {
-  const W = G.W, sp = D.sp, dir = D.dir;
-  if (c.pressed(dir > 0 ? 'left' : 'right')) { h.digging = null; tipOnce(h, 'Копання перервано'); return; }
-  h.digT = 0.2; h.anim += dt * 6;
-  if (!D.e) {
-    const end = dir < 0 ? sp.a : sp.b;
-    const e = tunExitGeo(W, sp, { x: end, dir, kind: 'ramp' });
-    const lim = dir < 0 ? 20 : W.width - 20;
-    if (sp.exits.some((o) => Math.abs(o.tx - e.tx) < 30 && o.dir === dir)) { h.digging = null; return; } // вихід уже є
-    const rk = rockIn(Math.min(e.bx, e.tx), Math.max(e.bx, e.tx)) || rockIn(end + dir * 2, end + dir * 6);
-    if (rk) { const sh = tunExitGeo(W, sp, { x: end - dir * 2, dir, kind: 'shaft' }); D.e = sh; D.t = 0; D.dur = sh.len / DIG_SPD; return; }
-    if (exitBlocked(W, e) && Math.abs(lim - end) > 1) {
-      const d = Math.min(DIG_SPD * dt, Math.abs(lim - end));
-      if (dir < 0) sp.a -= d; else sp.b += d;
-      h.x = dir < 0 ? sp.a : sp.b; h.y = tunFloor(W, sp, h.x);
-      digDirt(h.x + dir * 10, h.y);
-      if (mergeTouching(sp, dir)) h.digging = null;
-      return;
-    }
-    D.e = e; D.t = 0; D.dur = e.len / DIG_SPD;
-    return;
-  }
-  D.t = Math.min(D.dur, D.t + dt);
-  digDirt(h.x + dir * 14, h.y - 10);
-  if (D.t < D.dur) return;
-  h.digging = null;
-  sp.exits.push(D.e); h.tun.ex = sp.exits.length - 1; h.tun.u = 0; h.x = D.e.bx; h.y = D.e.by;
-  feed(h.player.name + ' прокопав вихід', '#c8a26a');
+// новий вихід нагору з галереї: на краю, лицем назовні — пологий спуск, інакше — лаз із драбиною
+function startDigExit(h, sp) {
+  const W = G.W;
+  if (Math.abs(h.y - tunFloor(W, sp, h.x)) > 6) { tipOnce(h, 'Копати вихід — стоячи в галереї'); return; }
+  const edge = (h.facing < 0 && h.x <= sp.a + 14) || (h.facing > 0 && h.x >= sp.b - 14);
+  let kind = edge ? 'ramp' : 'shaft';
+  let e = tunExitGeo(W, sp, { x: edge ? (h.facing > 0 ? sp.b : sp.a) : h.x, dir: h.facing, kind });
+  if (kind === 'ramp' && rockIn(Math.min(e.bx, e.tx) - 6, Math.max(e.bx, e.tx) + 6)) { kind = 'shaft'; e = tunExitGeo(W, sp, { x: h.x, dir: h.facing, kind }); } // на пологий спуск не вистачає місця — лаз
+  if (sp.exits.some((o) => Math.abs(o.tx - e.tx) < 34)) { tipOnce(h, 'Поруч уже є вихід'); return; }
+  if (rockIn(e.tx - 14, e.tx + 14)) { tipOnce(h, 'Там камінь — не прокопати'); return; }
+  if (exitBlocked(W, e)) { tipOnce(h, 'Нагорі щось заважає копати'); return; }
+  h.digging = { kind: 'exit', sp, e, t: 0, dur: e.len / DIG_SPD };
+  h.vx = 0;
 }
-function mergeTunnels(sp, o) {
-  sp.a = Math.min(sp.a, o.a); sp.b = Math.max(sp.b, o.b);
-  sp.exits.push(...o.exits);
-  G.W.hides = G.W.hides.filter((x) => x !== o);
-  // командний режим: об'єкт-тунель, що злився, тепер — частина іншого
-  if (G.objs) {
-    const oo = G.objs.find((x) => x.ref === o);
-    if (oo) { if (G.objs.some((x) => x.ref === sp)) G.objs = G.objs.filter((x) => x !== oo); else Object.assign(oo, { ref: sp, x: (sp.a + sp.b) / 2, pad: null }); }
-  }
-  for (const h of G.humans) if (h.hidden === o) { h.hidden = sp; if (h.tun && h.tun.ex >= 0) h.tun.ex = sp.exits.indexOf(o.exits[h.tun.ex]); }
-  feed('Тунелі з\'єднано', '#c8a26a');
-}
-// новий спуск із галереї нагору (у бік погляду)
-function startDigExit(h, sp, kind) {
-  const W = G.W, e = tunExitGeo(W, sp, { x: h.x, dir: h.facing, kind: kind || 'shaft' });
-  if (sp.exits.some((o) => Math.abs(o.tx - e.tx) < 40)) { tipOnce(h, 'Поруч уже є вихід'); return; }
-  if (rockIn(Math.min(e.bx, e.tx) - 6, Math.max(e.bx, e.tx) + 6)) { if (kind === 'ramp') { startDigExit(h, sp, 'shaft'); return; } tipOnce(h, 'Там камінь — не прокопати'); return; } // на пологий спуск не вистачає місця — лаз
-  if (pointSolid(W, e.tx, e.ty - 12, solidsNear(W, e.tx - 10, e.tx + 10))) { tipOnce(h, 'Нагорі щось заважає копати'); return; }
-  const cost = e.len / DIG_PX_M;
-  if (h.shovel < cost) { tipOnce(h, 'На новий вихід лопати не вистачить (треба ' + cost.toFixed(1) + ' м)'); return; }
-  h.digging = { kind: 'exit', sp, e, t: 0, dur: e.len / DIG_SPD, cost };
-}
-// новий тунель із поверхні: спуск у бік погляду
+// новий спуск із поверхні в бік погляду: якщо внизу вже є тунель чи колектор — до нього
 function startDigEntry(h) {
-  const W = G.W, dx = TUN_DEPTH / TUN_K, bx = clamp(h.x + h.facing * dx, 30, W.width - 30);
-  let sp = W.hides.find((o) => o.type === 'pipe' && o.depth === TUN_DEPTH && bx >= o.a - 30 && bx <= o.b + 30);
+  const W = G.W, dx = TUN_DEPTH / TUN_K;
+  let bx = clamp(h.x + h.facing * dx, 30, W.width - 30);
+  let sp = W.pipes.find((o) => bx >= o.a - 40 && bx <= o.b + 40 && !(o.breaks || []).some((q) => bx > q.a - 10 && bx < q.b + 10));
+  if (sp) bx = clamp(bx, sp.a, sp.b);
   const fresh = !sp;
   if (fresh) sp = { type: 'pipe', style: 'dug', a: bx, b: bx, depth: TUN_DEPTH, exits: [], dug: true };
-  const e = tunExitGeo(W, sp, { x: clamp(bx, Math.min(sp.a, bx), Math.max(sp.b, bx)), dir: -h.facing, kind: 'ramp' });
-  if (!fresh && sp.exits.some((o) => Math.abs(o.tx - e.tx) < 40)) { tipOnce(h, 'Поруч уже є вхід у тунель'); return; }
+  const e = tunExitGeo(W, sp, { x: bx, dir: -h.facing, kind: 'ramp' });
+  if (!fresh && sp.exits.some((o) => Math.abs(o.tx - e.tx) < 34)) { tipOnce(h, 'Поруч уже є вхід у тунель'); return; }
   if (rockIn(Math.min(e.bx, e.tx, bx) - 6, Math.max(e.bx, e.tx, bx) + 6)) { tipOnce(h, 'Тут камінь — не прокопати'); return; }
-  const cost = (e.len + (fresh ? 0 : Math.max(0, sp.a - bx, bx - sp.b))) / DIG_PX_M;
-  if (h.shovel < cost) { tipOnce(h, 'Лопати не вистачить на спуск (треба ' + cost.toFixed(1) + ' м)'); return; }
-  h.digging = { kind: 'entry', sp, e, fresh, bx, t: 0, dur: (cost * DIG_PX_M) / DIG_SPD, cost };
+  h.digging = { kind: 'entry', sp, e, fresh, bx, t: 0, dur: e.len / DIG_SPD };
   h.vx = 0; h.stance = 'crouch';
 }
 // можна копати тут із поверхні?
 function canDigHere(h) {
   const W = G.W;
-  if (!h.shovel || h.vehicle || h.hidden || !h.onGround || h.canister) return false;
+  if (h.vehicle || h.hidden || !h.onGround || h.canister) return false;
   if (Math.abs(h.y - gAt(W, h.x)) > 3) return false; // на перекритті чи на даху — ні
-  if (W.hides.some((sp) => hideEnds(sp).some((e) => Math.abs(e.x - h.x) < 50))) return false;
+  if (W.pipes.some((sp) => sp.exits.some((e) => Math.abs(e.tx - h.x) < 34))) return false;
+  if (W.hides.some((sp) => sp.type !== 'pipe' && Math.abs(sp.x - h.x) < 50)) return false;
   return !solidsNear(W, h.x - 40, h.x + 40).some((s) => !s.thin && s.x < h.x + 30 && s.x + s.w > h.x - 30 && s.y < h.y + 2 && s.y + s.h > h.y - 30);
 }
 function tickDig(h, c, dt) {
   const D = h.digging, W = G.W;
-  if (D.kind === 'auto') { tickAutoExit(h, D, c, dt); return; }
-  // відійти — перервати копання (витрачене не повертається)
-  if (c.pressed('left') || c.pressed('right') || (D.kind === 'exit' && c.pressed('down'))) { h.digging = null; tipOnce(h, 'Копання перервано'); return; }
-  const k = Math.min(dt, D.dur - D.t);
-  D.t += k; h.shovel = Math.max(0, h.shovel - (D.cost * k) / D.dur);
+  // відійти — перервати копання
+  if (c.pressed('left') || c.pressed('right') || c.pressed('up')) { h.digging = null; tipOnce(h, D.kind === 'patch' ? 'Латання перервано' : 'Копання перервано'); return; }
   h.digT = 0.2; h.anim += dt * 6;
-  digDirt(D.kind === 'entry' ? h.x + h.facing * 12 : h.x + D.e.dir * 14, D.kind === 'entry' ? h.y : h.y - 10);
+  if (D.kind === 'rubble') { digRubble(h, D.br, dt); if (D.br.fill <= 0) h.digging = null; return; }
+  D.t = Math.min(D.dur, D.t + dt);
+  if (D.kind === 'patch') {
+    if (RND() < dt * 6) G.parts.push({ type: 'debris', x: rand(D.br.a, D.br.b), y: gAt(W, h.x) + 4, vx: rand(-40, 40), vy: rand(-80, -20), life: 0.5, max: 0.5, col: '#6b4a2b' });
+  } else digDirt(D.kind === 'entry' ? h.x + h.facing * 12 : h.x + D.e.dir * 10, D.kind === 'entry' ? h.y : h.y - 10);
   if (D.t < D.dur) return;
   h.digging = null;
   const sp = D.sp, e = D.e;
-  if (D.kind === 'exit') {
-    sp.exits.push(e); h.tun.ex = sp.exits.length - 1; h.tun.u = 0;
-    feed(h.player.name + ' прокопав новий вихід', '#c8a26a');
+  if (D.kind === 'patch') {
+    sp.breaks = sp.breaks.filter((q) => q !== D.br);
+    cavDirty(W);
+    // хто стояв у пролом — у перекриття не вмурувати
+    for (const o of G.humans) if (!o.dead && pipeAt(W, o.x, o.y) === sp && !earthFits(o.x, o.y, HUMAN_DIM[o.stance])) o.stance = 'crouch';
+    feed(h.player.name + ' залатав перекриття тунелю', '#c8a26a');
+  } else if (D.kind === 'exit') {
+    sp.exits.push(e); cavDirty(W);
+    feed(h.player.name + ' прокопав ' + (e.kind === 'ramp' ? 'пологий вихід' : 'лаз із драбиною'), '#c8a26a');
   } else {
     if (D.fresh) W.hides.push(sp);
     sp.a = Math.min(sp.a, D.bx); sp.b = Math.max(sp.b, D.bx);
     tunExitGeo(W, sp, e); sp.exits.push(e);
-    h.hidden = sp; h.tun = { ex: sp.exits.length - 1, u: 1, push: 0 }; h.vx = 0; h.vy = 0; h.onLadder = false; h.aiming = false; h.peek = false;
-    feed(h.player.name + (D.fresh ? ' викопав тунель' : ' прокопав вхід у тунель'), '#c8a26a');
+    cavDirty(W);
+    feed(h.player.name + (D.fresh ? ' викопав спуск — далі можна копати галерею' : ' прокопав вхід у тунель'), '#c8a26a');
   }
-  if (h.shovel <= 0.01) { h.shovel = 0; feed(h.player.name + ': лопата зношена', '#c8a26a'); }
+}
+// ---------- Обвали: багато вибухів в одному місці руйнують перекриття ----------
+function damageTunnels(x, y, power) {
+  const W = G.W;
+  for (const sp of W.pipes.slice()) {
+    if (x < sp.a - 10 || x > sp.b + 10) continue;
+    const g = gAt(W, x), f = tunFloor(W, sp, x), ceil = f - tunH(sp);
+    const dy = y < g ? g - y : y > f ? y - f : 0; // над тунелем — відстань до поверхні; у тунелі — 0
+    if (dy > 45) continue;
+    const k = Math.round(x / 40), dmg = sp.dmg || (sp.dmg = {});
+    dmg[k] = (dmg[k] || 0) + (power >= 70 ? 1 : 0.6);
+    if (dmg[k] >= BREAK_HITS) { dmg[k] = 0; collapseTunnel(sp, clamp(k * 40, sp.a, sp.b), ceil); }
+  }
+}
+function collapseTunnel(sp, cx, ceil) {
+  const W = G.W;
+  let a = Math.max(sp.a, cx - 30), b = Math.min(sp.b, cx + 30);
+  const br = { a, b, fill: 1 };
+  sp.breaks = (sp.breaks || []).filter((q) => {
+    if (q.b < a - 4 || q.a > b + 4) return true;
+    br.a = Math.min(br.a, q.a); br.b = Math.max(br.b, q.b); return false;
+  });
+  sp.breaks.push(br);
+  cavDirty(W);
+  for (const h of G.humans) {
+    if (h.dead || h.saved || h.vehicle || h.x < br.a - 8 || h.x > br.b + 8 || h.y < ceil - 4) continue;
+    hurt(h, 70, 'blast'); // засипало
+  }
+  for (let i = 0; i < 18; i++) G.parts.push({ type: 'debris', x: rand(br.a, br.b), y: ceil + rand(0, 20), vx: rand(-120, 120), vy: rand(-260, -40), life: rand(0.6, 1.2), max: 1.2, col: '#5a4630' });
+  for (let i = 0; i < 6; i++) G.parts.push({ type: 'smoke', x: rand(br.a, br.b), y: ceil, vx: rand(-20, 20), vy: rand(-50, -10), life: rand(1.5, 2.5), max: 2.5, size: rand(14, 24) });
+  feed('Перекриття тунелю обвалилося — треба розкопати й залатати', '#f2994a');
 }
 
 function enterVehicle(h, v) {
@@ -1231,6 +1225,7 @@ function takeOff(d) {
 // найближча поверхня під точкою (земля, верх об'єкта чи перекриття)
 function landSurface(x, y) {
   let sy = gAt(G.W, x);
+  if (G.W.pipes.length) for (const s of cavSpans(G.W, x)) if (y <= s.bot + 1) { sy = s.surf ? sy : s.bot; break; }
   for (const s of solidsNear(G.W, x, x)) if (x >= s.x && x <= s.x + s.w && s.y >= y && s.y < sy) sy = s.y;
   return sy;
 }
@@ -1413,7 +1408,7 @@ function shootDownDrone(d, by) {
 }
 function acquireLock(d) {
   const h = d.lockOn;
-  if (h && !h.dead && !h.saved && !covered(h) && dist(h.x, h.y - 25, d.x, d.y) < 520) return true;
+  if (h && !h.dead && !h.saved && !covered(h) && dist(h.x, h.y - 25, d.x, d.y) < 520 && seenUnder(h, d.x, d.y)) return true;
   d.lockOn = null;
   let best = null, bd = 230;
   for (const x of G.humans) {
@@ -1564,7 +1559,6 @@ function explosion(x, y, power, radius, direct) {
       const e = hideEntrance(h);
       if (h.peek) { if (dist(x, y, e.x, e.y) < 65) hurt(h, power * 0.7, 'blast'); } // визирнув — вразливіший
       else if (dist(x, y, e.x, e.y) < 45) hurt(h, power * 0.35, 'blast');
-      else if (h.hidden.type === 'pipe' && dist(x, y, h.x, h.y - 20) < 55) hurt(h, power * 0.3, 'blast'); // над мілким тунелем
       continue;
     }
     // пряме влучання дрона в голову — броня не рятує
@@ -1577,7 +1571,7 @@ function explosion(x, y, power, radius, direct) {
     hurt(h, dmg, 'blast');
   }
   blastUgvs(x, y, power, radius);
-  if (power >= 25) { damageCovers(x, y, power); damageFort(x, y, power); }
+  if (power >= 25) { damageCovers(x, y, power); damageFort(x, y, power); damageTunnels(x, y, power); }
   if (power >= 60) breachSolids(x, y, radius);
 }
 // пролом у стінах, перекриттях і даху: вибиває шматок, трохи менший за радіус вибуху
@@ -1704,7 +1698,7 @@ function updateGame(dt) {
   }
   // відкритість людей (для стрілки дрона)
   for (const h of G.humans) {
-    if (h.dead || h.saved || covered(h) || humanConcealed(h)) h.openTime = 0;
+    if (h.dead || h.saved || covered(h) || buried(h) || humanConcealed(h)) h.openTime = 0;
     else h.openTime += dt;
   }
   updateCameras(dt);
@@ -1759,7 +1753,7 @@ function backpackInput(h, c) {
     else { h.healT = 0.001; feed(h.player.name + ' перев\'язується…', '#9c9'); }
   }
   if (h.grenAim) h.grenA = aimWorld(h);
-  if (!c.held('slot3') && c.prev.slot3 && h.grenA != null && (!h.hidden || inMouth(h)) && !h.vehicle && !h.mount) throwGrenade(h, h.grenA);
+  if (!c.held('slot3') && c.prev.slot3 && h.grenA != null && !h.hidden && !h.vehicle && !h.mount) throwGrenade(h, h.grenA);
   if (!c.held('slot3')) { h.grenA = null; h.grenAim = false; }
 }
 function dropCanister(h) {
@@ -1808,7 +1802,7 @@ function updateAirBonuses(dt) {
   }
 }
 // ---------- Знахідки для людей: час від часу з'являються поруч і зникають ----------
-const HUMAN_BONUS = { rifle: 1, shotgun: 0.7, medkit: 1.2, armor: 0.6, reb: 0.4, detector: 0.7, shovel: 0.6, grenade: 0.7 };
+const HUMAN_BONUS = { rifle: 1, shotgun: 0.7, medkit: 1.2, armor: 0.6, reb: 0.4, detector: 0.7, grenade: 0.7 };
 function groundFree(x) {
   const W = G.W, g = gAt(W, x);
   return !solidsNear(W, x - 30, x + 30).some((s) => !s.thin && s.x < x + 20 && s.x + s.w > x - 20 && s.y < g && s.y + s.h > g - 60);

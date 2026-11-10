@@ -118,39 +118,8 @@ function thinkHuman(b, s, dt) {
       m.hideT = 0;
       return;
     }
-    // з відкритого виходу тунелю — стріляти по дрону чи ворогу
-    const mt = sp.type === 'pipe' && inMouth(h) && h.weapon && h.weapon.mag > 0 ? botShootTarget(h, visibleThreat ? threat : null, td, L) : null;
-    if (mt) {
-      const mz = muzzle(h), a = botAim(b, mz.x, mz.y, mt, WEAPONS[h.weapon.type].speed);
-      if (aimRel(a) < 0.15) {
-        s.aim = true; s.aimAngle = a; m.aimT += dt;
-        if (m.aimT > 0.35 - 0.15 * L.react) s.fire = true;
-        m.hideT = 0;
-        return;
-      }
-    }
     m.aimT = 0;
-    // охорона й захоплення: сидіти в тунелі, поки він не наш (або тут тривога)
-    const atO = isTeam() ? objAt(h) : null;
-    if (sp.type === 'pipe' && (h.guard || (atO && (atO.owner !== h.player.team || atO === baseAlert())))) return;
-    if (sp.type === 'pipe') {
-      // тунелем — до найдальшого вперед виходу, там вилізти, коли тихо
-      const T = h.tun;
-      let ti = 0;
-      const gd = m.goDir || fwdDir(b.p);
-      sp.exits.forEach((e, i) => { if ((e.tx - sp.exits[ti].tx) * gd > 0) ti = i; });
-      const tgt = sp.exits[ti];
-      if (h.digging) return;
-      if (T.ex >= 0 && T.ex !== ti) s.down = true;
-      else if (T.ex === ti) {
-        if (m.safeT > 1.2 || m.hideT > 25) { s.up = true; if (T.u >= 1) { b.tap(s, 'interact'); m.hideCd = 4; m.hideT = 0; } }
-        else if (T.u > 0.5) s.down = true;
-      } else {
-        const dx = tgt.bx - h.x;
-        if (Math.abs(dx) > 6) { if (dx > 0) s.right = true; else s.left = true; }
-        else b.tap(s, 'up');
-      }
-    } else if (isTeam() && h.smokeT <= 0 && (objAt(h) || {}).owner !== h.player.team && objAt(h)) { /* тримаємо бліндаж, поки не захопимо */ }
+    if (false) {    } else if (isTeam() && h.smokeT <= 0 && (objAt(h) || {}).owner !== h.player.team && objAt(h)) { /* тримаємо бліндаж, поки не захопимо */ }
     else if (m.safeT > 2.5 || h.smokeT > 0.4 || m.hideT > 25) { b.tap(s, 'interact'); m.hideCd = 4; m.hideT = 0; }
     return;
   }
@@ -169,10 +138,11 @@ function thinkHuman(b, s, dt) {
       if (goal) {
         let gx = goal.kind === 'bld' || (goal.kind === 'base' && goal.ref) ? goal.ref.x + goal.ref.w / 2 : goal.x;
         // до тунелю — через найближчий вихід
-        if (goal.kind === 'tunnel' && goal.ref.exits.length) {
+        if (goal.kind === 'tunnel' && goal.ref.exits.length && pipeAt(W, h.x, h.y) !== goal.ref) {
           const e = goal.ref.exits.reduce((a, q) => (Math.abs(q.tx - h.x) < Math.abs(a.tx - h.x) ? q : a));
           gx = e.tx;
-          if (Math.abs(e.tx - h.x) < 20 && Math.abs(e.ty - h.y) < 40 && m.hideCd <= 0) { b.tap(s, 'interact'); return; }
+          // лаз — униз драбиною; спуск — просто забігти (далі — до середини галереї)
+          if (Math.abs(e.tx - h.x) < 10 && h.onGround && Math.abs(e.ty - h.y) < 6) { if (e.kind === 'shaft') { if (h.stance !== 'stand') b.tap(s, 'up'); else b.tap(s, 'down'); return; } gx = e.bx; }
         }
         dir = Math.sign(gx - h.x) || fwd;
         if (goal.kind === 'bunker' && Math.abs(goal.ref.x - h.x) < 24 && m.hideCd <= 0 && !goal.ref.ruined) { b.tap(s, 'interact'); return; }
@@ -280,6 +250,24 @@ function thinkHuman(b, s, dt) {
     } else stop = true;
   }
   if (hold && !danger) stop = true;
+  // під землею: тримати тунель — у галереї; інакше — до виходу в потрібний бік (лазом — драбиною нагору)
+  if (h.onLadder) { s.up = true; return; }
+  const tp = pipeAt(W, h.x, h.y);
+  if (tp) {
+    if (hold && objAt(h) && objAt(h).ref === tp) {
+      const mx = clamp(h.x, tp.a + 20, tp.b - 20);
+      if (Math.abs(mx - h.x) > 4) { stop = false; dir = Math.sign(mx - h.x); }
+    } else if (!stop) {
+      let best = null, bd = 1e9;
+      for (const e of tp.exits) { const dx = (e.tx - h.x) * dir; if (dx > -6 && dx < bd) { bd = dx; best = e; } }
+      if (!best) for (const e of tp.exits) { const dd = Math.abs(e.tx - h.x); if (dd < bd) { bd = dd; best = e; } }
+      if (best) {
+        if (best.kind === 'shaft' && Math.abs(best.tx - h.x) < 7 && ladderAt(h)) { b.tap(s, 'up'); return; }
+        dir = Math.sign(best.tx - h.x) || dir;
+      }
+      if (danger && !h.weapon && !h.gasT) stop = true; // перечекати під землею
+    }
+  }
   if (!stop) {
     if (dir > 0) s.right = true; else s.left = true;
     s.sprint = (danger || h.openTime > 1.5) && h.stamina > 0.05;

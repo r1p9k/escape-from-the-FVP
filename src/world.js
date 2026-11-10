@@ -68,8 +68,82 @@ const TUN_H = 40;       // висота галереї (людина йде зі
 const TUN_H_TALL = 64;  // високий хід — на повний зріст
 const TUN_DEPTH_TALL = 78;
 function tunH(sp) { return sp.tall ? TUN_H_TALL : TUN_H; }
-const TUN_K = 0.6;      // нахил спуску (вертикаль на одиницю горизонталі)
+const TUN_K = 1.2;      // нахил спуску (вертикаль на одиницю горизонталі): крутий — вузький отвір, легко перестрибнути
+const SHAFT_W = 24;     // ширина лазу з драбиною
+const BREAK_HITS = 3;   // скільки вибухів в одному місці обвалюють перекриття тунелю
 function tunFloor(W, sp, x) { return gAt(W, x) + sp.depth; }
+
+// ---- Підземні порожнини: тунелі — справжній порожній простір у землі ----
+// Для стовпчика x — список вільних проміжків [top, bot] (згори вниз); перший — повітря над землею.
+// human: лази для людини прикриті зверху (по них ходять), а кулі, гранати й скиди туди падають.
+function pipeSpans(W, sp, x, out, human) {
+  const H = tunH(sp), g = gAt(W, x);
+  // галерея; крайній спуск сам веде вниз — під ним галерея не тягнеться (інакше «кишеня» внизу)
+  if (x >= sp.a && x <= sp.b && !sp.exits.some((e) => e.kind === 'ramp' && (e.dir > 0 ? x > e.bx + 1 && e.bx > sp.b - 14 : x < e.bx - 1 && e.bx < sp.a + 14))) {
+    const f = g + sp.depth;
+    const br = sp.breaks && sp.breaks.find((q) => x >= q.a && x <= q.b);
+    if (br) out.push([-1e9, f - br.fill * H]); // перекриття обвалилося: яма, засипана на fill
+    else out.push([f - H, f]);
+  }
+  for (const e of sp.exits) {
+    if (e.kind === 'shaft') { if (Math.abs(x - e.tx) <= SHAFT_W / 2) out.push([human ? g + 3 : -1e9, e.by]); }
+    else {
+      // спуск — відкрита траншея; унизу рівний майданчик углиб галереї, щоб зійти на її підлогу
+      const fx = e.bx - e.dir * 16;
+      if (x >= Math.min(fx, e.tx) - 1 && x <= Math.max(fx, e.tx) + 1) out.push([-1e9, lerp(e.by, e.ty, rampU(e, x))]);
+    }
+  }
+  if (sp.links) for (const l of sp.links) if (x >= l.x1 && x <= l.x2) { const f = lerp(l.y1, l.y2, (x - l.x1) / ((l.x2 - l.x1) || 1)); out.push([f - l.h, f]); }
+}
+function pipeBounds(sp) {
+  let x0 = sp.a, x1 = sp.b;
+  for (const e of sp.exits) { x0 = Math.min(x0, e.tx, e.bx); x1 = Math.max(x1, e.tx, e.bx); }
+  if (sp.links) for (const l of sp.links) { x0 = Math.min(x0, l.x1); x1 = Math.max(x1, l.x2); }
+  sp.x0 = x0 - SHAFT_W; sp.x1 = x1 + SHAFT_W;
+}
+// геометрія тунелів змінилася — скинути кеш, оновити драбини в лазах
+function cavDirty(W) {
+  W.cavMap = new Map();
+  W.pipes = W.hides.filter((h) => h.type === 'pipe');
+  W.pipes.forEach(pipeBounds);
+  W.ladders = W.ladders.filter((l) => !l.shaft);
+  for (const sp of W.pipes) for (const e of sp.exits) if (e.kind === 'shaft') W.ladders.push({ x: e.tx, top: e.ty, bottom: e.by, shaft: true, sewer: sp.style === 'sewer' });
+}
+function cavSpans(W, x, human) {
+  x = Math.round(x);
+  const k = x * 2 + (human ? 1 : 0);
+  let S = W.cavMap.get(k);
+  if (S) return S;
+  const g = gAt(W, x), iv = [];
+  for (const sp of W.pipes) if (x >= sp.x0 && x <= sp.x1) pipeSpans(W, sp, x, iv, human);
+  S = [{ top: -1e9, bot: g, surf: true }];
+  iv.sort((p, q) => p[0] - q[0]);
+  for (const [t, b] of iv) {
+    const L = S[S.length - 1];
+    if (t <= L.bot + 0.5) { if (b > L.bot) { L.bot = b; L.surf = false; } }
+    else S.push({ top: t, bot: b });
+  }
+  W.cavMap.set(k, S);
+  return S;
+}
+// точка в суцільній землі (не в повітрі й не в тунелі)
+function dirtAt(W, x, y) {
+  if (y <= gAt(W, x) + 1) return false;
+  if (!W.pipes || !W.pipes.length) return true;
+  for (const s of cavSpans(W, x)) if (y >= s.top - 0.5 && y <= s.bot + 1) return false;
+  return true;
+}
+// тунель, у порожнині якого точка (ноги людини) — або null
+function pipeAt(W, x, y) {
+  if (!W.pipes || y < gAt(W, x) + 4) return null;
+  for (const sp of W.pipes) {
+    if (x < sp.x0 || x > sp.x1) continue;
+    const iv = [];
+    pipeSpans(W, sp, x, iv, false);
+    if (iv.some(([t, b]) => y >= t - 2 && y <= b + 3)) return sp;
+  }
+  return null;
+}
 // геометрія виходу: основа на підлозі галереї, верх на поверхні
 function tunExitGeo(W, sp, e) {
   e.bx = e.x; e.by = tunFloor(W, sp, e.x);
@@ -221,7 +295,7 @@ const F = {
   },
 };
 
-function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25, shovel: 0.35, grenade: 0.6, gasmask: 0.4 }); }
+function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25, grenade: 0.6, gasmask: 0.4 }); }
 // предмети побуту в будівлях (їх можна кидати)
 const PROP_KINDS = { jar: 3, chair: 2, stool: 1.5, pot: 1.5, brick: 1.2, tv: 0.8, iron: 1 };
 
@@ -351,7 +425,7 @@ function makeWorld(loc, seed, lenId, team) {
   // гарантований мінімум знахідок і техніки
   const cnt = (t) => W.pickups.filter((p) => p.type === t).length;
   const kw = width / 14000;
-  const need = { rifle: 1, shotgun: 1, medkit: 2, fuel: 4, armor: 1, detector: 1, shovel: 1, grenade: 2 };
+  const need = { rifle: 1, shotgun: 1, medkit: 2, fuel: 4, armor: 1, detector: 1, grenade: 2 };
   for (const t in need) while (cnt(t) < Math.round(need[t] * kw)) W.pickups.push({ type: t, x: rand(1400, width - 1400) });
   while (W.vehicles.length < 6) {
     const vx = rand(1600, width - 1600);
@@ -371,6 +445,7 @@ function makeWorld(loc, seed, lenId, team) {
     if (h.type === 'pipe') h.exits.forEach((e) => tunExitGeo(W, h, e));
     else { h.y = gAt(W, h.x); h.hp = HIDE_HP[h.type]; }
   }
+  cavDirty(W);
   for (const so of W.solids) if (SOLID_HP[so.type]) so.hp = SOLID_HP[so.type];
   // на дуже довгій мапі в одній зі схованок посередині захований бонус «Альоша»
   if (ML.id === 'huge') {
@@ -437,7 +512,7 @@ function surfaceY(W, x) {
   return y;
 }
 function pointSolid(W, x, y, list) {
-  if (y > gAt(W, x) + 1) return true;
+  if (dirtAt(W, x, y)) return true;
   for (const s of list) if (x >= s.x && x <= s.x + s.w && y >= s.y && y <= s.y + s.h) return true;
   return false;
 }
