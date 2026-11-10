@@ -82,13 +82,8 @@ function throwGrenade(h, ang) {
 function hideAtPoint(x, y) {
   for (const sp of G.W.hides) {
     if (sp.ruined) continue;
-    if (sp.type === 'pipe') {
-      for (const e of sp.exits) {
-        const nm = sp.style === 'sewer' ? 'каналізацію' : 'тунель';
-        if (rampOpen(e, x) && Math.abs(y - gAt(G.W, x)) < 16) { const p = tunExitPos(e, rampU(e, x)); return { sp, e, x: p.x, y: p.y, name: nm }; }
-        if (dist(x, y, e.tx, e.ty - 4) < 20) return { sp, e, x: e.tx, y: e.ty, name: nm };
-      }
-    } else if (dist(x, y, sp.x, sp.y - 5) < 24) return { sp, x: sp.x, y: sp.y, name: sp.type === 'bunker' ? 'бліндаж' : 'нору' };
+    if (sp.type === 'pipe') continue; // у тунель граната залітає сама — він порожній простір
+    if (dist(x, y, sp.x, sp.y - 5) < 24) return { sp, x: sp.x, y: sp.y, name: sp.type === 'bunker' ? 'бліндаж' : 'нору' };
   }
   return null;
 }
@@ -100,7 +95,6 @@ function grenadeInside(th) {
   G.blastBy = th.owner ? th.owner.player : null;
   for (const h of G.humans) {
     if (h.dead || h.hidden !== sp) continue;
-    if (sp.type === 'pipe' && dist(h.x, h.y, it.e.bx, it.e.by) > 170 && dist(h.x, h.y, it.x, it.y) > 120) continue;
     hurt(h, 120, 'blast');
   }
   G.blastBy = null;

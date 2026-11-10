@@ -16,8 +16,9 @@ const HSP_DEF = {
   armF_l: { r: [1664, 392, 1844, 772], a: [1730, 412], b: [1772, 690] },
   legN_u: { r: [192, 788, 368, 1132], a: [278, 808], b: [287, 1122] },
   legN_l: { r: [192, 1052, 368, 1420], a: [287, 1122], b: [282, 1405] },
-  legF_u: { r: [1048, 812, 1220, 1132], a: [1125, 830], b: [1140, 1122] },
-  legF_l: { r: [1048, 1052, 1220, 1416], a: [1140, 1122], b: [1122, 1400] },
+  // дальня нога — друга камуфляжна, лише трохи притемнена (темна виглядала як протез)
+  legF_u: { r: [512, 804, 688, 1132], a: [600, 830], b: [605, 1124], shade: 0.82 },
+  legF_l: { r: [512, 1052, 688, 1412], a: [605, 1124], b: [582, 1396], shade: 0.82 },
   bootN:  { r: [1380, 1200, 1604, 1416], p: [1436, 1262] },
   bootF:  { r: [1664, 1200, 1884, 1416], p: [1718, 1262] },
 };
@@ -63,7 +64,8 @@ function hspPrep(img) {
       if (edge) px[i * 4 + 3] = Math.round(255 * clamp((255 - lum(i)) / 120, 0, 1)); // м'який край замість світлої облямівки
     }
     const raw = hspCanvas(w, h); raw.getContext('2d').putImageData(id, 0, 0);
-    const base = hspShrink(raw, w * HSP_K * HSP_RES * (name === 'head' ? 1.2 : 1), h * HSP_K * HSP_RES * (name === 'head' ? 1.2 : 1));
+    let base = hspShrink(raw, w * HSP_K * HSP_RES * (name === 'head' ? 1.2 : 1), h * HSP_K * HSP_RES * (name === 'head' ? 1.2 : 1));
+    if (d.shade) { const sh = hspCanvas(base.width, base.height), sx = sh.getContext('2d'); sx.filter = 'brightness(' + d.shade + ')'; sx.drawImage(base, 0, 0); base = sh; } // дальня сторона — у тіні
     // варіанти: поранений (червоніє), загиблий (сірий і тьмяний)
     const hurt = hspCanvas(base.width, base.height), hx = hurt.getContext('2d');
     hx.drawImage(base, 0, 0); hx.globalCompositeOperation = 'source-atop'; hx.fillStyle = 'rgba(184,58,46,0.5)'; hx.fillRect(0, 0, base.width, base.height);
