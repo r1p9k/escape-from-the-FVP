@@ -170,6 +170,35 @@ function drawHuman(ctx, h, t, alpha) {
   }
 }
 
+// кут лопати в замаху (k: 0..1): підняти за спину, потім рубонути вперед
+function shovelSwingA(k) {
+  if (k < 0.38) { const u = k / 0.38; return lerp(-1.3, -2.75, u * (2 - u)); }
+  const u = (k - 0.38) / 0.62; return lerp(-2.75, 0.95, 1 - Math.pow(1 - u, 3));
+}
+function drawShovelSwing(ctx, X) {
+  const P = X.p, a = X.a, dx = Math.cos(a), dy = Math.sin(a);
+  // слід удару — світла дуга за лезом
+  if (X.k > 0.38) {
+    const a0 = shovelSwingA(Math.max(0.38, X.k - 0.22));
+    ctx.save();
+    ctx.globalAlpha = 0.55 * (1 - Math.max(0, X.k - 0.75) / 0.25);
+    ctx.strokeStyle = '#f4f1e6'; ctx.lineWidth = 7; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(P.x, P.y, 33, Math.min(a0, a), Math.max(a0, a)); ctx.stroke();
+    ctx.globalAlpha *= 0.5; ctx.lineWidth = 13;
+    ctx.beginPath(); ctx.arc(P.x, P.y, 31, Math.min(a0, a) + 0.15, Math.max(a0, a)); ctx.stroke();
+    ctx.restore();
+  }
+  // держак і лезо
+  ctx.strokeStyle = '#8a6a42'; ctx.lineWidth = 2.6; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(P.x - dx * 3, P.y - dy * 3); ctx.lineTo(P.x + dx * 27, P.y + dy * 27); ctx.stroke();
+  ctx.lineCap = 'butt';
+  const nx = -dy, ny = dx, b = { x: P.x + dx * 27, y: P.y + dy * 27 };
+  ctx.fillStyle = '#9aa0a6'; ctx.strokeStyle = '#4a4e52'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(b.x + nx * 4.5, b.y + ny * 4.5); ctx.lineTo(b.x + dx * 10 + nx * 3.5, b.y + dy * 10 + ny * 3.5);
+  ctx.lineTo(b.x + dx * 13, b.y + dy * 13); ctx.lineTo(b.x + dx * 10 - nx * 3.5, b.y + dy * 10 - ny * 3.5); ctx.lineTo(b.x - nx * 4.5, b.y - ny * 4.5);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+}
 // ---- стоячи / присівши / драбина / у повітрі ----
 function drawBodyUpright(ctx, h, t, C) {
   const crouch = h.stance === 'crouch' || (h.hidden && h.hidden.type !== 'pipe') || h.piloting;
@@ -200,7 +229,7 @@ function drawBodyUpright(ctx, h, t, C) {
   if (h.aiming) lean = crouch ? 0.32 : 0.05;
   if (h.onLadder) lean = -0.05;
   if (busyDig) lean = 0.5;
-  if (h.meleeT > 0) lean += 0.18 * Math.sin((1 - h.meleeT / MELEE_T) * Math.PI);
+  if (h.meleeT > 0) lean += (h.meleeHow === 'shovel' ? 0.32 : 0.18) * Math.sin((1 - h.meleeT / MELEE_T) * Math.PI);
   if (h.hurtT > 0) lean -= 0.2 * clamp(h.hurtT / 0.4, 0, 1);
   lean += Math.sin(t * 2.3 + h.x * 0.01) * 0.012 * (1 - sp); // дихання
   const TL = RIG.torso;
@@ -208,7 +237,14 @@ function drawBodyUpright(ctx, h, t, C) {
   // ---- що в руках: цілі для кистей ----
   let back = null, front = null, gun = null, gunBack = !!h.weapon, prop = null, extra = null;
   const rec = h.weapon ? clamp(h.fireCd / WEAPONS[h.weapon.type].rate, 0, 1) : 0;
-  if (h.meleeT > 0) {
+  if (h.meleeT > 0 && h.meleeHow === 'shovel') {
+    // замах лопатою: з-за спини над головою — і різко вперед-униз
+    const a = shovelSwingA(1 - h.meleeT / MELEE_T);
+    const dx = Math.cos(a), dy = Math.sin(a);
+    back = { x: Sh.x + dx * 5, y: Sh.y + dy * 5 }; front = { x: Sh.x + dx * 12, y: Sh.y + dy * 12 };
+    extra = { kind: 'shovel', p: Sh, a, k: 1 - h.meleeT / MELEE_T };
+    gunBack = !!h.weapon;
+  } else if (h.meleeT > 0) {
     const k = Math.sin((1 - h.meleeT / MELEE_T) * Math.PI), reach = 6 + k * 13;
     if (h.weapon && !h.carry) {
       // удар прикладом: зброя горизонтально, прикладом уперед
@@ -276,6 +312,7 @@ function drawBodyUpright(ctx, h, t, C) {
   if (extra) {
     if (extra.kind === 'can') { ctx.fillStyle = HCOL.line; roundRect(ctx, extra.p.x - 5.6, extra.p.y - 7.6, 11.2, 14.2, 2.4); ctx.fill(); ctx.fillStyle = '#a8322d'; roundRect(ctx, extra.p.x - 4.6, extra.p.y - 6.6, 9.2, 12.2, 2); ctx.fill(); ctx.fillStyle = '#6e1f1b'; ctx.fillRect(extra.p.x - 2, extra.p.y - 9.6, 4, 3); }
     else if (extra.kind === 'remote') { ctx.fillStyle = HCOL.line; roundRect(ctx, extra.p.x - 4.4, extra.p.y - 2.6, 8.8, 5.4, 1.4); ctx.fill(); ctx.fillStyle = '#4a4a4a'; ctx.fillRect(extra.p.x - 3.4, extra.p.y - 1.6, 6.8, 3.2); ctx.strokeStyle = '#222'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(extra.p.x + 3, extra.p.y - 2.6); ctx.lineTo(extra.p.x + 4.5, extra.p.y - 8); ctx.stroke(); }
+    else if (extra.kind === 'shovel') drawShovelSwing(ctx, extra);
     else if (extra.kind === 'bandage') { ctx.fillStyle = '#eee'; ctx.fillRect(extra.p.x - 3, extra.p.y - 2, 6, 3); }
   }
   // ближня рука з пов'язкою кольору гравця

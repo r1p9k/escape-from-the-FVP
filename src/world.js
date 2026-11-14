@@ -79,13 +79,14 @@ function tunFloor(W, sp, x) { return gAt(W, x) + sp.depth; }
 function pipeSpans(W, sp, x, out, human) {
   const H = tunH(sp), g = gAt(W, x);
   // галерея; крайній спуск сам веде вниз — під ним галерея не тягнеться (інакше «кишеня» внизу)
-  if (x >= sp.a && x <= sp.b && !sp.exits.some((e) => e.kind === 'ramp' && (e.dir > 0 ? x > e.bx + 1 && e.bx > sp.b - 14 : x < e.bx - 1 && e.bx < sp.a + 14))) {
+  if (x >= sp.a && x <= sp.b && sp.b > sp.a && !sp.exits.some((e) => e.kind === 'ramp' && (e.dir > 0 ? x > e.bx + 1 && e.bx > sp.b - 14 : x < e.bx - 1 && e.bx < sp.a + 14))) {
     const f = g + sp.depth;
     const br = sp.breaks && sp.breaks.find((q) => x >= q.a && x <= q.b);
     if (br) out.push([-1e9, f - br.fill * H]); // перекриття обвалилося: яма, засипана на fill
     else out.push([f - H, f]);
   }
   for (const e of sp.exits) {
+    if (e.prog != null) { exitPartial(e, x, H, out); continue; } // ще копається
     if (e.kind === 'shaft') { if (Math.abs(x - e.tx) <= SHAFT_W / 2) out.push([human ? g + 3 : -1e9, e.by]); }
     else {
       // спуск — відкрита траншея; унизу рівний майданчик углиб галереї, щоб зійти на її підлогу
@@ -95,6 +96,19 @@ function pipeSpans(W, sp, x, out, human) {
   }
   if (sp.links) for (const l of sp.links) if (x >= l.x1 && x <= l.x2) { const f = lerp(l.y1, l.y2, (x - l.x1) / ((l.x2 - l.x1) || 1)); out.push([f - l.h, f]); }
 }
+// недокопаний вихід: знизу — хід угору під землею (ще не пробитий нагору); згори — траншея вниз
+function exitPartial(e, x, H, out) {
+  const k = e.prog;
+  if (e.kind === 'shaft') { if (Math.abs(x - e.tx) <= SHAFT_W / 2) out.push([lerp(e.by - H, e.ty, k), e.by]); return; }
+  if (e.up === 'above') {
+    const xa = e.tx, xb = lerp(e.tx, e.bx, k);
+    if (x >= Math.min(xa, xb) - 1 && x <= Math.max(xa, xb) + 1) out.push([-1e9, lerp(e.by, e.ty, rampU(e, x))]);
+    return;
+  }
+  const xa = e.bx - e.dir * 16, xb = lerp(e.bx, e.tx, k);
+  if (x >= Math.min(xa, xb) - 1 && x <= Math.max(xa, xb) + 1) { const f = lerp(e.by, e.ty, rampU(e, x)); out.push([f - H - 18, f]); }
+}
+function exitDone(e) { return e.prog == null; }
 function pipeBounds(sp) {
   let x0 = sp.a, x1 = sp.b;
   for (const e of sp.exits) { x0 = Math.min(x0, e.tx, e.bx); x1 = Math.max(x1, e.tx, e.bx); }
@@ -107,7 +121,7 @@ function cavDirty(W) {
   W.pipes = W.hides.filter((h) => h.type === 'pipe');
   W.pipes.forEach(pipeBounds);
   W.ladders = W.ladders.filter((l) => !l.shaft);
-  for (const sp of W.pipes) for (const e of sp.exits) if (e.kind === 'shaft') W.ladders.push({ x: e.tx, top: e.ty, bottom: e.by, shaft: true, sewer: sp.style === 'sewer' });
+  for (const sp of W.pipes) for (const e of sp.exits) if (e.kind === 'shaft' && exitDone(e)) W.ladders.push({ x: e.tx, top: e.ty, bottom: e.by, shaft: true, sewer: sp.style === 'sewer', sp });
 }
 function cavSpans(W, x, human) {
   x = Math.round(x);

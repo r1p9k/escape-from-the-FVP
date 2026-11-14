@@ -272,6 +272,12 @@ function tickWork(h, c, dt) {
   const D = h.working, W = G.W;
   if (c.axisX || c.pressed('up') || c.pressed('down') || c.pressed('fire')) { h.working = null; tipOnce(h, 'Роботу перервано'); return; }
   D.t += dt; h.anim += dt * 6;
+  if (D.kind === 'fort') {
+    h.digT = 0.2;
+    digDirt(h.x + h.facing * 12, h.y);
+    if (D.t >= D.dur) { h.working = null; buildFort(h, D); }
+    return;
+  }
   if (RND() < dt * 6) Sfx.tone(D.kind === 'ply' ? 520 : 300, 0.03, 0.06);
   if (D.t < D.dur) return;
   h.working = null;
@@ -289,6 +295,43 @@ function tickWork(h, c, dt) {
     feed(h.player.name + ' облаштував вогневу позицію зі станковою гвинтівкою', '#c9a36a');
   }
   Sfx.click();
+}
+// ---------- Вогнева позиція: окопчик із бруствером із мішків ----------
+// Відносно безпечна від піхоти: тіло нижче землі, спереду мішки; цілячись, людина стає на сходинку й стріляє через бруствер.
+const FORT_W = 56, FORT_D = 26, FORT_BAG = 15, FORT_TIME = 4;
+function canFortHere(h) {
+  const W = G.W, x = h.x;
+  if (h.vehicle || h.hidden || !h.onGround || h.canister || h.carry || h.mount) return false;
+  if (Math.abs(h.y - gAt(W, x)) > 3 || x < 120 || x > W.width - 120) return false;
+  if (Math.abs(gAt(W, x - 30) - gAt(W, x + 30)) > 14) return false; // надто крутий схил
+  if (W.pipes.some((sp) => x > sp.x0 - 40 && x < sp.x1 + 40)) return false; // над тунелем — ні
+  if (rockIn(x - 40, x + 40)) return false;
+  if (W.hides.some((sp) => sp.type !== 'pipe' && Math.abs(sp.x - x) < 70)) return false;
+  if (W.covers.some((c) => c.type === 'trench' && x > c.x - 50 && x < c.x + c.w + 50)) return false;
+  if (W.vehicles.some((v) => Math.abs(v.x - x) < 80)) return false;
+  if (W.pads.some((p) => Math.abs(p.x - x) < 60) || (W.shelter && Math.abs(W.shelter.x - x) < 160)) return false;
+  return !solidsNear(W, x - 50, x + 50).some((s) => s.x < x + 44 && s.x + s.w > x - 44 && s.y < h.y + 2 && s.y + s.h > h.y - 60);
+}
+function startFort(h) {
+  h.working = { kind: 'fort', t: 0, dur: FORT_TIME, x: h.x, dir: h.facing };
+  h.vx = 0;
+}
+function buildFort(h, D) {
+  const W = G.W, x = D.x, dir = D.dir, x0 = x - FORT_W / 2, x1 = x + FORT_W / 2, rim = minGround(W, x0, x1);
+  // рівне дно на FORT_D нижче найвищої точки: пригнутий повністю за бруствером
+  for (let i = Math.max(0, Math.floor(x0 / GS)); i <= Math.min(W.ground.length - 1, Math.ceil(x1 / GS)); i++) {
+    const e = Math.min(i * GS - x0, x1 - i * GS);
+    W.ground[i] = Math.max(W.ground[i], rim + FORT_D * clamp(e / 12, 0, 1));
+  }
+  W.solids.push({ type: 'sandbag', x: dir > 0 ? x1 - 4 : x0 - 14, y: rim - FORT_BAG, w: 18, h: FORT_BAG + 8, hp: 3, fort: true });
+  W.covers.push({ type: 'trench', x: x0 + 4, w: FORT_W - 8, y: rim - FORT_BAG, h: FORT_BAG + FORT_D + 4, fort: true });
+  (W.forts || (W.forts = [])).push({ x, dir });
+  buildBuckets(W); cavDirty(W);
+  for (const pk of W.pickups) if (pk.x > x0 - 4 && pk.x < x1 + 4) pk.y = surfaceY(W, pk.x);
+  for (const pr of W.props) if (pr.x > x0 - 4 && pr.x < x1 + 4) pr.y = surfaceY(W, pr.x);
+  for (const mi of G.mines) if (mi.x > x0 - 4 && mi.x < x1 + 4) mi.y = gAt(W, mi.x);
+  for (const o of G.humans) if (!o.vehicle && !o.hidden && o.x > x0 - 4 && o.x < x1 + 4 && o.onGround) o.onGround = false; // осідають у яму
+  feed(h.player.name + ' облаштував вогневу позицію', '#c9a36a');
 }
 function nearMount(h) {
   for (const m of G.W.mounts) if (!m.user && Math.abs(m.x - h.x) < 24 && Math.abs(m.y - h.y) < 12) return m;
@@ -338,8 +381,8 @@ function damageFort(x, y, power) {
 
 // ---------- Рукопашний бій ----------
 // «Вогонь» без позиції впритул до ворожої людини чи дрона — удар (кулак, приклад або річ у руках)
-const MELEE_REACH = 36, MELEE_CD = 0.55, MELEE_T = 0.22;
-const MELEE_DMG = { fist: 20, butt: 35, prop: 30 };
+const MELEE_REACH = 40, MELEE_CD = 0.6, MELEE_T = 0.36;
+const MELEE_DMG = { shovel: 45, prop: 30 }; // лопата в кожного — нею й б'ються
 function meleeTarget(h) {
   if (h.dead || h.hidden || h.vehicle || h.mount || h.canister) return null;
   let best = null, bd = MELEE_REACH;
@@ -357,11 +400,19 @@ function meleeTarget(h) {
   }
   return best;
 }
+// замах: удар влучає на середині руху (meleeHit), щоб анімація й шкода збігалися
 function melee(h, t) {
-  const o = t.o;
   h.meleeCd = MELEE_CD; h.meleeT = MELEE_T; h.healT = 0;
-  h.facing = Math.sign(o.x - h.x) || h.facing;
-  const how = h.carry ? 'prop' : h.weapon ? 'butt' : 'fist';
+  h.facing = Math.sign(t.o.x - h.x) || h.facing;
+  h.meleePend = t; h.meleeHow = h.carry ? 'prop' : 'shovel';
+  Sfx.noise_(0.12, 0.12, 900, 'bandpass'); // свист замаху
+}
+function meleeHit(h) {
+  const t = h.meleePend; h.meleePend = null;
+  const o = t.o, how = h.meleeHow || 'shovel';
+  if (h.dead || o.dead || (t.kind === 'h' && (o.saved || o.vehicle || covered(o))) || (t.kind === 'd' && !G.drones.includes(o))) return;
+  const hy = h.y - HUMAN_DIM[h.stance].h * 0.6;
+  if (Math.abs(o.x - h.x) > MELEE_REACH + 14 || Math.abs((t.kind === 'd' ? o.y : o.y - 25) - hy) > 50) return; // відскочив — замах у повітря
   if (t.kind === 'd') {
     if (o.hp > 2) { o.hp -= 2; Sfx.tone(900, 0.05, 0.08); }
     else { feed(h.player.name + ' збив дрон ударом!', '#56ccf2'); shootDownDrone(o, h); }
@@ -374,8 +425,12 @@ function melee(h, t) {
     if (o.mount) leaveMount(o);
     if (o.carry && Math.random() < 0.5) dropCarry(o);
   }
-  for (let i = 0; i < 6; i++) G.parts.push({ type: 'spark', x: o.x - h.facing * 6, y: (t.kind === 'd' ? o.y : o.y - 30), vx: h.facing * rand(40, 160), vy: rand(-140, 20), life: 0.25, max: 0.25 });
+  const px = o.x - h.facing * 6, py = t.kind === 'd' ? o.y : o.y - 30;
+  for (let i = 0; i < 8; i++) G.parts.push({ type: 'spark', x: px, y: py, vx: h.facing * rand(40, 200), vy: rand(-160, 30), life: 0.3, max: 0.3 });
+  if (t.kind === 'h') for (let i = 0; i < 7; i++) G.parts.push({ type: 'debris', x: px, y: py, vx: h.facing * rand(30, 170), vy: rand(-200, -20), life: rand(0.4, 0.7), max: 0.7, col: '#8a1d16' });
+  G.parts.push({ type: 'ring', x: px, y: py, life: 0.18, max: 0.18, size: 18 });
+  if (how === 'shovel') Sfx.tone(240, 0.07, 0.18, 'square'); // дзвін лопати
   Sfx.noise_(0.09, 0.2, 500, 'lowpass');
   // крихка річ розбивається об ворога
-  if (how === 'prop' && PROP_TYPES[h.carry].breaks) { breakProp({ type: h.carry, x: h.x + h.facing * 14, y: h.y - 40 }); h.carry = null; }
+  if (how === 'prop' && h.carry && PROP_TYPES[h.carry].breaks) { breakProp({ type: h.carry, x: h.x + h.facing * 14, y: h.y - 40 }); h.carry = null; }
 }
