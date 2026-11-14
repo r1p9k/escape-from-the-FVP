@@ -101,6 +101,7 @@ function thinkHuman(b, s, dt) {
     return;
   }
 
+  if (h.working && h.working.kind === 'fort') return; // облаштовує позицію — не смикати
   if (h.hidden) {
     const sp = h.hidden;
     // натягнути маскувальну сітку на свою схованку (і зберегти точку відновлення)
@@ -191,6 +192,37 @@ function thinkHuman(b, s, dt) {
     m.aimT += dt;
     if (m.aimT > 0.35 - 0.15 * L.react) s.fire = true;
   } else m.aimT = 0;
+  // ---- оборона: ворожа піхота в полі зору — укриття, вогонь з-за нього; поранений відходить. Кожен хоче вижити ----
+  const foe = isTeam() ? visibleFoe(h, 560) : null;
+  if (foe) { m.foe = foe; m.engT = 6; } else if ((m.engT = (m.engT || 0) - dt) <= 0 || (m.foe && (m.foe.dead || m.foe.saved))) m.foe = null;
+  m.atCover = false;
+  if (m.foe) {
+    const f = m.foe, fdir = Math.sign(f.x - h.x) || 1, fd = Math.abs(f.x - h.x);
+    hold = false;
+    m.cyc = (m.cyc || 0) + dt;
+    const duck = m.cyc % 3.6 > 2.3; // з-за укриття: постріляв — пригнувся
+    const coverFight = () => {
+      stop = true; m.atCover = true;
+      if (duck) { s.aim = false; s.fire = false; if (h.stance === 'stand') b.tap(s, 'down'); }
+      else if (!shootT && h.stance !== 'stand') b.tap(s, 'up'); // визирнути
+    };
+    if ((h.hp < 40 && !(h.healT > 0)) || !h.weapon) {
+      // поранений чи без зброї — назад, подалі від ворога, там перев'язатися
+      if (!h.guard) { dir = -fdir; stop = false; s.aim = false; s.fire = false; }
+      else coverFight();
+    } else if (h.guard) coverFight();
+    else {
+      const cv = coverSpot(h, f, m);
+      if (cv != null && Math.abs(cv - h.x) > 7) { dir = Math.sign(cv - h.x); stop = false; s.aim = false; s.fire = false; } // перебіжка до укриття
+      else if (cv != null) coverFight();
+      else if (fd > 230 && h.onGround && !(m.fortCd > 0) && canFortHere(h)) {
+        // укриття нема — окопатися обличчям до ворога
+        stop = true; s.aim = false; s.fire = false; h.facing = fdir;
+        if (h.stance === 'stand') b.tap(s, 'down'); else { b.tap(s, 'interact'); m.fortCd = 15; }
+      } else { stop = true; if (h.stance === 'stand' && !s.aim) b.tap(s, 'down'); }
+    }
+  }
+  m.fortCd = (m.fortCd || 0) - dt;
   // командний режим: граната по ворожій людині на відстані кидка
   m.grenT = (m.grenT || 0) - dt;
   if (isTeam() && h.grenades > 0 && m.grenT <= 0 && h.onGround && !h.carry && !h.canister && !s.fire) {
@@ -259,13 +291,33 @@ function thinkHuman(b, s, dt) {
       if (Math.abs(mx - h.x) > 4) { stop = false; dir = Math.sign(mx - h.x); }
     } else if (!stop) {
       let best = null, bd = 1e9;
-      for (const e of tp.exits) { const dx = (e.tx - h.x) * dir; if (dx > -6 && dx < bd) { bd = dx; best = e; } }
-      if (!best) for (const e of tp.exits) { const dd = Math.abs(e.tx - h.x); if (dd < bd) { bd = dd; best = e; } }
+      const exs = tp.exits.filter(exitDone);
+      for (const e of exs) { const dx = (e.tx - h.x) * dir; if (dx > -6 && dx < bd) { bd = dx; best = e; } }
+      if (!best) for (const e of exs) { const dd = Math.abs(e.tx - h.x); if (dd < bd) { bd = dd; best = e; } }
       if (best) {
         if (best.kind === 'shaft' && Math.abs(best.tx - h.x) < 7 && ladderAt(h)) { b.tap(s, 'up'); return; }
         dir = Math.sign(best.tx - h.x) || dir;
       }
       if (danger && !h.weapon && !h.gasT) stop = true; // перечекати під землею
+    }
+  }
+  // розосередження: свої не ходять купою — щоб один скид не накрив двох
+  if (G.mode !== 'dm' && !h.guard && !m.atCover) {
+    let mate = null, md = BOT_SPREAD;
+    for (const o of G.humans) {
+      if (o === h || o.dead || o.saved || o.vehicle || o.hidden || (G.mode !== 'escape' && !allyP(o.player, h.player))) continue;
+      const dd = Math.abs(o.x - h.x);
+      if (dd < md && Math.abs(o.y - h.y) < 90) { md = dd; mate = o; }
+    }
+    if (!mate) m.spreadT = 0;
+    else {
+      const ahead = (mate.x - h.x) * dir > 0;
+      if (stop) { if (md < BOT_SPREAD * 0.6) { stop = false; dir = Math.sign(h.x - mate.x) || -dir; s.sprint = false; } } // стоїмо — розійтися
+      else if (ahead && !danger) {
+        // той, хто попереду, — дати йому відійти; якщо він стоїть довго — обійти
+        m.spreadT = (m.spreadT || 0) + dt;
+        if (m.spreadT < 2.5 || Math.abs(mate.vx) > 30) stop = true;
+      } else if (!ahead && h.stamina > 0.3) s.sprint = true; // позаду хтось — відірватися
     }
   }
   if (!stop) {
@@ -283,6 +335,39 @@ function thinkHuman(b, s, dt) {
   }
 }
 
+// найближчий ворог-піхотинець, якого бот бачить
+function visibleFoe(h, range) {
+  let best = null, bd = range;
+  const ey = h.y - HUMAN_DIM[h.stance].h * 0.85;
+  for (const o of G.humans) {
+    if (o === h || o.dead || o.saved || o.vehicle || covered(o) || allyP(o.player, h.player)) continue;
+    const oy = o.y - HUMAN_DIM[o.stance].h * 0.6, dd = dist(h.x, ey, o.x, oy);
+    if (dd < bd && lineOfSight(G.W, h.x, ey, o.x, oy)) { bd = dd; best = o; }
+  }
+  return best;
+}
+// найближче укриття з нашого боку від ворога: окоп чи вогнева позиція, низька тверда перешкода (за нею)
+const COVER_SOLID = { hay: 1, log: 1, block: 1, sandbag: 1, wreck: 1, rubble: 1 };
+function coverSpot(h, f, m) {
+  const W = G.W, side = Math.sign(h.x - f.x) || 1;
+  let best = null, bd = 170;
+  const ok = (x) => (x - f.x) * side > 70 && Math.abs(x - h.x) < bd;
+  if (m.coverX != null && ok(m.coverX) && Math.abs(m.coverX - h.x) < 40) return m.coverX; // своє укриття не міняти
+  for (const c of W.covers) if (c.type === 'trench') {
+    const x = clamp(h.x, c.x + 10, c.x + c.w - 10);
+    if (ok(x)) { bd = Math.abs(x - h.x); best = x; }
+  }
+  for (const s of solidsNear(W, h.x - 170, h.x + 170)) {
+    if (s.thin || s.dead || !COVER_SOLID[s.type]) continue;
+    const g = gAt(W, s.x + s.w / 2);
+    if (s.h < 16 || s.y < g - 80 || s.y + s.h < g - 4) continue; // низька перешкода на землі
+    const x = side > 0 ? s.x + s.w + 12 : s.x - 12;
+    if (ok(x)) { bd = Math.abs(x - h.x); best = x; }
+  }
+  m.coverX = best;
+  return best;
+}
+const BOT_SPREAD = 125; // скид рве на ~90 — тримаємося далі
 function botWants(h, pk) {
   if (pk.type === 'shovel') return false; // боти не копають
   if (pk.type === 'armor') return h.armor <= 0;

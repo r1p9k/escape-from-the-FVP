@@ -56,7 +56,14 @@ function teamScore(t) {
 }
 function ownedCount(t) { return G.objs.filter((o) => o.kind !== 'base' && o.owner === t).length; }
 
+// викопаний під час бою хід — теж об'єкт із прапором
+function addTunnelObj(sp) {
+  if (!G.objs || G.objs.some((o) => o.ref === sp)) return;
+  G.objs.push({ kind: 'tunnel', ref: sp, x: (sp.a + sp.b) / 2, owner: -1, capT: 0, capTeam: -1, n: [0, 0], name: 'викопаний хід', acc: 'викопаний хід' });
+  G.objs.sort((a, b) => a.x - b.x);
+}
 function updateTeam(dt) {
+  for (const o of G.objs) if (o.kind === 'tunnel') o.x = (o.ref.a + o.ref.b) / 2; // хід росте
   for (const o of G.objs) {
     const n = [0, 0];
     for (const h of G.humans) if (!h.dead && !h.saved && !h.vehicle && objHas(o, h)) n[h.player.team]++;
@@ -93,6 +100,8 @@ function captureObj(o, tm) {
   feed(TEAMS[tm].name + ' захопили ' + o.acc + (prev >= 0 && o.kind !== 'base' ? ' у ' + TEAMS[prev].gen : ''), TEAMS[tm].col);
   Sfx.tone(tm ? 740 : 620, 0.2, 0.12);
   if (o.kind !== 'base') spawnGuards(o, tm);
+  // захоплений хід кріплять дерев'яним перекриттям: вибухи його пробивають, а пробоїни латають
+  if (o.kind === 'tunnel' && o.ref.style !== 'sewer' && !o.ref.wood) { o.ref.wood = true; o.ref.caved = []; feed('Хід укріплено дерев\'яним перекриттям', '#c9a36a'); }
   if (o.kind === 'base' && !G.over) {
     G.over = 'team' + tm;
     G.overReason = TEAMS[tm].name + ' захопили ворожу базу';

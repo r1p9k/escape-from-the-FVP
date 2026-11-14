@@ -162,13 +162,14 @@ function renderView(ctx, vp, p, t) {
   for (const sp of W.hides) if (sp.type !== 'pipe' && inX(sp.x - 40, sp.x + 40) && !netHidden(sp)) drawHideBack(ctx, sp);
   drawGround(ctx, W, x0, x1, cy + viewH + 20, theme);
   for (const r of W.rocks || []) if (inX(r.a - 20, r.b + 20)) drawRock(ctx, r, W);
-  for (const sp of W.pipes) if (inX(sp.x0, sp.x1)) drawTunnel(ctx, sp, W, x0, x1);
+  const knowP = (sp) => tunnelKnown(sp, p, isDrone, drone);
+  for (const sp of W.pipes) if (inX(sp.x0, sp.x1)) drawTunnel(ctx, sp, W, x0, x1, knowP(sp));
   for (const sp of W.hides) if (sp.type !== 'pipe' && inX(sp.x - 40, sp.x + 40) && !netHidden(sp)) { drawHideFront(ctx, sp); if (sp.net) drawNet(ctx, sp.x - 30, sp.y - (sp.type === 'bunker' ? 36 : 16), 60, sp.type === 'bunker' ? 36 : 16, sp.x); }
   for (const d of W.decor) if (d.type !== 'road' && inX(d.x - 20, d.x + 80)) drawDecor(ctx, d, W);
   for (const pd of W.pads) if (inX(pd.x - 60, pd.x + 60)) drawPad(ctx, pd, t);
   if (G.mode === 'team') for (const o of G.objs) if (inX(o.x - 220, o.x + 220)) drawObjFlag(ctx, o, t);
   for (const sd of solidsNear(W, x0, x1)) drawSolid(ctx, sd, t);
-  for (const l of W.ladders) if (inX(l.x - 15, l.x + 15)) drawLadder(ctx, l);
+  for (const l of W.ladders) if (inX(l.x - 15, l.x + 15) && !(l.sp && !knowP(l.sp))) drawLadder(ctx, l); // драбина в невідомому лазі не видна
   for (const pk of W.pickups) if (!pk.taken && inX(pk.x - 20, pk.x + 20)) drawPickup(ctx, pk, t, human);
   const npr = human && !human.dead && !human.carry ? nearProp(human) : null;
   for (const pr of W.props) if (inX(pr.x - 20, pr.x + 20)) drawProp(ctx, pr.type, pr.x, pr.y, 0, pr === npr);
@@ -185,9 +186,14 @@ function renderView(ctx, vp, p, t) {
       continue;
     }
     if (isDrone && !allyP(h.player, p) && !humanVisibleToDrone(h, drone)) continue;
+    // під землею: невідомий хід — не видно, хто там; відомий — видно своїх і тих, кого бачать свої
+    if (!isDrone && buried(h) && !allyP(h.player, p) && h !== human && G.mode === 'team') {
+      const hp = pipeAt(W, h.x, h.y);
+      if (hp && (!knowP(hp) || !G.humans.some((o) => !o.dead && allyP(o.player, p) && (pipeAt(W, o.x, o.y) === hp || lineOfSight(W, o.x, o.y - 40, h.x, h.y - 20))))) continue;
+    }
     if (h.vehicle) continue; // малюється разом із технікою нижче
     if (h.hideAnim && !h.dead) drawHideAnim(ctx, h, t); else drawHuman(ctx, h, t, 1);
-    if (h.digging && !h.dead) drawShovel(ctx, h, t);
+    if ((h.digging || h.digT > 0) && !h.dead && !h.meleeT) drawShovel(ctx, h, t);
   }
   for (const m of W.mounts) if (inX(m.x - 40, m.x + 40)) drawMount(ctx, m);
   for (const th of G.throws) if (inX(th.x - 20, th.x + 20)) drawThrow(ctx, th, t);
@@ -428,10 +434,37 @@ function drawRock(ctx, r, W) {
   }
 }
 // тунель — порожнина в землі: малюється за тими самими проміжками, що й фізика
-function drawTunnel(ctx, sp, W, x0, x1) {
+// чи знає глядач планування ходу: люди — якщо хтось зі своїх туди заходив; дрон — лише якщо сам залітав
+function tunnelKnown(sp, p, isDrone, drone) {
+  if (isDrone) return !!(drone && pipeAt(G.W, drone.x, drone.y + DRONE_R - 2) === sp) || !!(p.knownPipes && p.knownPipes.has(sp));
+  return !!(sp.known && sp.known[sideKey(p)]);
+}
+// невідомий хід: видно лише входи (отвори в землі)
+function drawTunnelMouths(ctx, sp, W, lo, hi) {
+  const cave = sp.style === 'sewer' ? '#1c1e20' : '#1d1610', iv = [];
+  for (let x = lo; x <= hi; x += 3) {
+    iv.length = 0; pipeSpans(W, sp, x + 1.5, iv, false);
+    const g = gAt(W, x + 1.5);
+    for (const [t, b] of iv) {
+      if (t > g + 1 || b < g) continue; // закрито землею
+      const d = Math.min(b, g + 22) - g;
+      ctx.fillStyle = cave; ctx.fillRect(x, g - 1, 3.5, Math.min(d, 12) + 1);
+      if (d > 12) { ctx.globalAlpha = 0.55; ctx.fillRect(x, g + 11, 3.5, d - 11); ctx.globalAlpha = 1; }
+    }
+  }
+}
+function drawTunnel(ctx, sp, W, x0, x1, known) {
   const sewer = sp.style === 'sewer', H = tunH(sp);
   const cave = sewer ? '#1c1e20' : '#1d1610';
   const lo = Math.floor(Math.max(sp.x0, x0) / 3) * 3, hi = Math.min(sp.x1, x1), iv = [];
+  if (!known) {
+    drawTunnelMouths(ctx, sp, W, lo, hi);
+    for (const e of sp.exits) {
+      if (e.kind === 'shaft') { ctx.fillStyle = sewer ? '#5c5e60' : '#6b4a2b'; ctx.fillRect(e.tx - 17, e.ty - 3, 6, 6); ctx.fillRect(e.tx + 11, e.ty - 3, 6, 6); }
+      else if (exitDone(e)) { ctx.fillStyle = '#5a4630'; ctx.beginPath(); ctx.ellipse(e.tx + e.dir * 18, e.ty, 14, 5, 0, Math.PI, 0); ctx.fill(); }
+    }
+    return;
+  }
   ctx.fillStyle = cave;
   ctx.beginPath();
   for (let x = lo; x <= hi; x += 3) {
@@ -472,6 +505,16 @@ function drawTunnel(ctx, sp, W, x0, x1) {
     // відвал викопаного ґрунту біля входу
     ctx.fillStyle = '#5a4630';
     ctx.beginPath(); ctx.ellipse(e.tx + e.dir * 18, e.ty, 14, 5, 0, Math.PI, 0); ctx.fill();
+  }
+  // дерев'яне перекриття захопленого ходу
+  if (sp.wood) {
+    for (let x = Math.floor(ga / 12) * 12; x < gb; x += 12) {
+      const xa = Math.max(x, ga), xb = Math.min(x + 12, gb);
+      if (xb <= xa || br((xa + xb) / 2)) continue;
+      const f = fl((xa + xb) / 2);
+      ctx.fillStyle = (x / 12) % 2 ? '#7a5532' : '#6b4a2b'; ctx.fillRect(xa, f - H - 1, xb - xa, 5);
+      ctx.fillStyle = '#3e2a17'; ctx.fillRect(xb - 1, f - H - 1, 1, 5);
+    }
   }
   // завали: купа ґрунту, рвані краї перекриття
   for (const q of sp.breaks || []) {
@@ -557,6 +600,17 @@ function drawSolidBody(ctx, s, t) {
       ctx.fillStyle = '#1d1d1d'; ctx.beginPath(); ctx.arc(s.x + 18, s.y + s.h - 4, 9, 0, 7); ctx.arc(s.x + s.w - 18, s.y + s.h - 4, 9, 0, 7); ctx.fill();
       ctx.fillStyle = '#7a4a22'; ctx.fillRect(s.x + 30, s.y + 18, 20, 6);
       break;
+    case 'sandbag': {
+      // бруствер вогневої позиції: мішки з піском у два ряди
+      const rows = Math.max(1, Math.round(s.h / 9));
+      for (let r = 0; r < rows; r++) for (let i = 0; i * 9 < s.w - 2; i++) {
+        const bx = s.x + 4 + i * 9 + (r % 2) * 4, by = s.y + s.h - 5 - r * 8;
+        if (bx > s.x + s.w - 3) continue;
+        ctx.fillStyle = r % 2 ? '#a8956a' : '#9c8a62'; ctx.strokeStyle = '#6e6044'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.ellipse(bx, by, 5.5, 4.2, 0, 0, 7); ctx.fill(); ctx.stroke();
+      }
+      break;
+    }
     case 'block':
       ctx.fillStyle = '#9a9890'; ctx.fillRect(s.x, s.y, s.w, s.h);
       ctx.strokeStyle = '#6d6b65'; ctx.lineWidth = 2; ctx.strokeRect(s.x + 1, s.y + 1, s.w - 2, s.h - 2);
@@ -1098,7 +1152,7 @@ function drawHumanHud(ctx, vp, p, t) {
   let tip = '';
   if (h.vehicle) tip = h.seat === 'driver' ? '[' + c.label('left') + c.label('right') + '] їхати   [' + c.label('interact') + '] вийти' : '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] кулемет  [' + c.label('interact') + '] вийти';
   else if (h.mount) tip = '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('fire') + '] вогонь (' + h.mount.ammo + ')  [' + c.label('interact') + '] відійти';
-  else if (h.working) tip = (h.working.kind === 'ply' ? 'Забиваєш фанерою… ' : 'Ставиш станкову гвинтівку… ') + Math.round(h.working.t / h.working.dur * 100) + '%   [' + c.label('left') + c.label('right') + '] перервати';
+  else if (h.working) tip = (h.working.kind === 'ply' ? 'Забиваєш фанерою… ' : h.working.kind === 'fort' ? 'Облаштовуєш вогневу позицію… ' : 'Ставиш станкову гвинтівку… ') + Math.round(h.working.t / h.working.dur * 100) + '%   [' + c.label('left') + c.label('right') + '] перервати';
   else if (h.carry && !h.aiming) tip = '[' + c.label('fire') + '] кинути: ' + PROP_TYPES[h.carry].name.toLowerCase() + '  (тримай [' + c.label('aim') + '] — під кутом)   [' + c.label('slot1') + '] покласти';
   else if (h.peek) tip = '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] вогонь ' + (h.hidden.type === 'bunker' ? 'з бійниці' : 'з нори');
   else if (h.digging && h.digging.kind === 'rubble') tip = 'Розкопуєш завал… ' + Math.round((1 - h.digging.br.fill) * 100) + '%   [' + c.label('left') + c.label('right') + '] перервати';
@@ -1123,7 +1177,9 @@ function drawHumanHud(ctx, vp, p, t) {
     else if (patchAt(h)) tip = L('interact') + ' залатати перекриття тунелю';
     else if (ladderAt(h) && !h.onLadder) tip = '[' + c.label(h.y < ladderAt(h).top + 6 ? 'down' : 'up') + '] лізти драбиною';
     else if (pipeAt(G.W, h.x, h.y)) tip = tunnelTip(h, c);
-    else if (canDigHere(h)) tip = L('interact') + ' копати спуск у тунель (у бік погляду)';
+    else if (resumeDig(Object.assign({}, h, { digging: null }))) tip = L('interact') + ' копати далі';
+    else if (h.stance !== 'stand' && canFortHere(h)) tip = L('interact') + ' облаштувати вогневу позицію (окопчик із мішками, бруствер — у бік погляду)';
+    else if (canDigHere(h)) tip = L('interact') + ' копати спуск у тунель (у бік погляду)' + (canFortHere(h) ? '   присівши — вогнева позиція' : '');
   }
   if (tip) {
     ctx.font = FONT(14); ctx.textAlign = 'center';
