@@ -330,7 +330,7 @@ function drawGround(ctx, W, x0, x1, bottom, theme) {
 }
 
 function drawBack(ctx, b) {
-  ctx.fillStyle = '#5a5550'; ctx.fillRect(b.x, b.y, b.w, b.h);
+  ctx.fillStyle = ispPattern(ctx, 't_interior') || '#5a5550'; ctx.fillRect(b.x, b.y, b.w, b.h);
   ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 1;
   ctx.beginPath();
   for (let y = b.y + 12; y < b.y + b.h; y += 12) { ctx.moveTo(b.x, y); ctx.lineTo(b.x + b.w, y); }
@@ -390,6 +390,7 @@ function drawHideBack(ctx, sp) {
     ctx.closePath(); ctx.fill();
     return;
   }
+  if (sp.type === 'bunker' && ispRect(ctx, 'bunker', sp.x - 52, sp.y + 3, 104, 1, false, sp.x % 2 > 1 ? -1 : 1)) return;
   if (sp.type === 'bunker') {
     ctx.fillStyle = '#5b4a32';
     ctx.beginPath(); ctx.ellipse(sp.x, sp.y, 46, 26, 0, Math.PI, 0); ctx.fill();
@@ -406,6 +407,7 @@ function drawHideFront(ctx, sp) {
     }
     return;
   }
+  if (sp.type === 'bunker' && ISP.parts.bunker) return; // вхід — на спрайті
   if (sp.type === 'bunker') {
     ctx.fillStyle = '#1b1510'; ctx.fillRect(sp.x - 15, sp.y - 26, 30, 26);
     ctx.fillStyle = '#6e5233';
@@ -586,7 +588,18 @@ function drawSolid(ctx, s, t) {
   ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 2; brokenPath(ctx, s); ctx.stroke();
   ctx.restore();
 }
+// спрайти перешкод і текстури будівель (аркуші Gemini)
+const SOLID_SPR = { hay: 'hay', log: 'logs', block: 'jersey', wreck: 'wreck', rubble: 'rubble', plywood: 'plywood' };
+const SOLID_TEX = { wall: ['t_brick', 0.12], floor: ['t_slab', 0], roof: ['t_concrete', 0.1], shelter: ['t_concrete', 0] };
 function drawSolidBody(ctx, s, t) {
+  if (SOLID_SPR[s.type] && ispRect(ctx, SOLID_SPR[s.type], s.x, s.y, s.w, s.h, true, s.type === 'plywood' ? 1 : (hash(s.x) > 0.5 ? 1 : -1))) return;
+  const tx = SOLID_TEX[s.type], pat = tx && ispPattern(ctx, tx[0]);
+  if (pat && s.type !== 'shelter') {
+    ctx.fillStyle = pat; ctx.fillRect(s.x, s.y, s.w, s.h);
+    if (tx[1]) { ctx.fillStyle = 'rgba(0,0,0,' + tx[1] + ')'; ctx.fillRect(s.x, s.y, s.w, s.h); }
+    if (s.type === 'floor') { ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(s.x, s.y + s.h - 2, s.w, 2); }
+    return;
+  }
   switch (s.type) {
     case 'hay':
       ctx.fillStyle = '#c9a74b';
@@ -640,7 +653,7 @@ function drawSolidBody(ctx, s, t) {
       ctx.fillStyle = '#6e6a63'; ctx.fillRect(s.x, s.y, s.w, s.h);
       break;
     case 'shelter': {
-      ctx.fillStyle = '#9d9d96'; ctx.fillRect(s.x, s.y, s.w, s.h);
+      ctx.fillStyle = (tx && ispPattern(ctx, 't_concrete')) || '#9d9d96'; ctx.fillRect(s.x, s.y, s.w, s.h);
       ctx.fillStyle = '#85857e';
       for (let x = s.x; x < s.x + s.w; x += 40) ctx.fillRect(x, s.y, 2, s.h);
       ctx.fillStyle = '#6d6d66'; ctx.fillRect(s.x - 10, s.y - 12, s.w + 20, 14);
@@ -730,6 +743,8 @@ function drawAirBonus(ctx, b, t) {
   ctx.beginPath(); ctx.arc(b.x, y, r + 7, 0, 7); ctx.fill();
   ctx.globalAlpha = 1; ctx.strokeStyle = A.color; ctx.lineWidth = 2.5;
   ctx.beginPath(); ctx.arc(b.x, y, r, 0, 7); ctx.stroke();
+  const as = { lock: ['lockcam', 15], armor: ['cage', 20], battery: ['battery', 15], ammo: ['crate', 14] }[b.type];
+  if (as && ISP.parts[as[0]]) { ctx.save(); ctx.translate(b.x, y); ispCenter(ctx, as[0], as[1]); ctx.restore(); return; }
   ctx.fillStyle = A.color; ctx.font = FONT(9); ctx.textAlign = 'center';
   ctx.fillText(A.short, b.x, y + 3);
 }
@@ -935,6 +950,7 @@ function drawUgv(ctx, u, t) {
 function drawShovel(ctx, h, t) {
   const a = 0.9 + Math.sin(t * 12) * 0.45;
   ctx.save(); ctx.translate(h.x + h.facing * 6, h.y - 22); ctx.scale(h.facing, 1); ctx.rotate(a);
+  ctx.translate(-6, 0); if (ispAlong(ctx, 'shovelS', 34)) { ctx.restore(); return; } ctx.translate(6, 0);
   ctx.strokeStyle = '#8a6a42'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(18, 0); ctx.stroke();
   ctx.fillStyle = '#9aa0a6'; ctx.beginPath(); ctx.moveTo(18, -5); ctx.lineTo(28, -3); ctx.lineTo(28, 3); ctx.lineTo(18, 5); ctx.closePath(); ctx.fill();
   ctx.restore();
@@ -945,6 +961,13 @@ function drawPickup(ctx, pk, t, human) {
   const y = pk.y - 14 + Math.sin(t * 3 + pk.x) * 2;
   ctx.fillStyle = 'rgba(255,240,150,0.25)'; ctx.beginPath(); ctx.arc(pk.x, y, 18, 0, 7); ctx.fill();
   const icon = { rifle: ['rifle', 30], shotgun: ['shotgun', 30], grenade: ['grenade', 9] }[pk.type];
+  const PK_SPR = { medkit: 15, reb: 22, fuel: 13, armor: 15, detector: 12, pack: 16, gasmask: 15, ammo: 15 };
+  if (!icon && PK_SPR[pk.type] && ISP.parts[pk.type]) {
+    ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(30,30,24,0.45)'; ctx.beginPath(); ctx.ellipse(pk.x, y + 7, 13, 3.5, 0, 0, 7); ctx.fill();
+    ctx.save(); ctx.translate(pk.x, y); ispCenter(ctx, pk.type, PK_SPR[pk.type]); ctx.restore();
+    if (human && Math.abs(human.x - pk.x) < 80) { ctx.fillStyle = '#fff'; ctx.font = FONT(11, '600'); ctx.fillText(PICKUP_NAMES[pk.type], pk.x, y - 14); }
+    return;
+  }
   if (icon && ISP.parts[icon[0]]) {
     // знахідка зі спрайтом: сам предмет на світлій підкладці
     ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(30,30,24,0.55)'; roundRect(ctx, pk.x - 18, y - 9, 36, 18, 5); ctx.fill();
@@ -969,6 +992,12 @@ function drawVehicle(ctx, v, t) {
   ctx.save();
   ctx.translate(v.x, v.y); ctx.rotate(v.ang); ctx.scale(v.dir, 1);
   const L = T.len, H = T.h;
+  if (ispRect(ctx, (v.dead ? 'vd_' : 'v_') + v.type, -L / 2 - 4, 1, L + 8, 1)) {
+    if (v.hasMG && !v.dead) { ctx.fillStyle = '#222'; ctx.fillRect(-L * 0.15 - 3, -H - 14, 6, 14); ctx.save(); ctx.translate(-L * 0.15 - 8, -H - 15); ispAlong(ctx, 'pkm', 38); ctx.restore(); }
+    ctx.restore();
+    if (v.dead && v.burn > 0 && Math.random() < 0.6) { ctx.fillStyle = 'rgba(255,' + (100 + Math.random() * 100 | 0) + ',30,0.8)'; ctx.beginPath(); ctx.arc(v.x + rand(-15, 15), v.y - T.h + rand(-6, 6), rand(4, 9), 0, 7); ctx.fill(); }
+    return;
+  }
   const body = v.dead ? '#2b2522' : { moto: '#8a2a2a', quad: '#3d6b3a', buggy: '#b07a2a', car: '#55606b' }[v.type];
   const wheel = (x, r) => { ctx.fillStyle = '#151515'; ctx.beginPath(); ctx.arc(x, -r, r, 0, 7); ctx.fill(); ctx.fillStyle = '#555'; ctx.beginPath(); ctx.arc(x, -r, r * 0.4, 0, 7); ctx.fill(); };
   ctx.fillStyle = body;
