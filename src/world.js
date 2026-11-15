@@ -263,7 +263,6 @@ const F = {
     const g = gAt(W, x + 35);
     addSolid(W, { type: 'hay', x, y: g - 46, w: 72, h: 52 });
     if (RND() < 0.4) addSolid(W, { type: 'hay', x: x + 82, y: g - 46, w: 72, h: 52 });
-    if (RND() < 0.3) addSolid(W, { type: 'hay', x: x + 20, y: g - 92, w: 72, h: 46 });
     return 170;
   },
 
@@ -281,7 +280,6 @@ const F = {
   block(W, x) {
     const n = randi(1, 3), g = gAt(W, x + 20);
     for (let i = 0; i < n; i++) addSolid(W, { type: 'block', x: x + i * 44, y: g - 42, w: 42, h: 46 });
-    if (n > 1 && RND() < 0.5) addSolid(W, { type: 'block', x: x + 20, y: g - 84, w: 42, h: 42 });
     return n * 44;
   },
 
@@ -289,8 +287,6 @@ const F = {
     const w = rand(100, 170), g = gAt(W, x + w / 2);
     const h1 = rand(22, 34);
     addSolid(W, { type: 'rubble', x, y: g - h1, w, h: h1 + 6 });
-    const w2 = w * rand(0.4, 0.65), h2 = rand(22, 34);
-    addSolid(W, { type: 'rubble', x: x + rand(10, w - w2 - 10), y: g - h1 - h2, w: w2, h: h2 + 2 });
     return w;
   },
 
@@ -380,10 +376,10 @@ function building(W, x, floors, w) {
 }
 
 const VEH = {
-  moto: { name: 'Мотоцикл', len: 58, h: 32, max: 430, acc: 520, hp: 1, seats: 1, tank: 9 },
-  quad: { name: 'Квадроцикл', len: 62, h: 34, max: 360, acc: 480, hp: 1, seats: 1, tank: 11 },
-  buggy: { name: 'Багі', len: 80, h: 40, max: 390, acc: 450, hp: 1, seats: 2, tank: 12 },
-  car: { name: 'Автомобіль', len: 100, h: 46, max: 320, acc: 330, hp: 2, seats: 2, tank: 15 },
+  moto: { seat: [-4, -29], name: 'Мотоцикл', len: 58, h: 32, max: 430, acc: 520, hp: 1, seats: 1, tank: 9 },
+  quad: { seat: [-7, -30], name: 'Квадроцикл', len: 62, h: 34, max: 360, acc: 480, hp: 1, seats: 1, tank: 11 },
+  buggy: { seat: [-3, -26], gunSeat: [-22, -30], gun: [-20, -50], name: 'Багі', len: 80, h: 40, max: 390, acc: 450, hp: 1, seats: 2, tank: 12 },
+  car: { seat: [6, -24], gunSeat: [-31, -34], gun: [-30, -58], name: 'Автомобіль', len: 100, h: 46, max: 320, acc: 330, hp: 2, seats: 2, tank: 15 },
 };
 function makeVehicle(type, x, mg) {
   const T = VEH[type];

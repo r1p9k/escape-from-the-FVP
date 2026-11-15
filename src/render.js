@@ -130,7 +130,7 @@ function renderView(ctx, vp, p, t) {
   const isDrone = p.role === 'drone';
   const drone = isDrone ? p.ent.drone : null;
   const human = isDrone ? null : p.ent;
-  const visH = isDrone ? (p.cam.wide ? 900 : 600) : 480;
+  const visH = isDrone ? (p.cam.wide ? 900 : 600) : 480 * (p.cam.z || 1);
   const s = Math.min(vp.h / visH, vp.w / 700);
   const viewW = vp.w / s, viewH = vp.h / s;
   const cx = clamp(p.cam.x - viewW / 2, 0, Math.max(0, W.width - viewW));
@@ -1032,13 +1032,24 @@ function drawPickup(ctx, pk, t, human) {
 }
 
 // ---------- Техніка ----------
+function vehFrame(ctx, v) {
+  const T = VEH[v.type];
+  ctx.translate(v.x, v.y); ctx.rotate(v.ang); ctx.scale(v.dir, 1);
+  if (v.tilt) { const px = v.tilt < 0 ? -T.len / 2 + 11 : T.len / 2 - 11; ctx.translate(px, 0); ctx.rotate(v.tilt); ctx.translate(-px, 0); }
+}
 function drawVehicle(ctx, v, t) {
   const T = VEH[v.type];
   ctx.save();
-  ctx.translate(v.x, v.y); ctx.rotate(v.ang); ctx.scale(v.dir, 1);
+  vehFrame(ctx, v);
   const L = T.len, H = T.h;
   if (ispRect(ctx, (v.dead ? 'vd_' : 'v_') + v.type, -L / 2 - 4, 1, L + 8, 1)) {
-    if (v.hasMG && !v.dead) { ctx.fillStyle = '#222'; ctx.fillRect(-L * 0.15 - 3, -H - 14, 6, 14); ctx.save(); ctx.translate(-L * 0.15 - 8, -H - 15); ispAlong(ctx, 'pkm', 38); ctx.restore(); }
+    if (v.hasMG && !v.dead) {
+      // кулемет на турелі; повертається за прицілом кулеметника
+      const gp = T.gun || [-L * 0.15, -H - 15], g = v.gunner;
+      const la = g ? (v.dir > 0 ? aimWorld(g) - v.ang : Math.PI - aimWorld(g) + v.ang) : 0;
+      ctx.fillStyle = '#222'; ctx.fillRect(gp[0] - 2.5, gp[1] + 2, 5, -gp[1] - H * 0.55);
+      ctx.save(); ctx.translate(gp[0], gp[1]); ctx.rotate(la); if (Math.cos(la) < 0) ctx.scale(1, -1); ctx.translate(-8, 0); ispAlong(ctx, 'pkm', 38); ctx.restore();
+    }
     ctx.restore();
     if (v.dead && v.burn > 0 && Math.random() < 0.6) { ctx.fillStyle = 'rgba(255,' + (100 + Math.random() * 100 | 0) + ',30,0.8)'; ctx.beginPath(); ctx.arc(v.x + rand(-15, 15), v.y - T.h + rand(-6, 6), rand(4, 9), 0, 7); ctx.fill(); }
     return;
@@ -1265,7 +1276,7 @@ function drawHumanHud(ctx, vp, p, t) {
   }
   // підказки
   let tip = '';
-  if (h.vehicle) tip = h.seat === 'driver' ? '[' + c.label('left') + c.label('right') + '] їхати   [' + c.label('interact') + '] вийти' : '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] кулемет  [' + c.label('interact') + '] вийти';
+  if (h.vehicle) tip = h.seat === 'driver' ? '[' + c.label('left') + c.label('right') + '] їхати   [' + c.label('aim') + '] гальмо' + (h.vehicle.type === 'moto' ? '   [' + c.label('up') + '] дибки (через перешкоди)   [' + c.label('down') + '] на переднє' : '') + '   [' + c.label('interact') + '] вийти' : '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] кулемет  [' + c.label('interact') + '] вийти';
   else if (h.mount) tip = '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('fire') + '] вогонь (' + h.mount.ammo + ')  [' + c.label('interact') + '] відійти';
   else if (h.working) tip = (h.working.kind === 'ply' ? 'Забиваєш фанерою… ' : h.working.kind === 'fort' ? 'Облаштовуєш вогневу позицію… ' : 'Ставиш станкову гвинтівку… ') + Math.round(h.working.t / h.working.dur * 100) + '%   [' + c.label('left') + c.label('right') + '] перервати';
   else if (h.carry && !h.aiming) tip = '[' + c.label('fire') + '] кинути: ' + PROP_TYPES[h.carry].name.toLowerCase() + '  (тримай [' + c.label('aim') + '] — під кутом)   [' + c.label('slot1') + '] покласти';
@@ -1279,7 +1290,7 @@ function drawHumanHud(ctx, vp, p, t) {
     const pr = !h.carry && !h.canister ? nearProp(h) : null, ft = fortTarget(h), mt = mountTarget(h);
     const L = (a) => '[' + c.label(a) + ']';
     if (mo) tip = L('interact') + ' стати за станкову гвинтівку (' + mo.ammo + ' набоїв)';
-    else if (v) tip = '[' + c.label('interact') + '] ' + (v.driver ? 'стати за кулемет' : 'сісти: ' + VEH[v.type].name + ' (пальне ' + Math.round(v.fuel / VEH[v.type].tank * 100) + '%' + (h.canister ? ', заправити' : '') + ')');
+    else if (v) tip = '[' + c.label('interact') + '] ' + (v.hasMG && !v.gunner && (v.driver || wantsGun(h, v)) ? 'стати за кулемет' : 'сісти: ' + VEH[v.type].name + ' (пальне ' + Math.round(v.fuel / VEH[v.type].tank * 100) + '%' + (h.canister ? ', заправити' : '') + ')' + (v.hasMG && !v.gunner ? '   ззаду — за кулемет' : ''));
     else if (pk && !canTake(h, pk)) tip = pk.type === 'pack' ? 'Рюкзак загиблого: нічого не влізе' : PICKUP_NAMES[pk.type] + ': не влізе в рюкзак (' + packUsed(h) + '/' + PACK_CAP + ')';
     else if (pk) tip = '[' + c.label('interact') + '] підібрати: ' + PICKUP_NAMES[pk.type] + (pk.type === 'fuel' && h.weapon ? ' (зброю не можна буде використати)' : '');
     else if (sp) tip = '[' + c.label('interact') + '] сховатися: ' + { bunker: 'бліндаж', burrow: 'нора', pipe: sp.style === 'sewer' ? 'каналізація' : 'тунель' }[sp.type];

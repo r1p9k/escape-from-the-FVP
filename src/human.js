@@ -397,14 +397,14 @@ function drawGib(ctx, p) {
 // ---- людина в техніці: сидить ----
 function drawRider(ctx, v, h) {
   const T = VEH[v.type];
-  const off = h.seat === 'gunner' ? -T.len * 0.15 : T.len * 0.05;
-  const x = v.x + off * v.dir, y = v.y - (v.type === 'car' ? T.h - 6 : T.h - 4);
+  const st = h.seat === 'gunner' ? T.gunSeat || [-T.len * 0.15, -T.h + 4] : T.seat || [T.len * 0.05, -T.h + 4];
   const C = humanCols(h);
   hspBegin(h, C);
-  ctx.save(); ctx.translate(x, y); ctx.scale(v.dir, 1); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.save(); vehFrame(ctx, v); ctx.translate(st[0], st[1]); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   const H = { x: 0, y: 0 }, lean = h.seat === 'gunner' ? 0.05 : 0.18, TL = RIG.torso;
   const Sh = rot(H, lean, 1, -TL + 3);
-  const tgt = h.seat === 'gunner' ? { x: -T.len * 0.15 * 0 + 9, y: -T.h * 0 - 16 } : { x: 13, y: -8 };
+  const gp = T.gun || [0, 0];
+  const tgt = h.seat === 'gunner' ? { x: gp[0] - st[0] + 6, y: gp[1] - st[1] + 2 } : { moto: { x: 15, y: -13 }, quad: { x: 13, y: -11 }, buggy: { x: 12, y: -9 }, car: { x: 13, y: -8 } }[v.type];
   armTo(ctx, { x: Sh.x - 1, y: Sh.y + 0.5 }, { x: tgt.x - 3, y: tgt.y + 1 }, C.uniD);
   const k = seg(H, Math.PI / 2 - 0.15, RIG.thigh), a = seg(k, 0.15, RIG.shin * 0.8);
   legBoot(ctx, [H, k, a], 5.6, C.pants, 0, false);
