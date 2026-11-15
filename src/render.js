@@ -161,6 +161,7 @@ function renderView(ctx, vp, p, t) {
   const netHidden = (sp) => sp.net && isDrone && !droneHovering(drone, sp.x, sp.y - 10);
   for (const sp of W.hides) if (sp.type !== 'pipe' && inX(sp.x - 40, sp.x + 40) && !netHidden(sp)) drawHideBack(ctx, sp);
   drawGround(ctx, W, x0, x1, cy + viewH + 20, theme);
+  drawGrassTufts(ctx, W, x0, x1);
   for (const r of W.rocks || []) if (inX(r.a - 20, r.b + 20)) drawRock(ctx, r, W);
   const knowP = (sp) => tunnelKnown(sp, p, isDrone, drone);
   for (const sp of W.pipes) if (inX(sp.x0, sp.x1)) drawTunnel(ctx, sp, W, x0, x1, knowP(sp));
@@ -257,7 +258,8 @@ function renderView(ctx, vp, p, t) {
   for (const b of W.bushes) if (inX(b.x - 10, b.x + b.w + 10)) drawBush(ctx, b, isDrone ? 0.97 : 0.78);
   // димові завіси — поверх усього
   for (const sm of G.smokes) {
-    if (!inX(sm.x - sm.r, sm.x + sm.r)) continue;
+    if (!inX(sm.x - sm.r * 1.4, sm.x + sm.r * 1.4)) continue;
+    if (SMK.light.length) { drawSmokeScreen(ctx, sm, t); continue; }
     const k = Math.min(1, sm.t / 2, (sm.max - sm.t) * 2 + 0.3);
     for (let i = 0; i < 9; i++) {
       const a = sm.seed + i * 1.7, wob = Math.sin(t * 0.7 + i) * 8;
@@ -308,6 +310,18 @@ function drawFar(ctx, vp, cx, cy, s, theme, W) {
   ctx.lineTo(vp.x + vp.w, vp.y + vp.h); ctx.fill();
 }
 
+// кущики трави й бур'яну вздовж поверхні (спрайти Gemini); над ямами й отворами — немає
+function drawGrassTufts(ctx, W, x0, x1) {
+  if (!ISP.parts.grass1) return;
+  for (let x = Math.floor(x0 / 23) * 23; x < x1; x += 23) {
+    const hx = hash(x * 0.37 + 11);
+    if (hx < 0.25) continue;
+    const gx = x + (hash(x + 3) - 0.5) * 14, g = gAt(W, gx);
+    if (!dirtAt(W, gx, g + 4) || !dirtAt(W, gx - 5, g + 4) || !dirtAt(W, gx + 5, g + 4)) continue;
+    const s = 9 + hash(x + 7) * 9;
+    ctx.save(); ctx.translate(gx, g + 3); ispRect(ctx, 'grass' + (1 + Math.floor(hash(x + 19) * 6)), -s / 2, -1, s, 1, false, hash(x + 5) < 0.5 ? -1 : 1); ctx.restore();
+  }
+}
 function drawGround(ctx, W, x0, x1, bottom, theme) {
   if (ART.ground) { drawArtGround(ctx, W, x0, x1, bottom, theme); return; }
   x0 = Math.max(0, Math.floor(x0 / GS) * GS); x1 = Math.min(W.width, x1);
@@ -344,12 +358,27 @@ function drawBack(ctx, b) {
   ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(b.x, b.y, b.w, b.h);
 }
 
+// дерево зі спрайта: увесь стовбур і крона — позаду людей; крона ще раз (напівпрозора) — попереду
+function treeSpr(tr) { return tr.kind === 'poplar' ? 'poplar' : hash(tr.seed * 77) < 0.16 ? 'deadtree' : hash(tr.seed * 31) < 0.5 ? 'oak1' : 'oak2'; }
+function treeDraw(ctx, tr, crownOnly, a) {
+  const n = treeSpr(tr), P = ISP.parts[n];
+  if (!P) return false;
+  const d = P.d, sw = d.r[2] - d.r[0], sh = d.r[3] - d.r[1], H = tr.h * (n === 'poplar' ? 1.25 : 1.12), W = H * sw / sh;
+  const dir = hash(tr.seed * 5) < 0.5 ? -1 : 1, y0 = tr.y + 3 - H;
+  ctx.save();
+  if (crownOnly) { ctx.globalAlpha = a; ctx.beginPath(); ctx.rect(tr.x - W, y0 - 10, W * 2, H * (n === 'poplar' ? 0.72 : 0.56)); ctx.clip(); }
+  ispRect(ctx, n, tr.x - W / 2, y0, W, H, true, dir);
+  ctx.restore();
+  return true;
+}
 function drawTrunk(ctx, tr) {
+  if (treeDraw(ctx, tr, false)) return;
   ctx.fillStyle = '#4b4134';
   const tw = tr.kind === 'poplar' ? 6 : 9;
   ctx.fillRect(tr.x - tw / 2, tr.y - tr.h * 0.75, tw, tr.h * 0.75);
 }
 function drawCanopy(ctx, tr, a) {
+  if (treeDraw(ctx, tr, true, a)) return;
   ctx.globalAlpha = a;
   const y = tr.y - tr.h;
   if (tr.kind === 'poplar') {
@@ -370,6 +399,12 @@ function drawCanopy(ctx, tr, a) {
   ctx.globalAlpha = 1;
 }
 function drawBush(ctx, b, a) {
+  const bn = ['bush1', 'bush2', 'bush3'][Math.floor(hash(b.seed * 13) * 3)];
+  if (ISP.parts[bn]) {
+    const P = ISP.parts[bn], d = P.d, w = b.w * 1.2, h = w * (d.r[3] - d.r[1]) / (d.r[2] - d.r[0]);
+    ctx.save(); ctx.globalAlpha = a; ispRect(ctx, bn, b.x + b.w / 2 - w / 2, b.y + 3 - Math.max(h, b.h * 0.9), w, Math.max(h, b.h * 0.9), true, hash(b.seed) < 0.5 ? -1 : 1); ctx.restore();
+    return;
+  }
   ctx.globalAlpha = a;
   ctx.fillStyle = '#676c4b';
   const n = Math.max(2, Math.round(b.w / 28));
@@ -421,6 +456,16 @@ function drawHideFront(ctx, sp) {
 // тунель у розрізі: виритий окоп під землею з кріпленням або бетонний колектор
 // камінь у ґрунті (видно в розрізі), кілька каменів визирають на поверхню
 function drawRock(ctx, r, W) {
+  const bn = 'boulder' + (1 + Math.floor(r.seed * 3) % 3);
+  if (ISP.parts[bn]) {
+    const g = gAt(W, (r.a + r.b) / 2);
+    ispRect(ctx, bn, r.a - 6, g + r.top - 4, r.b - r.a + 12, r.h + 8, true, r.seed > 0.5 ? -1 : 1);
+    for (let i = 0; i < 3; i++) {
+      const x = r.a + (r.b - r.a) * (0.2 + 0.3 * i) + Math.sin(r.seed * 9 + i) * 6, y = gAt(W, x), s = 9 + ((r.seed * 13 + i * 3) % 4) * 1.5;
+      ctx.save(); ctx.translate(x, y + 2); ispRect(ctx, 'peb' + (1 + (i + Math.floor(r.seed * 10)) % 5), -s / 2, -1, s, 1); ctx.restore();
+    }
+    return;
+  }
   const n = 14, cx = (r.a + r.b) / 2, rx = (r.b - r.a) / 2;
   const g = gAt(W, cx), cy = g + r.top + r.h / 2, ry = r.h / 2;
   const pts = [];
@@ -1081,7 +1126,7 @@ function drawParticles(ctx, x0, x1) {
     const k = p.life / p.max;
     switch (p.type) {
       case 'fire': ctx.fillStyle = 'rgba(255,' + (120 + 120 * k | 0) + ',40,' + k + ')'; ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (0.5 + k), 0, 7); ctx.fill(); break;
-      case 'smoke': ctx.fillStyle = p.light ? 'rgba(205,205,200,' + 0.6 * k + ')' : 'rgba(70,70,70,' + 0.45 * k + ')'; ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (2 - k), 0, 7); ctx.fill(); break;
+      case 'smoke': if (SMK.light.length) { drawSmokeParticle(ctx, p, k); break; } ctx.fillStyle = p.light ? 'rgba(205,205,200,' + 0.6 * k + ')' : 'rgba(70,70,70,' + 0.45 * k + ')'; ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (2 - k), 0, 7); ctx.fill(); break;
       case 'dust': ctx.fillStyle = 'rgba(160,140,100,' + 0.4 * k + ')'; ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (2 - k), 0, 7); ctx.fill(); break;
       case 'debris': ctx.fillStyle = p.col || '#3a3026'; ctx.fillRect(p.x - 2, p.y - 2, 4, 4); break;
       case 'spark': ctx.fillStyle = '#ffd25a'; ctx.fillRect(p.x - 1, p.y - 1, 2, 2); break;
