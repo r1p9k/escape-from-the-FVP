@@ -219,6 +219,10 @@ function renderView(ctx, vp, p, t) {
   for (const b of G.bullets) { ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * 0.012, b.y - b.vy * 0.012); }
   ctx.stroke();
   for (const bm of G.bombs) {
+    const sn = bm.type === 'frag' ? 'bomb' : bm.type === 'mine' ? 'mine' : 'smoke';
+    ctx.save(); ctx.translate(bm.x, bm.y); ctx.rotate(bm.type === 'frag' ? Math.atan2(bm.vy, bm.vx) - Math.PI / 2 : 0);
+    const ok = ispCenter(ctx, sn, bm.type === 'mine' ? 12 : undefined); ctx.restore();
+    if (ok) continue;
     ctx.fillStyle = bm.type === 'frag' ? '#3b3b2a' : bm.type === 'mine' ? '#4d5a2a' : '#9a9a9a';
     ctx.beginPath(); ctx.ellipse(bm.x, bm.y, 3.5, 5, Math.atan2(bm.vy, bm.vx) - Math.PI / 2, 0, 7); ctx.fill();
   }
@@ -730,6 +734,11 @@ function drawAirBonus(ctx, b, t) {
   ctx.fillText(A.short, b.x, y + 3);
 }
 function drawMine(ctx, m, t) {
+  if (ISP.parts.mine) {
+    ctx.save(); ctx.translate(m.x, m.y + 1); ispCenter(ctx, 'mine', 15); ctx.restore();
+    if (m.arm <= 0 && Math.sin(t * 5 + m.seed) > 0.85) { ctx.fillStyle = '#ff3b3b'; ctx.fillRect(m.x - 1, m.y - 9, 2, 2); }
+    return;
+  }
   ctx.fillStyle = '#3f4a25';
   ctx.beginPath(); ctx.ellipse(m.x, m.y - 2, 7, 3.2, 0, 0, 7); ctx.fill();
   ctx.fillStyle = '#2b3318'; ctx.fillRect(m.x - 2, m.y - 6, 4, 3);
@@ -826,9 +835,10 @@ function drawProp(ctx, type, x, y, rot, label) {
 function drawThrow(ctx, th, t) {
   if (th.kind === 'prop') { ctx.save(); ctx.translate(th.x, th.y); ctx.rotate(th.rot); drawProp(ctx, th.type, 0, 6, 0); ctx.restore(); return; }
   ctx.save(); ctx.translate(th.x, th.y); ctx.rotate(th.rot);
+  if (ispCenter(ctx, 'grenade')) ctx.restore(); else {
   ctx.fillStyle = '#3d4a22'; ctx.beginPath(); ctx.ellipse(0, 0, 3.5, 4.5, 0, 0, 7); ctx.fill();
   ctx.fillStyle = '#999'; ctx.fillRect(-1, -6.5, 2, 2.5);
-  ctx.restore();
+  ctx.restore(); }
   if (th.fuse < 0.8 && (t * 12 | 0) % 2) { ctx.fillStyle = '#ff5a5a'; ctx.beginPath(); ctx.arc(th.x, th.y - 9, 2, 0, 7); ctx.fill(); }
 }
 // станкова гвинтівка на тринозі біля вікна
@@ -837,8 +847,13 @@ function drawMount(ctx, m) {
   ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(px, py + 4); ctx.lineTo(px - 9, m.y); ctx.moveTo(px, py + 4); ctx.lineTo(px + 9, m.y); ctx.moveTo(px, py + 4); ctx.lineTo(px + m.dir * 3, m.y); ctx.stroke();
   ctx.save(); ctx.translate(px, py); ctx.rotate(a);
-  ctx.fillStyle = '#5a3d24'; ctx.fillRect(-14, -2, 12, 5);
-  ctx.fillStyle = '#1e1e1e'; ctx.fillRect(-3, -2, 30, 3.5); ctx.fillRect(4, -6, 9, 3);
+  if (Math.cos(a) < 0) ctx.scale(1, -1); // ліворуч — не догори дриґом
+  ctx.translate(-16, 0);
+  if (!ispAlong(ctx, 'sniper', 46)) {
+    ctx.translate(16, 0);
+    ctx.fillStyle = '#5a3d24'; ctx.fillRect(-14, -2, 12, 5);
+    ctx.fillStyle = '#1e1e1e'; ctx.fillRect(-3, -2, 30, 3.5); ctx.fillRect(4, -6, 9, 3);
+  }
   ctx.restore();
   ctx.fillStyle = '#3a3a3a'; ctx.beginPath(); ctx.arc(px, py + 2, 2.5, 0, 7); ctx.fill();
 }
@@ -929,9 +944,19 @@ function drawPickup(ctx, pk, t, human) {
   const [col, txt] = PICKUP_STYLE[pk.type];
   const y = pk.y - 14 + Math.sin(t * 3 + pk.x) * 2;
   ctx.fillStyle = 'rgba(255,240,150,0.25)'; ctx.beginPath(); ctx.arc(pk.x, y, 18, 0, 7); ctx.fill();
+  const icon = { rifle: ['rifle', 30], shotgun: ['shotgun', 30], grenade: ['grenade', 9] }[pk.type];
+  if (icon && ISP.parts[icon[0]]) {
+    // знахідка зі спрайтом: сам предмет на світлій підкладці
+    ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(30,30,24,0.55)'; roundRect(ctx, pk.x - 18, y - 9, 36, 18, 5); ctx.fill();
+    ctx.save(); ctx.translate(pk.x, y);
+    if (icon[0] === 'grenade') { ispCenter(ctx, 'grenade', 8); ctx.translate(-1, 0); ctx.rotate(0.3); ispCenter(ctx, 'grenade', 8); }
+    else { ctx.translate(-15, -1); ispAlong(ctx, icon[0], 30); }
+    ctx.restore();
+  } else {
   ctx.fillStyle = col; roundRect(ctx, pk.x - 14, y - 9, 28, 18, 4); ctx.fill();
   ctx.fillStyle = pk.type === 'medkit' ? '#d22' : '#fff'; ctx.font = FONT(pk.type === 'medkit' ? 16 : 10); ctx.textAlign = 'center';
   ctx.fillText(txt, pk.x, y + (pk.type === 'medkit' ? 6 : 4));
+  }
   if (human && Math.abs(human.x - pk.x) < 80) {
     ctx.fillStyle = '#fff'; ctx.font = FONT(11, '600');
     ctx.fillText(PICKUP_NAMES[pk.type], pk.x, y - 14);
@@ -970,7 +995,9 @@ function drawVehicle(ctx, v, t) {
   if (v.hasMG && !v.dead) {
     ctx.fillStyle = '#222';
     ctx.fillRect(-L * 0.15 - 3, -H - 14, 6, 14);
-    ctx.fillRect(-L * 0.15, -H - 16, 30, 4);
+    ctx.save(); ctx.translate(-L * 0.15 - 8, -H - 15);
+    if (!ispAlong(ctx, 'pkm', 38)) ctx.fillRect(8, -1, 30, 4);
+    ctx.restore();
   }
   ctx.restore();
   if (v.dead && v.burn > 0 && Math.random() < 0.6) {
@@ -985,8 +1012,22 @@ function drawDrone(ctx, d, t) {
   if (d.speedT > 0 && !d.landed) { ctx.strokeStyle = 'rgba(242,201,76,0.5)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - d.vx * 0.06, d.y - d.vy * 0.06); ctx.stroke(); }
   ctx.save();
   ctx.translate(d.x, d.y); ctx.rotate(d.tilt);
-  if (d.hp > 1) { ctx.strokeStyle = '#9fb4d0'; ctx.lineWidth = 2; roundRect(ctx, -9, -7, 18, 14, 3); ctx.stroke(); }
+  if (d.hp > 1 && !ISP.parts.cage) { ctx.strokeStyle = '#9fb4d0'; ctx.lineWidth = 2; roundRect(ctx, -9, -7, 18, 14, 3); ctx.stroke(); }
   if (d.lockOn) { ctx.strokeStyle = '#ff5a5a'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(0, 0, 15, 0, 7); ctx.stroke(); }
+  // спрайт із Gemini: у польоті — розмиті лопаті, на землі — зупинені; броня — клітка; без заряду — голий
+  if (Math.abs(d.vx) > 25) d.face = Math.sign(d.vx);
+  const sn = d.landed ? 'land' : d.hp > 1 ? 'cage' : d.payload ? 'fly' : 'bare';
+  if (ISP.parts[sn]) {
+    ctx.save(); ctx.translate(0, -1);
+    if (!d.landed) ctx.globalAlpha = 0.92 + 0.08 * Math.sin(d.spin * 3);
+    ispCenter(ctx, sn, 40, d.face || 1);
+    ctx.restore();
+    ctx.fillStyle = d.player.color; ctx.fillRect(-5, -6.5, 10, 2); // смужка кольору гравця
+    ctx.fillStyle = Math.sin(t * 14) > 0 ? '#f22' : '#600';
+    ctx.beginPath(); ctx.arc(4.8 * (d.face || 1), -0.2, 0.9, 0, 7); ctx.fill();
+    ctx.restore();
+    return;
+  }
   ctx.fillStyle = '#222';
   ctx.fillRect(-14, -2, 28, 4);
   ctx.fillStyle = '#333'; roundRect(ctx, -6, -5, 12, 9, 2); ctx.fill();

@@ -57,6 +57,7 @@ function humanCols(h) {
 // ---- зброя: початок — приклад, уздовж +x ----
 const GUN_GRIP = 9, GUN_FORE = 19;
 function drawGunShape(ctx, type) {
+  if (ispAlong(ctx, type === 'shotgun' ? 'shotgun' : type === 'mg' ? 'pkm' : 'rifle', type === 'mg' ? 36 : 31)) return; // спрайт із Gemini
   ctx.fillStyle = HCOL.line;
   if (type === 'shotgun') {
     ctx.fillRect(-0.8, -2.8, 31, 6.6);
