@@ -144,9 +144,30 @@ function tryStance(h, st) {
   if (freeAt(h.x, h.y, HUMAN_DIM[st])) { h.stance = st; return true; }
   return false;
 }
-function ladderAt(h) {
-  for (const l of G.W.ladders) if (Math.abs(h.x - l.x) < 16 && h.y >= l.top - 3 && h.y <= l.bottom + 3) return l;
-  return null;
+function ladderAt(h, dir) {
+  let any = null;
+  for (const l of G.W.ladders) {
+    if (Math.abs(h.x - l.x) >= 16 || h.y < l.top - 3 || h.y > l.bottom + 3) continue;
+    if (!dir || (dir < 0 && h.y > l.top + 4) || (dir > 0 && h.y < l.bottom - 4)) return l; // на стику поверхів — та, якою можна лізти в потрібний бік
+    any = any || l;
+  }
+  return any;
+}
+// стоїть нагорі драбини: чи є опора під ногами (інакше зійти вбік)
+function ladderTopOff(h, l) {
+  const W = G.W;
+  const supported = (x) => {
+    // опора для людини: земля (над лазом — кришка) або перекриття, що на рівні верху драбини
+    const sp = humanSpan(x, l.top - 2);
+    let fy = sp.surf ? gAt(W, x) : sp.bot;
+    for (const so of solidsNear(W, x, x)) if (x >= so.x && x <= so.x + so.w && so.y >= l.top - 4 && so.y < fy) fy = so.y;
+    return Math.abs(fy - l.top) < 6 && freeAt(x, l.top, HUMAN_DIM.stand);
+  };
+  if (supported(h.x)) return;
+  for (const d of [h.facing || 1, -(h.facing || 1)]) for (const dx of [14, 22, 30]) {
+    const x = l.x + d * dx;
+    if (supported(x)) { h.x = x; h.y = l.top; return; }
+  }
 }
 function tryMantle(h) {
   const f = h.facing, d = HUMAN_DIM[h.stance];
@@ -270,7 +291,7 @@ function updateHuman(h, dt) {
   // сам пригнувся в низькому ході — вийшов на простір і випростався
   if (h.autoCrouch) { if (h.stance !== 'crouch') h.autoCrouch = false; else if (h.onGround && tryStance(h, 'stand')) h.autoCrouch = false; }
   if (h.wallT > 0) h.wallT -= dt;
-  const lad = ladderAt(h);
+  const lad = ladderAt(h, h.onLadder ? (c.held('down') ? 1 : -1) : c.pressed('down') ? 1 : -1);
   if (h.onLadder && !lad) h.onLadder = false;
   h.diveCd -= dt;
 
@@ -320,7 +341,11 @@ function updateHuman(h, dt) {
     if (h.onLadder) {
       const v = (c.held('down') ? 1 : 0) - (c.held('up') ? 1 : 0);
       h.vx = 0; h.vy = v * 150; h.y += h.vy * dt; h.x = lad.x; h.anim += Math.abs(v) * dt * 8;
-      if (h.y <= lad.top) { h.y = lad.top; h.onLadder = false; h.vy = 0; h.onGround = true; }
+      if (h.y <= lad.top) {
+        const up = G.W.ladders.find((l) => l !== lad && Math.abs(l.x - lad.x) < 16 && Math.abs(l.bottom - lad.top) < 6);
+        if (up && v < 0) { h.x = up.x; } // далі — наступна драбина вгору
+        else { h.y = lad.top; h.onLadder = false; h.vy = 0; h.onGround = true; ladderTopOff(h, lad); }
+      }
       else if (h.y >= lad.bottom && v > 0) { h.y = lad.bottom; h.onLadder = false; }
       if (ax !== 0 && v === 0) { h.onLadder = false; h.facing = ax; h.vx = ax * 80; }
     } else {
@@ -902,8 +927,8 @@ function collapseTunnel(sp, cx, ceil) {
 
 function enterVehicle(h, v) {
   if (h.carry) dropCarry(h);
-  if (!v.driver) { v.driver = h; h.seat = 'driver'; }
-  else { v.gunner = h; h.seat = 'gunner'; }
+  if (v.hasMG && !v.gunner && (v.driver || wantsGun(h, v))) { v.gunner = h; h.seat = 'gunner'; }
+  else { v.driver = h; h.seat = 'driver'; }
   h.vehicle = v; h.stance = 'stand'; h.onLadder = false; h.aiming = false;
   // каністра — заправити техніку
   const tank = VEH[v.type].tank;
@@ -912,6 +937,14 @@ function enterVehicle(h, v) {
     feed(h.player.name + ' заправив ' + VEH[v.type].name, '#f2c94c');
   }
   Sfx.click();
+}
+// підійшов ззаду до техніки з кулеметом — стати за кулемет (а не за кермо)
+function wantsGun(h, v) { return v.hasMG && (h.x - v.x) * v.dir < -4; }
+// точка кріплення кулемета у світі
+function vehGunPos(v) {
+  const T = VEH[v.type], g = T.gun || [-T.len * 0.15, -T.h - 15], c = Math.cos(v.ang || 0), s = Math.sin(v.ang || 0);
+  const lx = g[0] * v.dir, ly = g[1];
+  return { x: v.x + lx * c - ly * s, y: v.y + lx * s + ly * c };
 }
 function exitVehicle(h, fling) {
   const v = h.vehicle;
@@ -927,7 +960,11 @@ function humanInVehicle(h, c, dt) {
   const v = h.vehicle;
   if (c.pressed('interact')) { exitVehicle(h); return; }
   const T = VEH[v.type];
-  if (h.seat === 'driver') { v.input = c.axisX; h.facing = v.dir; }
+  if (h.seat === 'driver') {
+    v.input = c.axisX; h.facing = v.dir;
+    v.brake = c.held('aim'); // пробіл — гальмо
+    v.lean = v.type === 'moto' ? (c.held('up') ? -0.55 : c.held('down') ? 0.3 : 0) : 0;
+  }
   else {
     // кулеметник: ←/→ — бік, ↑/↓ — кут
     if (c.cur.aimAngle !== undefined) setAimWorld(h, c.cur.aimAngle);
@@ -941,8 +978,8 @@ function humanInVehicle(h, c, dt) {
     if (v.mgMag == null) v.mgMag = Math.min(WEAPONS.mg.mag, v.mgAmmo);
     if (v.mgReload > 0 && (v.mgReload -= dt) <= 0) { v.mgReload = 0; v.mgMag = Math.min(WEAPONS.mg.mag, v.mgAmmo); Sfx.click(); }
     if (c.held('fire') && v.mgMag > 0 && !(v.mgReload > 0) && h.fireCd <= 0) {
-      const mx = v.x - v.dir * T.len * 0.15, my = v.y - T.h - 14;
-      fireWeapon(h, mx, my, 'mg', aimWorld(h), Math.abs(v.vx) > 30, 'mount');
+      const gp = vehGunPos(v), aw = aimWorld(h), mx = gp.x + Math.cos(aw) * 30, my = gp.y + Math.sin(aw) * 30;
+      fireWeapon(h, mx, my, 'mg', aw, Math.abs(v.vx) > 30, 'mount');
       h.fireCd = WEAPONS.mg.rate;
       v.mgMag--;
       if (--v.mgAmmo <= 0) feed('Кулемет: набої скінчилися', '#ccc');
@@ -1159,26 +1196,35 @@ function updateVehicles(dt) {
       continue;
     }
     const T = VEH[v.type];
-    const inp = v.driver && v.fuel > 0 && !v.immob ? v.input : 0;
+    const inp = v.driver && v.fuel > 0 && !v.immob && !v.brake ? v.input : 0;
+    if (!v.driver) { v.brake = false; v.lean = 0; }
+    if (v.type === 'moto') v.tilt = approach(v.tilt || 0, Math.abs(v.vx) > 20 || v.lean > 0 ? v.lean || 0 : 0, 2.6 * dt);
     if (v.immob && RND() < dt * 4) G.parts.push({ type: 'smoke', x: v.x + rand(-20, 20), y: v.y - 10, vx: rand(-10, 10), vy: -30, life: 1.4, max: 1.4, size: 8 });
     if (inp) {
       v.vx = approach(v.vx, inp * T.max, T.acc * dt); v.dir = inp;
       v.fuel -= dt;
       if (v.fuel <= 0) { v.fuel = 0; feed(T.name + ': пальне скінчилося', '#f2994a'); }
-    } else v.vx = approach(v.vx, 0, (v.driver ? 300 : 260) * dt);
+    } else v.vx = approach(v.vx, 0, (v.brake ? 950 : v.driver ? 300 : 260) * dt);
+    if (v.brake && Math.abs(v.vx) > 120 && RND() < dt * 30) G.parts.push({ type: 'dust', x: v.x - v.dir * T.len * 0.35, y: v.y - 3, vx: v.dir * 30, vy: -15, life: 0.6, max: 0.6, size: 7 });
     const nx = clamp(v.x + v.vx * dt, 30, W.width - 30);
-    const ny = gAt(W, nx);
-    const r = { x: nx - T.len / 2, y: ny - T.h, w: T.len, h: T.h - 12 };
-    let blocked = false;
-    for (const s of solidsNear(W, r.x, r.x + r.w)) {
-      if (s.thin) continue;
-      if (r.x < s.x + s.w && r.x + r.w > s.x && r.y < s.y + s.h && r.y + r.h > s.y) { blocked = true; break; }
+    let ny = gAt(W, nx), blocked = false;
+    // на дибках мотоцикл заїжджає на невисокі перешкоди; із перешкоди — з'їжджає
+    const climb = v.type === 'moto' && (v.tilt || 0) < -0.3 && Math.abs(v.vx) > 40 ? 52 : 10;
+    for (const s of solidsNear(W, nx - T.len / 2, nx + T.len / 2)) {
+      if (s.thin || s.x >= nx + T.len / 2 || s.x + s.w <= nx - T.len / 2) continue;
+      if (!(s.y < ny - 12 && s.y + s.h > ny - T.h)) continue; // не на рівні корпусу
+      if (ny - s.y <= climb || (v.y <= s.y + 3 && s.y < ny)) { ny = Math.min(ny, s.y); continue; } // заїхати зверху
+      blocked = true; break;
     }
     if (blocked) {
       if (Math.abs(v.vx) > 250) { for (const o of [v.driver, v.gunner]) if (o) hurt(o, 8); }
       v.vx = 0;
-    } else { v.x = nx; v.y = ny; }
-    v.ang = Math.atan2(gAt(W, v.x + T.len / 2) - gAt(W, v.x - T.len / 2), T.len);
+    } else {
+      v.x = nx;
+      if (ny > v.y + 2) { v.vy = (v.vy || 0) + GRAV * dt; v.y = Math.min(ny, v.y + v.vy * dt); } // з'їхав з перешкоди — падає
+      else { v.y = ny; v.vy = 0; }
+    }
+    v.ang = v.y < gAt(W, v.x) - 3 ? 0 : Math.atan2(gAt(W, v.x + T.len / 2) - gAt(W, v.x - T.len / 2), T.len);
     if (v.hp < T.hp && RND() < dt * 8) G.parts.push({ type: 'smoke', x: v.x, y: v.y - T.h, vx: rand(-10, 10), vy: -40, life: 1.6, max: 1.6, size: 10 });
     if (v.driver && Math.abs(v.vx) > 100 && RND() < dt * 20) G.parts.push({ type: 'dust', x: v.x - v.dir * T.len / 2, y: v.y - 4, vx: -v.dir * 40, vy: -20, life: 0.8, max: 0.8, size: 8 });
   }
@@ -1709,6 +1755,11 @@ function updateCameras(dt) {
     }
     const k = Math.min(1, dt * 5);
     p.cam.x += (tx - p.cam.x) * k; p.cam.y += (ty - p.cam.y) * k;
+    if (p.role === 'human') {
+      const h = p.ent, still = !h.dead && Math.abs(h.vehicle ? h.vehicle.vx : h.vx) < 20;
+      const tz = still ? p.cam.userZ || 1 : 1;
+      p.cam.z = (p.cam.z || 1) + (tz - (p.cam.z || 1)) * Math.min(1, dt * (tz > (p.cam.z || 1) ? 2.5 : 4));
+    }
   }
 }
 

@@ -282,3 +282,13 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// колесо миші: віддалити/наблизити камеру людини (працює, коли вона стоїть)
+window.addEventListener('wheel', (e) => {
+  if (typeof G === 'undefined' || !G || state !== 'game') return;
+  const hs = G.players.filter((p) => p.role === 'human' && !p.bot);
+  const p = hs.find((q) => !q.ctrl.isPad) || hs[0];
+  if (!p) return;
+  p.cam.userZ = clamp((p.cam.userZ || 1) + Math.sign(e.deltaY) * 0.15, 1, 2.4);
+  e.preventDefault();
+}, { passive: false });
