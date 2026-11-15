@@ -28,6 +28,60 @@ const ISP_SHEETS = {
       bare: { r: [1454, 950, 2666, 1366], w: 40, c: [2129, 1160] },
     },
   },
+  bonuses: {
+    src: 'art/items/bonuses.jpg', key: 40,
+    parts: {
+      medkit: {r: [146,82,522,502], w: 14},
+      reb: {r: [690,66,1406,470], w: 14},
+      fuel: {r: [1566,62,1930,558], w: 14},
+      armor: {r: [2154,54,2598,578], w: 14},
+      detector: {r: [230,542,450,1082], w: 14},
+      pack: {r: [798,538,1294,1102], w: 14},
+      gasmask: {r: [1538,614,1978,1054], w: 14},
+      ammo: {r: [2122,642,2638,1054], w: 14},
+      shovelS: {r: [86,1182,898,1422], a: [92,1302], b: [892,1302]},
+      battery: {r: [1002,1158,1434,1450], w: 14},
+      lockcam: {r: [1606,1134,1906,1450], w: 14},
+      crate: {r: [2082,1098,2666,1490], w: 14},
+    },
+  },
+  vehicles: {
+    src: 'art/items/vehicles.jpg', key: 40,
+    parts: {
+      v_moto: {r: [92,280,648,616], w: 100},
+      v_quad: {r: [704,296,1228,616], w: 100},
+      v_buggy: {r: [1264,248,1876,616], w: 100},
+      v_car: {r: [1892,224,2712,568], w: 100},
+      vd_moto: {r: [88,1088,668,1428], w: 100},
+      vd_quad: {r: [728,1108,1288,1428], w: 100},
+      vd_buggy: {r: [1332,1088,1904,1428], w: 100},
+      vd_car: {r: [1924,1104,2712,1424], w: 100},
+    },
+  },
+  obstacles: {
+    src: 'art/items/obstacles.jpg', key: 40,
+    parts: {
+      hay: {r: [96,80,664,524], w: 90},
+      logs: {r: [804,84,1572,524], w: 90},
+      jersey: {r: [1772,92,2652,520], w: 90},
+      wreck: {r: [104,616,1276,984], w: 90},
+      rubble: {r: [1472,580,2644,972], w: 90},
+      sandbags: {r: [80,1148,992,1428], w: 90},
+      plywood: {r: [1100,1060,1584,1448], w: 90},
+      bunker: {r: [1656,1032,2704,1464], w: 90},
+    },
+  },
+  textures: {
+    src: 'art/items/textures.jpg', key: 0,
+    parts: {
+      t_brick: {r: [116,68,888,716], w: 64, tile: 64},
+      t_plaster: {r: [1004,68,1748,716], w: 80, tile: 80},
+      t_concrete: {r: [1864,68,2636,716], w: 64, tile: 64},
+      t_interior: {r: [132,820,888,1468], w: 96, tile: 96},
+      t_planks: {r: [1004,820,1748,1468], w: 48, tile: 48},
+      t_slab: {r: [1864,820,2628,1456], w: 48, tile: 48},
+    },
+  },
 };
 function ispPrep(sheet, img) {
   const full = document.createElement('canvas'); full.width = img.width; full.height = img.height;
@@ -36,7 +90,7 @@ function ispPrep(sheet, img) {
   for (const name in sheet.parts) {
     const d = sheet.parts[name], [x0, y0, x1, y1] = d.r, w = x1 - x0, h = y1 - y0;
     const id = fx.getImageData(x0, y0, w, h), px = id.data;
-    for (let i = 0; i < w * h; i++) {
+    if (sheet.key) for (let i = 0; i < w * h; i++) {
       const l = Math.min(px[i * 4], px[i * 4 + 1], px[i * 4 + 2]);
       px[i * 4 + 3] = Math.round(255 * clamp((250 - l) / sheet.key, 0, 1));
     }
@@ -76,4 +130,26 @@ function ispCenter(ctx, name, w, dir) {
   ctx.drawImage(P.img, d.r[0], d.r[1], d.r[2] - d.r[0], d.r[3] - d.r[1]);
   ctx.restore();
   return true;
+}
+// предмет, вписаний у прямокутник (перешкоди, техніка): знизу по центру, з власними пропорціями або розтягнутий (fit)
+function ispRect(ctx, name, x, y, w, h, fit, dir) {
+  const P = ISP.parts[name];
+  if (!P) return false;
+  const d = P.d, sw = d.r[2] - d.r[0], sh = d.r[3] - d.r[1];
+  ctx.save();
+  if (fit) { ctx.translate(dir < 0 ? x + w : x, y); ctx.scale((dir < 0 ? -w : w) / sw, h / sh); }
+  else { const s = w / sw; ctx.translate(x + w / 2, y + h); ctx.scale(dir < 0 ? -s : s, s); ctx.translate(-sw / 2, -sh); }
+  ctx.drawImage(P.img, 0, 0, sw, sh);
+  ctx.restore();
+  return true;
+}
+// текстура-візерунок (стіни, перекриття): плитка tile одиниць гри, прив'язана до світу
+const ISP_PAT = {};
+function ispPattern(ctx, name) {
+  if (ISP_PAT[name]) return ISP_PAT[name];
+  const P = ISP.parts[name];
+  if (!P) return null;
+  const pat = ctx.createPattern(P.img, 'repeat'), d = P.d, k = d.tile / P.img.width;
+  if (pat.setTransform) pat.setTransform(new DOMMatrix([k, 0, 0, k, 0, 0]));
+  return (ISP_PAT[name] = pat);
 }

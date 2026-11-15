@@ -189,7 +189,8 @@ function drawShovelSwing(ctx, X) {
     ctx.beginPath(); ctx.arc(P.x, P.y, 31, Math.min(a0, a) + 0.15, Math.max(a0, a)); ctx.stroke();
     ctx.restore();
   }
-  // держак і лезо
+  // держак і лезо (спрайт із Gemini або вектор)
+  if (ISP.parts.shovelS) { ctx.save(); ctx.translate(P.x, P.y); ctx.rotate(a); ctx.translate(-3, 0); ispAlong(ctx, 'shovelS', 42); ctx.restore(); return; }
   ctx.strokeStyle = '#8a6a42'; ctx.lineWidth = 2.6; ctx.lineCap = 'round';
   ctx.beginPath(); ctx.moveTo(P.x - dx * 3, P.y - dy * 3); ctx.lineTo(P.x + dx * 27, P.y + dy * 27); ctx.stroke();
   ctx.lineCap = 'butt';
