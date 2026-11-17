@@ -110,7 +110,7 @@ function earthFits(x, y, dim) {
     let ok = false;
     for (const s of cavSpans(W, cx, true)) {
       if (s.bot < y - 18 || s.top > y - 2) continue;
-      if (s.top <= Math.min(y, s.bot) - dim.h + 2) { ok = true; break; }
+      if (s.top <= Math.min(y, s.bot) - dim.h + 4) { ok = true; break; }
     }
     if (!ok) return false;
   }
@@ -434,7 +434,7 @@ function canPeek(sp) { return sp.type === 'burrow' || (sp.type === 'bunker' && !
 // людина на дні окопу (нижче бруствера)
 // у окопі, цілячись, людина стає на вогневу сходинку: дуло й рука — над бруствером
 function trenchLift(h) {
-  if (!h.aiming || h.vehicle || h.hidden || h.onLadder || h.dead) return 0;
+  if (!h.aiming || h.vehicle || h.hidden || h.onLadder || h.dead || !G || h === MENU_HUMAN) return 0;
   const c = G.W.covers.find((c) => c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y + 14);
   if (!c) return 0;
   const top = h.y - HUMAN_DIM[h.stance].h * (h.grenAim ? 0.82 : 0.68);
