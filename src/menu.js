@@ -133,7 +133,7 @@ function drawMenuScene(ctx, w, h, rdt) {
   MENU.scroll += MENU_HUMAN.vx * S * dt;
   const sc = MENU.scroll;
   // тряска від вибухів
-  MENU.shake = Math.max(0, MENU.shake - rdt * 1.6);
+  MENU.shake = Math.max(0, MENU.shake - rdt * 1.1); // згасає повільніше
   MENU.rt = (MENU.rt || 0) + rdt;
   const sk = MENU.shake * MENU.shake, rt = MENU.rt;
   const shx = sk * 15 * (Math.sin(rt * 51) * 0.55 + Math.sin(rt * 33 + 1.7) * 0.45), shy = sk * 12 * (Math.sin(rt * 46 + 0.6) * 0.55 + Math.sin(rt * 29 + 2.9) * 0.45);
@@ -415,7 +415,7 @@ function menuDrawTroops(ctx, L) {
       st = 'crouch';
       rot = hd * (Math.PI / 2) * Math.max(0, Math.min(1, (k - 0.3) / 0.7)) ** 1.6; offX = hd * 10 * Sz * k;
     } else if (T.dead) { // відкидає дугою, тіло обертається (при «flip» — через голову)
-      offX = aw * 140 * Sz * ft * T.flyV; offY = flying ? -4 * 34 * T.flyV * k * (1 - k) * Sz : 0;
+      offX = aw * 250 * Sz * ft * T.flyV; offY = flying ? -4 * 50 * T.flyV * k * (1 - k) * Sz : 0; // далеко й високо
       rot = T.dk === 'flip' ? aw * (Math.PI * 1.5) * Math.pow(k, 0.8) : aw * (Math.PI / 2) * Math.pow(k, 0.5 + 0.6 * T.spin); // закінчує рівно лежачи — без стрибка
     }
     // «ганчір'яна лялька»: у польоті руки й ноги бовтаються; після падіння тіло лишається в тій позі,
@@ -487,20 +487,20 @@ function menuBoom(L, wx, y, z, air) {
 function menuUpdateFx(L, dt) {
   const S = L.S, sc = MENU.scroll;
   for (const b of MENU.booms) b.t += dt;
-  MENU.booms = MENU.booms.filter((b) => b.t < b.max);
-  // забагато хмар одночасно — найстаріші швидко дотлівають (без різкого зникнення)
+  // забагато хмар одночасно — найстаріші швидко дотлівають (без різкого зникнення; до очищення списку)
   for (let i = 0; i < MENU.booms.length - 6; i++) MENU.booms[i].t += dt * 2.5;
+  MENU.booms = MENU.booms.filter((b) => b.t < b.max);
   for (const p of MENU.parts) {
     p.life -= dt; p.wx += p.vx * dt; p.y += p.vy * dt;
     const gyp = menuGroundY(L, p.z, p.wx - sc * p.z);
     if (p.k === 'ember') { p.vy += 300 * S * p.z * dt; p.vx *= 0.985; }
     else { p.vy += 1100 * S * p.z * dt; p.rot += p.spin * dt; if (p.y > gyp && p.vy > 0) { p.y = gyp; p.vy *= -0.18; p.vx *= 0.4; p.spin *= 0.4; } }
   }
+  for (let i = 0; i < MENU.parts.length - 260; i++) MENU.parts[i].life -= dt * 4; // зайві швидше тануть (до очищення списку)
   MENU.parts = MENU.parts.filter((p) => p.life > 0 && p.wx - sc * p.z > -300);
-  for (let i = 0; i < MENU.parts.length - 260; i++) MENU.parts[i].life -= dt * 4;
   for (const p of MENU.smoke) { p.life -= dt; p.wx += p.vx * dt; p.y += p.vy * dt; p.vy *= p.k === 'dust' ? 0.97 : 0.995; p.vx *= 0.99; }
+  for (let i = 0; i < MENU.smoke.length - 50; i++) MENU.smoke[i].life -= dt * 3; // до очищення: інакше життя від'ємне й малювання падає
   MENU.smoke = MENU.smoke.filter((p) => p.life > 0);
-  for (let i = 0; i < MENU.smoke.length - 50; i++) MENU.smoke[i].life -= dt * 3;
   for (const c of MENU.craters) c.life -= dt;
   MENU.craters = MENU.craters.filter((c) => c.life > 0);
   for (const t of MENU.tracers) t.t += dt;
@@ -511,7 +511,7 @@ function menuDrawLayer(ctx, L, z, withHuman) {
   const sc = MENU.scroll, S = L.S * z;
   for (const p of MENU.smoke) {
     if (p.z !== z) continue;
-    const k = p.life / p.max, X = p.wx - sc * z;
+    const k = Math.max(0, p.life / p.max), X = p.wx - sc * z;
     if (p.k === 'dust') {
       const r = p.r * (1 + (1 - k) * 2.6), a = (z === MENU_Z.near ? 0.3 : z === MENU_Z.far ? 0.8 : 0.5) * Math.pow(k, 0.9);
       const g = ctx.createRadialGradient(X, p.y, 0, X, p.y, r);
@@ -523,7 +523,7 @@ function menuDrawLayer(ctx, L, z, withHuman) {
   if (withHuman) menuDrawHuman(ctx, L);
   for (const p of MENU.parts) {
     if (p.z !== z) continue;
-    const X = p.wx - sc * z, k = p.life / p.max;
+    const X = p.wx - sc * z, k = Math.max(0, p.life / p.max);
     if (p.k === 'ember') { const e = (p.sz || 1) * S; ctx.fillStyle = 'rgba(255,' + (170 + 70 * k | 0) + ',' + (90 + 80 * k | 0) + ',' + k + ')'; ctx.fillRect(X - e, p.y - e, 2 * e, 2 * e); }
     else {
       ctx.save(); ctx.globalAlpha *= Math.min(1, k * 3);
