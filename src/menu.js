@@ -538,4 +538,36 @@ function menuMusicToggle() {
   menuMusic.on = !menuMusic.on; menuMusic.unlocked = true;
   try { localStorage.setItem('fpv.music', menuMusic.on ? '1' : '0'); } catch (e) { /* без збереження */ }
 }
+// вступ: браузер дозволяє звук лише після дії користувача, тож спершу чорний екран;
+// після кліку чи клавіші вмикається музика, і щойно вона справді заграла — меню й заставка проступають разом із нею
+const menuIntro = { active: false };
+function menuIntroStart() {
+  if (!menuMusic.on || state !== 'lobby') return; // музику вимкнено — меню одразу
+  const intro = document.getElementById('intro');
+  if (!intro) return;
+  menuIntro.active = true;
+  lobbyEl.classList.add('pre');
+  intro.classList.add('on');
+  const go = () => {
+    if (menuIntro.started) return;
+    menuIntro.started = true;
+    intro.querySelector('.intro-hint').textContent = '';
+    menuMusic.unlocked = true;
+    menuMusicPlay();
+    const el = menuMusic.el;
+    let done = false;
+    const reveal = () => {
+      if (done) return; done = true;
+      MENU.t = 0; MENU.scroll = 0; MENU.drones = []; MENU.booms = []; MENU.parts = []; MENU.smoke = []; MENU.nextD = 2.2; // сцена починається з початку
+      lobbyEl.classList.add('reveal'); lobbyEl.classList.remove('pre');
+      intro.classList.add('out');
+      setTimeout(() => { intro.classList.remove('on', 'out'); lobbyEl.classList.remove('reveal'); menuIntro.active = false; }, 3300);
+    };
+    if (el) { if (!el.paused && el.currentTime > 0) reveal(); else el.addEventListener('playing', reveal, { once: true }); }
+    setTimeout(reveal, 4000); // музика не завантажилась (немає інтернету) — однаково показати меню
+    window.removeEventListener('keydown', go, true); intro.removeEventListener('pointerdown', go);
+  };
+  intro.addEventListener('pointerdown', go);
+  window.addEventListener('keydown', go, true);
+}
 function menuMusicBtn() { return '<button class="music" data-act="music" title="' + menuMusic.credit + '">' + (menuMusic.on ? '🔊' : '🔇') + ' Lacrimosa</button>'; }

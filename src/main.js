@@ -259,6 +259,7 @@ if (/[?&]demo/.test(location.search)) {
 } else if (/[?&]join=([A-Za-z0-9]{4,5})/.test(location.search)) {
   netJoin(location.search.match(/[?&]join=([A-Za-z0-9]{4,5})/)[1], loadPref('netName', '')); renderLobbyDOM();
 } else renderLobbyDOM();
+menuIntroStart();
 
 let last = performance.now();
 function frame(now) {
@@ -272,7 +273,7 @@ function frame(now) {
   else if (state === 'lobby') {
     try { menuFrame(dt); } catch (e) { if (!MENU.errShown) { MENU.errShown = true; console.warn('заставка', e); } }
     netHostTick(dt);
-    if (GlobalKeys.pressed('Enter') && NET.role !== 'client' && !(document.activeElement && document.activeElement.tagName === 'INPUT')) startGame();
+    if (GlobalKeys.pressed('Enter') && !menuIntro.active && NET.role !== 'client' && !(document.activeElement && document.activeElement.tagName === 'INPUT')) startGame();
   } else {
     if (GlobalKeys.pressed('Escape') && !G.over) { paused = !paused; Sfx.setBuzz(0, 150); }
     if (!paused) {
