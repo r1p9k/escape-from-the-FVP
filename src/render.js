@@ -125,6 +125,7 @@ function renderGame(ctx, w, h, t) {
   if (G.mode === 'dm') drawDmBoard(ctx, w);
   else if (G.mode === 'team') { drawTeamBoard(ctx, w); drawBaseAlarm(ctx, w, h, t); }
   if (G.over && G.overT > 0.8) renderResults(ctx, w, h);
+  drawNetInfo(ctx, w, h);
 }
 
 function renderView(ctx, vp, p, t) {
