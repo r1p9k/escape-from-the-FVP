@@ -16,8 +16,9 @@ const MENU_HUMAN = {
 function mr(a, b) { return a + (b - a) * MENU.rnd(); }
 // Аркуші кадрів від Gemini: чорні силуети на білому тлі в один ряд. Кадри знаходяться автоматично
 // (стовпці без темних пікселів — проміжки), біле тло прибирається, сіре стає напівпрозорим.
-const MENU_SHEETS = { run: { src: 'art/menu/run.jpg', col: [0, 0, 0], solo: true }, boom: { src: 'art/menu/boom.jpg', col: [34, 22, 18] } };
+const MENU_SHEETS = { run: { src: 'art/menu/run.jpg', col: [0, 0, 0], solo: true, skip: [1, 5], head: true }, boom: { src: 'art/menu/boom.jpg', col: [34, 22, 18], grid: [6, 4], n: 24, pow: 0.625, vid: 180 / 306 } };
 function menuSheetPrep(sh, img) {
+  if (sh.grid) return menuGridPrep(sh, img);
   const N = 8, W = img.width, H = img.height, c = document.createElement('canvas'); c.width = W; c.height = H;
   const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0);
   const d = x.getImageData(0, 0, W, H).data, lum = (i) => Math.min(d[i], d[i + 1], d[i + 2]);
@@ -54,14 +55,39 @@ function menuSheetPrep(sh, img) {
     }
     const fx = f.getContext('2d'), id = fx.createImageData(fw, fh), o = id.data;
     let mx = 0, mw = 0;
+    const rowX = new Float32Array(fh), rowW = new Float32Array(fh);
     for (let py = 0; py < fh; py++) for (let px = 0; px < fw; px++) {
       const l = lum(((top + py) * W + a0 + px) * 4), al = keep && !keep[px + py * fw] ? 0 : Math.max(0, Math.min(1, (235 - l) / 175)), j = (py * fw + px) * 4;
       o[j] = sh.col[0]; o[j + 1] = sh.col[1]; o[j + 2] = sh.col[2]; o[j + 3] = Math.round(al * 255);
-      if (al > 0.5) { mx += px * al; mw += al; }
+      if (al > 0.5) { mx += px * al; mw += al; rowX[py] += px; rowW[py]++; }
     }
     fx.putImageData(id, 0, 0);
     f.ax = mw ? mx / mw : fw / 2; // якір по горизонталі — центр мас силуету
-    sh.frames.push(f);
+    if (sh.head) {
+      // для бігу якір — голова: вона рухається рівно, а ноги й руки гойдають центр мас
+      let t0 = 0; while (t0 < fh && !rowW[t0]) t0++;
+      let hx = 0, hw = 0; for (let py = t0; py < Math.min(fh, t0 + fh * 0.12); py++) { hx += rowX[py]; hw += rowW[py]; }
+      if (hw) f.ax = hx / hw;
+    }
+    if (!(sh.skip && sh.skip.includes(k))) sh.frames.push(f); // кадри-«присідання» з аркуша не беремо
+  }
+  sh.fh = fh;
+}
+// Аркуш-сітка з кадрами відео вибуху (білий фон, краї відео продовжені назовні).
+// Кадри взято з нерівним кроком у часі: частіше на початку, де все рухається швидко (t ∝ i^(1/pow)).
+function menuGridPrep(sh, img) {
+  const [C, R] = sh.grid, fw = Math.floor(img.width / C), fh = Math.floor(img.height / R);
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+  const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0);
+  sh.frames = [];
+  for (let i = 0; i < sh.n; i++) {
+    const d = x.getImageData((i % C) * fw, Math.floor(i / C) * fh, fw, fh), o = d.data;
+    for (let p = 0; p < o.length; p += 4) {
+      const l = Math.min(o[p], o[p + 1], o[p + 2]), al = Math.max(0, Math.min(1, (250 - l) / 230));
+      o[p] = sh.col[0]; o[p + 1] = sh.col[1]; o[p + 2] = sh.col[2]; o[p + 3] = Math.round(al * 255);
+    }
+    const f = document.createElement('canvas'); f.width = fw; f.height = fh; f.getContext('2d').putImageData(d, 0, 0);
+    f.ax = fw / 2; sh.frames.push(f);
   }
   sh.fh = fh;
 }
@@ -260,7 +286,7 @@ function menuUpdateDrones(L, dt) {
 // ---- вибух: спалах, стовп землі вгору, бурий пил, темний дим, вирва ----
 function menuBoom(L, wx, y, z, air) {
   const S = L.S * (z === MENU_Z.near ? 1.15 : z === MENU_Z.far ? 0.62 : z), sc = MENU.scroll, X = wx - sc * z;
-  MENU.booms.push({ wx, y, z, t: 0, max: MENU_SHEETS.boom.frames && !air ? 2.6 : 0.45, air, flip: MENU.rnd() < 0.5 });
+  MENU.booms.push({ wx, y, z, t: 0, max: MENU_SHEETS.boom.frames && !air ? 2.9 : 0.45, air, flip: MENU.rnd() < 0.5 });
   const near = z === MENU_Z.near, far = z === MENU_Z.far;
   MENU.shake = Math.min(1, MENU.shake + (far ? 0.15 : near ? 0.9 : 0.55));
   MENU.flash = Math.max(MENU.flash, far ? 0.3 : near ? 0.9 : 0.7); MENU.flashX = X; MENU.flashY = y;
@@ -340,8 +366,8 @@ function menuDrawLayer(ctx, L, z, withHuman) {
 function menuDrawBoom(ctx, b, X, S) {
   const BS = MENU_SHEETS.boom;
   if (BS.frames && !b.air) {
-    const n = BS.frames.length, u = b.t / b.max, ph = Math.min(n - 1.001, Math.pow(u, 0.75) * (n - 1)), i0 = Math.floor(ph), q = ph - i0;
-    const hh = 125 * S, k2 = hh / BS.fh, a0 = ctx.globalAlpha;
+    const n = BS.frames.length, u = b.t / b.max, ph = Math.min(n - 1.001, Math.pow(u, BS.pow || 0.75) * (n - 1)), i0 = Math.floor(ph), q = ph - i0;
+    const hh = 125 * S / (BS.vid || 1), k2 = hh / BS.fh, a0 = ctx.globalAlpha * Math.min(1, (1 - u) * 6); // висота відео ≈ 125 px, продовжені краї — понад це
     ctx.save();
     ctx.translate(X, b.y + 4 * S); if (b.flip) ctx.scale(-1, 1);
     for (const [fr, al] of [[BS.frames[i0], 1 - q], [BS.frames[i0 + 1], q]]) {
@@ -488,29 +514,62 @@ function menuDrawDrone(ctx, x, y, ang, S) {
   ctx.restore();
 }
 // ===== Звуки заставки: глухі, ніби теж сповільнені (лише низькі частоти) =====
+// Лише шум без генераторів тону: удар — це короткий сплеск відфільтрованого шуму, а не нота.
+// Фільтри з Q < 0.7, щоб не було резонансу (інакше теж чути «ноту»). Хвіст — згортковий ревербератор.
+const MENU_SFX = { ctx: null };
+function menuSfxBus() {
+  const ctx = Sfx.ctx; if (!ctx || !Sfx.master) return null;
+  if (MENU_SFX.ctx === ctx) return MENU_SFX;
+  const sr = ctx.sampleRate;
+  // довгий шум (4 с), щоб повтор буфера не давав періодичності
+  const nz = ctx.createBuffer(1, sr * 4, sr), nd = nz.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  // імпульсна характеристика: стерео-шум, що згасає ~3 с і темнішає з часом (повітря гасить верхи)
+  const len = Math.floor(sr * 3.2), ir = ctx.createBuffer(2, len, sr);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = ir.getChannelData(ch); let lp = 0;
+    for (let i = 0; i < len; i++) {
+      const tt = i / sr, k = 0.35 - 0.3 * Math.min(1, tt / 2.5); // коефіцієнт згладжування: менше — темніше
+      lp += (Math.random() * 2 - 1 - lp) * k;
+      d[i] = lp * Math.exp(-tt * 2.1) * (tt < 0.012 ? tt / 0.012 : 1);
+    }
+  }
+  const conv = ctx.createConvolver(); conv.buffer = ir;
+  const wet = ctx.createGain(); wet.gain.value = 0.9;
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 45; hp.Q.value = 0.5; // без гулу в хвості
+  conv.connect(hp); hp.connect(wet); wet.connect(Sfx.master);
+  Object.assign(MENU_SFX, { ctx, nz, rev: conv });
+  return MENU_SFX;
+}
+// один шумовий шар: фільтр (від f0 до f1 за fT с), атака at, згасання до dec с; send — частка в ревербератор
+function menuNoiseHit(B, t, { f0, f1, fT, at, dec, vol, rate = 1, send = 0.4, order = 2 }) {
+  const ctx = B.ctx, src = ctx.createBufferSource(); src.buffer = B.nz; src.loop = true; src.playbackRate.value = rate;
+  let node = src;
+  for (let i = 0; i < order; i++) {
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 0.5;
+    f.frequency.setValueAtTime(f0, t); f.frequency.exponentialRampToValueAtTime(f1, t + fT);
+    node.connect(f); node = f;
+  }
+  const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + at); g.gain.exponentialRampToValueAtTime(0.0005, t + dec);
+  node.connect(g); g.connect(Sfx.master);
+  if (send > 0) { const sg = ctx.createGain(); sg.gain.value = send; g.connect(sg); sg.connect(B.rev); }
+  src.start(t, Math.random() * 3); src.stop(t + dec + 0.05);
+}
 function menuSfxBoom(vol) {
-  const ctx = Sfx.ctx; if (!ctx || !Sfx.noise) return;
-  const t = ctx.currentTime;
-  // гуркіт: шум крізь низькочастотний фільтр, повільно затухає
-  const src = ctx.createBufferSource(); src.buffer = Sfx.noise; src.playbackRate.value = 0.45; src.loop = true;
-  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(260, t); f.frequency.exponentialRampToValueAtTime(90, t + 2.2); f.Q.value = 0.6;
-  const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.9 * vol, t + 0.05); g.gain.exponentialRampToValueAtTime(0.001, t + 3);
-  src.connect(f); f.connect(g); g.connect(Sfx.master); src.start(t, Math.random() * 0.5); src.stop(t + 3.1);
-  // удар: низький тон, що сповзає вниз
-  const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(64, t); o.frequency.exponentialRampToValueAtTime(24, t + 1.4);
-  const og = ctx.createGain(); og.gain.setValueAtTime(0.0001, t); og.gain.exponentialRampToValueAtTime(0.75 * vol, t + 0.04); og.gain.exponentialRampToValueAtTime(0.001, t + 1.8);
-  o.connect(og); og.connect(Sfx.master); o.start(t); o.stop(t + 1.9);
+  const B = menuSfxBus(); if (!B) return;
+  const t = B.ctx.currentTime;
+  // удар: короткий глухий сплеск
+  menuNoiseHit(B, t, { f0: 700, f1: 160, fT: 0.12, at: 0.006, dec: 0.35, vol: 0.9 * vol, send: 0.6 });
+  // суб: тиск у грудях, шум нижче 90 Гц (без висоти тону)
+  menuNoiseHit(B, t, { f0: 110, f1: 55, fT: 0.5, at: 0.015, dec: 0.9, vol: 1.3 * vol, send: 0.15, order: 3 });
+  // гуркіт ґрунту, що осідає
+  menuNoiseHit(B, t + 0.03, { f0: 300, f1: 80, fT: 2.4, at: 0.12, dec: 3, vol: 0.45 * vol, rate: 0.6, send: 0.5 });
 }
 function menuSfxShot() {
-  const ctx = Sfx.ctx; if (!ctx || !Sfx.noise) return;
-  const t = ctx.currentTime;
-  const src = ctx.createBufferSource(); src.buffer = Sfx.noise; src.playbackRate.value = 0.5;
-  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(420, t); f.frequency.exponentialRampToValueAtTime(140, t + 0.4);
-  const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.35, t + 0.01); g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
-  src.connect(f); f.connect(g); g.connect(Sfx.master); src.start(t, Math.random() * 0.5); src.stop(t + 0.55);
-  const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.3);
-  const og = ctx.createGain(); og.gain.setValueAtTime(0.0001, t); og.gain.exponentialRampToValueAtTime(0.3, t + 0.01); og.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
-  o.connect(og); og.connect(Sfx.master); o.start(t); o.stop(t + 0.45);
+  const B = menuSfxBus(); if (!B) return;
+  const t = B.ctx.currentTime;
+  menuNoiseHit(B, t, { f0: 900, f1: 180, fT: 0.08, at: 0.003, dec: 0.22, vol: 0.32, send: 0.8 });
+  menuNoiseHit(B, t, { f0: 140, f1: 70, fT: 0.15, at: 0.006, dec: 0.3, vol: 0.35, send: 0.2, order: 3 });
 }
 // ===== Музика меню =====
 const menuMusic = {
@@ -519,9 +578,24 @@ const menuMusic = {
   credit: 'В. А. Моцарт — Реквієм, Lacrimosa · Г. фон Караян, Віденська філармонія, 1960 · Wikimedia Commons, суспільне надбання',
 };
 function loadMenuPref() { try { return localStorage.getItem('fpv.music') !== '0'; } catch (e) { return true; } }
+// У записі спершу секунда стороннього звуку й 2 с тиші — перші ноти вступають на 3,23 с;
+// фінальне «Amen» відзвучує до ~209 с. Граємо й зациклюємо лише саму музику.
+const MUSIC_START = 3.2, MUSIC_END = 209;
+function menuMusicEl() {
+  if (!menuMusic.el) {
+    const el = menuMusic.el = new Audio(menuMusic.src);
+    el.loop = false; el.volume = 0; el.preload = 'auto';
+    const back = () => { el.currentTime = MUSIC_START; };
+    el.addEventListener('loadedmetadata', () => { if (el.currentTime < MUSIC_START) back(); });
+    el.addEventListener('timeupdate', () => { if (el.currentTime >= MUSIC_END) back(); });
+    el.addEventListener('ended', () => { back(); el.play().catch(() => {}); });
+  }
+  return menuMusic.el;
+}
 function menuMusicPlay() {
-  if (!menuMusic.el) { menuMusic.el = new Audio(menuMusic.src); menuMusic.el.loop = true; menuMusic.el.volume = 0; menuMusic.el.preload = 'auto'; }
-  const p = menuMusic.el.play(); if (p && p.catch) p.catch(() => { /* браузер чекає на клік */ });
+  const el = menuMusicEl();
+  if (el.readyState >= 1 && el.currentTime < MUSIC_START) el.currentTime = MUSIC_START;
+  const p = el.play(); if (p && p.catch) p.catch(() => { /* браузер чекає на клік */ });
 }
 // щокадру: у меню грає (плавно наростає), у грі — плавно затихає й ставиться на паузу
 function menuMusicTick(dt) {
@@ -546,6 +620,7 @@ function menuIntroStart() {
   const intro = document.getElementById('intro');
   if (!intro) return;
   menuIntro.active = true;
+  menuMusicEl(); // трек вантажиться, поки людина дивиться на чорний екран
   lobbyEl.classList.add('pre');
   intro.classList.add('on');
   const go = () => {
@@ -553,8 +628,9 @@ function menuIntroStart() {
     menuIntro.started = true;
     intro.querySelector('.intro-hint').textContent = '';
     menuMusic.unlocked = true;
+    const el = menuMusicEl();
+    el.volume = 0.6; // без наростання: Lacrimosa починається тихо, і перші ноти мають бути чутні
     menuMusicPlay();
-    const el = menuMusic.el;
     let done = false;
     const reveal = () => {
       if (done) return; done = true;
