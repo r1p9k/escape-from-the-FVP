@@ -74,6 +74,7 @@ function keyHtml(c) {
 }
 
 function renderLobbyDOM() {
+  if (NET.role === 'client') { lobbyEl.innerHTML = netWaitHtml(); return; }
   const L = Lobby, st = L.status();
   const used = new Set(L.slots.map((s) => s.scheme));
   let cards = '';
@@ -95,7 +96,7 @@ function renderLobbyDOM() {
       } else cards += '<div class="card" style="opacity:.35"></div>';
       continue;
     }
-    const c = s.bot ? null : CONTROLLERS[s.scheme];
+    const c = s.bot ? null : s.remote ? { name: '🌐 По мережі' + (s.pname ? ': ' + s.pname : ''), label: (a) => codeLabel(KB_SCHEMES.kb.keys[a][0]) } : CONTROLLERS[s.scheme];
     const role = '<div class="seg">' +
       '<button data-act="role" data-i="' + i + '" data-v="human" class="' + (s.role === 'human' ? 'on' : '') + '">🏃 Людина</button>' +
       '<button data-act="role" data-i="' + i + '" data-v="drone" class="' + (s.role === 'drone' ? 'on' : '') + '">🛸 FPV-дрон</button></div>';
@@ -123,6 +124,7 @@ function renderLobbyDOM() {
 
   lobbyEl.innerHTML = '<div class="wrap">' +
     '<header><h1>ВТЕЧА ВІД FPV</h1><p>Людина біжить до укриття, дрон не дає їй утекти. 2–8 учасників на одному екрані, можна з ботами.</p></header>' +
+    '<h2>Гра по мережі</h2>' + netLobbyHtml() +
     '<h2>Учасники</h2><div class="slots">' + cards + '</div>' +
     '<h2>Локація</h2><div class="locs">' + locs + '</div>' +
     '<h2>Режим гри</h2><div class="opts">' +
@@ -211,6 +213,7 @@ lobbyEl.addEventListener('click', (e) => {
   if (!b || b.disabled) return;
   Sfx.unlock();
   const L = Lobby, i = +b.dataset.i, act = b.dataset.act;
+  if (netLobbyClick(act)) return;
   if (act === 'menu') L.menuFor = i;
   else if (act === 'cancel') L.menuFor = -1;
   else if (act === 'add') L.add(b.dataset.scheme);
@@ -226,7 +229,9 @@ lobbyEl.addEventListener('click', (e) => {
   else if (act === 'start') { startGame(); return; }
   Sfx.click();
   renderLobbyDOM();
+  netLobbyChanged();
 });
+lobbyEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'netCode') { e.stopPropagation(); netLobbyClick('netjoin'); } });
 // оновлювати статус геймпадів
 window.addEventListener('gamepadconnected', () => { if (state === 'lobby') renderLobbyDOM(); });
 window.addEventListener('gamepaddisconnected', () => { if (state === 'lobby') renderLobbyDOM(); });
@@ -236,12 +241,14 @@ function startGame() {
   newGame(Lobby.slots, LOCATIONS[Lobby.loc].id, { len: (MAP_LENGTHS[Lobby.len] || MAP_LENGTHS[0]).id, controls: Lobby.controls, mode: Lobby.mode, dmMin: Lobby.dmMin });
   state = 'game'; paused = false;
   lobbyEl.classList.add('hidden');
+  netStartHost();
 }
 function toLobby() {
   state = 'lobby'; paused = false;
   Sfx.setBuzz(0, 150);
   lobbyEl.classList.remove('hidden');
   renderLobbyDOM();
+  netToLobby();
 }
 canvas.addEventListener('click', () => {
   if (state === 'game' && G.over && G.overT > 1.5) toLobby();
@@ -254,6 +261,8 @@ if (/[?&]demo/.test(location.search)) {
 } else if (/[?&]bots/.test(location.search)) {
   Lobby.slots = [{ scheme: 'kb', role: 'drone' }, { scheme: 'bot1', bot: true, role: 'human', level: 1 }, { scheme: 'bot2', bot: true, role: 'drone', level: 1 }];
   Lobby.renumber(); startGame();
+} else if (/[?&]join=(\d{4})/.test(location.search)) {
+  netJoin(location.search.match(/[?&]join=(\d{4})/)[1], loadPref('netName', '')); renderLobbyDOM();
 } else renderLobbyDOM();
 
 let last = performance.now();
@@ -263,14 +272,18 @@ function frame(now) {
   const t = now / 1000;
   for (const id in CONTROLLERS) CONTROLLERS[id].poll();
   GlobalKeys.poll();
-  if (state === 'lobby') {
-    if (GlobalKeys.pressed('Enter')) startGame();
+  if (state === 'net') netClientFrame(dt, t);
+  else if (state === 'lobby') {
+    if (GlobalKeys.pressed('Enter') && NET.role !== 'client' && !(document.activeElement && document.activeElement.tagName === 'INPUT')) startGame();
   } else {
     if (GlobalKeys.pressed('Escape') && !G.over) { paused = !paused; Sfx.setBuzz(0, 150); }
     if (!paused) {
-      for (const p of G.players) if (p.bot) p.ctrl.poll(dt);
+      for (const p of G.players) if (p.bot) p.ctrl.poll(dt); else if (p.remote) p.ctrl.poll();
+      NET.rec = NET.role === 'host';
       updateGame(dt);
+      NET.rec = false;
     }
+    netHostTick(dt);
     renderGame(ctx, VW, VH, t);
     if (paused) {
       ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, VW, VH);
@@ -285,9 +298,10 @@ requestAnimationFrame(frame);
 
 // колесо миші: віддалити/наблизити камеру людини (працює, коли вона стоїть)
 window.addEventListener('wheel', (e) => {
+  if (state === 'net') { NET.userZ = clamp(NET.userZ + Math.sign(e.deltaY) * 0.15, 1, 2.4); e.preventDefault(); return; }
   if (typeof G === 'undefined' || !G || state !== 'game') return;
   const hs = G.players.filter((p) => p.role === 'human' && !p.bot);
-  const p = hs.find((q) => !q.ctrl.isPad) || hs[0];
+  const p = hs.find((q) => !q.remote && !q.ctrl.isPad) || hs.find((q) => !q.remote);
   if (!p) return;
   p.cam.userZ = clamp((p.cam.userZ || 1) + Math.sign(e.deltaY) * 0.15, 1, 2.4);
   e.preventDefault();
