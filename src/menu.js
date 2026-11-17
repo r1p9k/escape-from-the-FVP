@@ -4,7 +4,7 @@
 const MENU = {
   t: 0, scroll: 0, drones: [], booms: [], parts: [], smoke: [], craters: [], tracers: [],
   nextD: 1.2, shake: 0, flash: 0, flashX: 0, flashY: 0, hc: null, rnd: mulberry32(7),
-  aim: null, aimCd: 3, flinch: 0, pace: 1, muzzle: 0, corpses: {}, troops: [], nextT: 2.5,
+  aim: null, aimCd: 3, flinch: 0, pace: 1, muzzle: 0, corpses: {}, troops: [], nextT: 2.5, raid: 0, raidCd: 9,
 };
 const MENU_SLOW = 0.3; // сповільнення часу
 const MENU_Z = { far: 0.45, mid: 1, near: 1.7 };
@@ -166,7 +166,14 @@ function drawMenuScene(ctx, w, h, rdt) {
   // ---- оновлення ----
   MENU.nextD -= rdt;
   // не більше кількох дронів і вибухів одночасно, інакше сцена перевантажена й гальмує
-  if (MENU.nextD <= 0) { MENU.nextD = mr(1.1, 2.4); if (MENU.drones.length < 3 && MENU.booms.length < 3) menuSpawnDrone(L); }
+  // інколи — наліт: кілька дронів поспіль (з окремою, трохи вищою стелею)
+  if ((MENU.raidCd -= rdt) <= 0 && !MENU.raid) { MENU.raid = 4 + ((MENU.rnd() * 4) | 0); MENU.raidCd = mr(14, 24); }
+  if (MENU.nextD <= 0) {
+    const raid = MENU.raid > 0;
+    MENU.nextD = raid ? mr(0.3, 0.6) : mr(0.8, 1.7);
+    const fresh = MENU.booms.filter((b) => b.t < 0.8).length; // стара хмара, що згасає, не рахується
+    if (MENU.drones.length < (raid ? 6 : 3) && fresh < (raid ? 4 : 2)) { menuSpawnDrone(L); if (raid) MENU.raid--; }
+  }
   menuUpdateDrones(L, dt);
   menuUpdateFx(L, dt);
   menuUpdateHuman(L, dt);
@@ -396,13 +403,23 @@ function menuDrawTroops(ctx, L) {
     cx.setTransform(1, 0, 0, 1, 0, 0); cx.globalCompositeOperation = 'source-over'; cx.clearRect(0, 0, W, Hh);
     cx.setTransform(Sz, 0, 0, Sz, W / 2, Hh * 0.9);
     // смерть: спершу політ (тіло відкидає від вибуху, воно обертається), потім — лежить
-    const FLY = 0.6, flying = T.dead && T.deadT < FLY, ft = Math.min(T.deadT, FLY), aw = T.away || 1;
-    const offX = T.dead ? aw * 140 * Sz * ft * (T.flyV || 1) : 0, offY = flying ? -(230 * ft - 383 * ft * ft) * Sz * (T.flyV || 1) : 0;
-    const h = Object.assign({}, MENU_HUMAN, { cine: false, vx: 0, anim: 0, facing: T.dead && !flying ? -aw : T.facing, stance: T.dead ? 'stand' : T.stance, aiming: !T.dead, aimA: T.aimA, fireCd: T.fireCd, dead: T.dead && !flying, weapon: flying ? null : MENU_HUMAN.weapon });
-    if (flying) { // обертання навколо стегон: голова відлітає від вибуху
-      const k = ft / FLY, rot = aw * (Math.PI / 2) * Math.pow(k, 0.85) * (T.spin || 1);
-      cx.translate(0, -24); cx.rotate(rot); cx.translate(0, 24);
+    const FLY = T.fly || 0.6, aw = T.away || 1, tt = T.dead ? Math.max(0, T.deadT - (T.del || 0)) : 0;
+    const flying = T.dead && tt < FLY, ft = Math.min(tt, FLY), k = ft / FLY, crumple = T.dk === 'crumple';
+    const hd = crumple ? T.cd : T.dk === 'flip' ? -aw : aw; // куди лягає голова (через голову — на інший бік)
+    let offX = 0, offY = 0, rot = 0, st = T.dead ? 'stand' : T.stance;
+    if (T.dead && crumple) { // осідає на коліна й падає без польоту
+      st = 'crouch';
+      rot = hd * (Math.PI / 2) * Math.max(0, Math.min(1, (k - 0.3) / 0.7)) ** 1.6; offX = hd * 10 * Sz * k;
+    } else if (T.dead) { // відкидає дугою, тіло обертається (при «flip» — через голову)
+      offX = aw * 140 * Sz * ft * T.flyV; offY = flying ? -4 * 34 * T.flyV * k * (1 - k) * Sz : 0;
+      rot = T.dk === 'flip' ? aw * (Math.PI * 1.5) * Math.pow(k, 0.8) : aw * (Math.PI / 2) * Math.pow(k, 0.5 + 0.6 * T.spin); // закінчує рівно лежачи — без стрибка
     }
+    // у польоті — «ганчір'яна лялька»: дивиться на вибух (падає горілиць), руки й ноги бовтаються
+    const rag = flying ? (crumple ? (k > 0.3 ? { w: tt * 9 + (T.seed || 0), f: 0.5 * Math.min(1, (k - 0.3) / 0.3), arch: 0.2, low: true } : null)
+      : { w: tt * 13 + (T.seed || 0), f: Math.min(1, k * 4) * (1 - 0.4 * k), arch: Math.min(1, k * 3) }) : null;
+    const fFace = flying ? (crumple ? T.cd : -aw) : null;
+    const h = Object.assign({}, MENU_HUMAN, { rag, cine: false, vx: 0, anim: 0, facing: T.dead && !flying ? -hd : fFace != null ? fFace : T.facing, stance: rag ? 'stand' : st, aiming: !T.dead, aimA: T.aimA, fireCd: T.fireCd, dead: T.dead && !flying, weapon: T.dead && (flying ? !crumple || k > 0.3 : true) ? null : MENU_HUMAN.weapon });
+    if (flying && rot) { cx.translate(0, -24 + 19 * Math.abs(Math.sin(rot))); cx.rotate(rot); cx.translate(0, 24); } // обертання навколо стегон; лягаючи, стегна опускаються до землі
     drawHuman(cx, h, MENU.t, 1);
     cx.setTransform(1, 0, 0, 1, 0, 0);
     cx.globalCompositeOperation = 'source-atop'; cx.fillStyle = '#140810'; cx.fillRect(0, 0, W, Hh);
@@ -420,8 +437,14 @@ function menuDrawTroops(ctx, L) {
 // ---- вибух: спалах, стовп землі вгору, бурий пил, темний дим, вирва ----
 function menuBoom(L, wx, y, z, air) {
   const S = L.S * (z === MENU_Z.near ? 1.15 : z === MENU_Z.far ? 0.62 : z), sc = MENU.scroll, X = wx - sc * z;
-  if (!air) for (const T of MENU.troops) if (!T.dead && T.z === z && Math.abs(T.wx - wx) < 26 * S) {
-    T.dead = true; T.deadT = 0; T.away = T.wx >= wx ? 1 : -1; T.flyV = mr(0.8, 1.2); T.spin = mr(0.85, 1.25);
+  if (!air) for (const T of MENU.troops) if (!T.dead && T.z === z && Math.abs(T.wx - wx) < 16 * S) {
+    // кожна смерть своя: що ближче до вибуху — то далі відкидає; відкидає на спину, перекидає або людина осідає
+    const d = Math.abs(T.wx - wx) / (16 * S), r = MENU.rnd();
+    T.dead = true; T.deadT = 0; T.away = T.wx >= wx ? 1 : -1;
+    T.dk = d < 0.35 && r < 0.4 ? 'flip' : d > 0.6 && r < 0.6 ? 'crumple' : r < 0.25 ? 'crumple' : 'throw';
+    T.flyV = (1.35 - d * 0.75) * mr(0.8, 1.15); T.spin = T.dk === 'flip' ? mr(1.6, 2.1) : mr(0.7, 1.3);
+    T.fly = T.dk === 'crumple' ? mr(0.6, 0.9) : mr(0.45, 0.8); T.del = mr(0, 0.18);
+    T.cd = MENU.rnd() < 0.5 ? 1 : -1; T.seed = mr(0, 6.28); // куди осідає; власна фаза бовтання
   }
   MENU.booms.push({ wx, y, z, t: 0, max: MENU_SHEETS.boom.frames && !air ? 2.9 : 0.45, air, flip: MENU.rnd() < 0.5 });
   const near = z === MENU_Z.near, far = z === MENU_Z.far;
@@ -456,6 +479,8 @@ function menuUpdateFx(L, dt) {
   const S = L.S, sc = MENU.scroll;
   for (const b of MENU.booms) b.t += dt;
   MENU.booms = MENU.booms.filter((b) => b.t < b.max);
+  // забагато хмар одночасно — найстаріші швидко дотлівають (без різкого зникнення)
+  for (let i = 0; i < MENU.booms.length - 6; i++) { const b = MENU.booms[i]; b.t = Math.max(b.t, b.max * 0.84); }
   for (const p of MENU.parts) {
     p.life -= dt; p.wx += p.vx * dt; p.y += p.vy * dt;
     const gyp = menuGroundY(L, p.z, p.wx - sc * p.z);
@@ -785,7 +810,7 @@ function menuIntroStart() {
     let done = false;
     const reveal = () => {
       if (done) return; done = true;
-      MENU.t = 0; MENU.scroll = 0; MENU.drones = []; MENU.booms = []; MENU.parts = []; MENU.smoke = []; MENU.troops = []; MENU.nextT = 2.5; MENU.nextD = 2.2; // сцена починається з початку
+      MENU.t = 0; MENU.scroll = 0; MENU.drones = []; MENU.booms = []; MENU.parts = []; MENU.smoke = []; MENU.troops = []; MENU.nextT = 2.5; MENU.raid = 0; MENU.raidCd = 9; MENU.nextD = 2.2; // сцена починається з початку
       lobbyEl.classList.add('reveal'); lobbyEl.classList.remove('pre');
       intro.classList.add('out');
       setTimeout(() => { intro.classList.remove('on', 'out'); lobbyEl.classList.remove('reveal'); menuIntro.active = false; }, 3300);
