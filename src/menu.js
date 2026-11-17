@@ -4,7 +4,7 @@
 const MENU = {
   t: 0, scroll: 0, drones: [], booms: [], parts: [], smoke: [], craters: [], tracers: [],
   nextD: 1.2, shake: 0, flash: 0, flashX: 0, flashY: 0, hc: null, rnd: mulberry32(7),
-  aim: null, aimCd: 3, flinch: 0, pace: 1, muzzle: 0, corpses: {}, troops: [], nextT: 2.5,
+  aim: null, aimCd: 3, flinch: 0, pace: 1, muzzle: 0, corpses: {}, troops: [], nextT: 2.5, raid: 0, raidCd: 9,
 };
 const MENU_SLOW = 0.3; // сповільнення часу
 const MENU_Z = { far: 0.45, mid: 1, near: 1.7 };
@@ -83,7 +83,9 @@ function menuGridPrep(sh, img) {
   for (let i = 0; i < sh.n; i++) {
     const d = x.getImageData((i % C) * fw, Math.floor(i / C) * fh, fw, fh), o = d.data;
     for (let p = 0; p < o.length; p += 4) {
-      const l = Math.min(o[p], o[p + 1], o[p + 2]), al = Math.max(0, Math.min(1, (250 - l) / 230));
+      // низ кадру (там у відео була земля) плавно згасає — без рівної смуги на техніці й ґрунті
+      const row = (p / 4 / fw) | 0, fade = row > fh * 0.86 ? Math.max(0, (fh - row) / (fh * 0.14)) ** 1.5 : 1;
+      const l = Math.min(o[p], o[p + 1], o[p + 2]), al = Math.max(0, Math.min(1, (250 - l) / 230)) * fade;
       o[p] = sh.col[0]; o[p + 1] = sh.col[1]; o[p + 2] = sh.col[2]; o[p + 3] = Math.round(al * 255);
     }
     const f = document.createElement('canvas'); f.width = fw; f.height = fh; f.getContext('2d').putImageData(d, 0, 0);
@@ -165,7 +167,15 @@ function drawMenuScene(ctx, w, h, rdt) {
 
   // ---- оновлення ----
   MENU.nextD -= rdt;
-  if (MENU.nextD <= 0) { MENU.nextD = mr(0.9, 2); menuSpawnDrone(L); }
+  // не більше кількох дронів і вибухів одночасно, інакше сцена перевантажена й гальмує
+  // інколи — наліт: кілька дронів поспіль (з окремою, трохи вищою стелею)
+  if ((MENU.raidCd -= rdt) <= 0 && !MENU.raid) { MENU.raid = 4 + ((MENU.rnd() * 4) | 0); MENU.raidCd = mr(14, 24); }
+  if (MENU.nextD <= 0) {
+    const raid = MENU.raid > 0;
+    MENU.nextD = raid ? mr(0.3, 0.6) : mr(0.8, 1.7);
+    const fresh = MENU.booms.filter((b) => b.t < 0.8).length; // стара хмара, що згасає, не рахується
+    if (MENU.drones.length < (raid ? 6 : 3) && fresh < (raid ? 4 : 2)) { menuSpawnDrone(L); if (raid) MENU.raid--; }
+  }
   menuUpdateDrones(L, dt);
   menuUpdateFx(L, dt);
   menuUpdateHuman(L, dt);
@@ -177,10 +187,10 @@ function drawMenuScene(ctx, w, h, rdt) {
   ctx.restore();
   menuSkyline(ctx, w, h, hy + h * 0.1, sc * 0.3, S);
   // бійці вдалині — перед руїнами, на лінії горизонту; вибухи, що їх накривають, теж тут
-  menuDrawTroops(ctx, L);
   ctx.save(); ctx.globalAlpha = 0.85;
   for (const b of MENU.booms) if (b.front) menuDrawBoom(ctx, b, b.wx - sc * b.z, S * b.z);
   ctx.restore();
+  menuDrawTroops(ctx, L); // поверх пилу: видно, як тіло відкидає вибухом
   // земля середнього плану
   ctx.fillStyle = '#1b0f18';
   ctx.beginPath(); ctx.moveTo(-20, h + 20);
@@ -235,26 +245,81 @@ function menuRidge(ctx, w, base, amp, off, f, col, a) {
   ctx.lineTo(w + 40, base + amp * 3); ctx.closePath(); ctx.fill();
   ctx.globalAlpha = 1;
 }
+// горизонт: руїни, багатоповерхівки, церква, вежа, дерева різних порід, цвинтар, стовпи (детерміновано за клітинкою)
 function menuSkyline(ctx, w, h, base, off, S) {
-  const cell = 46 * S;
-  ctx.fillStyle = '#2c1626';
+  const cell = 46 * S, COL = '#2c1626', WIN = 'rgba(240,120,70,0.25)';
+  ctx.fillStyle = COL;
   ctx.fillRect(-20, base - 2, w + 40, h);
-  for (let i = Math.floor(off / cell) - 2, n = i + Math.ceil(w / cell) + 4; i < n; i++) {
-    const x = i * cell - off, r = menuHash(i, 11);
-    if (r < 0.28) {
-      const bw = cell * (1.2 + menuHash(i, 12)), bh = (40 + menuHash(i, 13) * 60) * S;
+  const win = (x, y, ww, hh) => { ctx.fillStyle = WIN; ctx.fillRect(x, y, ww, hh); ctx.fillStyle = COL; };
+  // православний хрест: три поперечки, нижня скісна
+  const cross = (x, y, hh, tilt) => {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(tilt);
+    const t = Math.max(1, hh * 0.09);
+    ctx.fillRect(-t / 2, -hh, t, hh); ctx.fillRect(-hh * 0.28, -hh * 0.72, hh * 0.56, t); ctx.fillRect(-hh * 0.16, -hh * 0.9, hh * 0.32, t * 0.8);
+    ctx.save(); ctx.translate(0, -hh * 0.38); ctx.rotate(-0.35); ctx.fillRect(-hh * 0.2, -t * 0.4, hh * 0.4, t * 0.8); ctx.restore();
+    ctx.restore();
+  };
+  for (let i = Math.floor(off / cell) - 3, n = i + Math.ceil(w / cell) + 6; i < n; i++) {
+    const x = i * cell - off, q = (k) => menuHash(i, k);
+    let r = menuHash(i, 11);
+    const isChurch = (j) => { const v = menuHash(j, 11); return v >= 0.2 && v < 0.225; };
+    if (isChurch(i) && (isChurch(i - 1) || isChurch(i - 2) || isChurch(i - 3))) r = 0.6; // дві церкви поруч — ні, там цвинтар
+    else if (r >= 0.225 && r < 0.25) r = 0.6; // ще цвинтарі
+    ctx.fillStyle = COL;
+    if (r < 0.12) { // зруйнований будинок із вікнами
+      const bw = cell * (1.2 + q(12)), bh = (40 + q(13) * 60) * S;
       ctx.beginPath(); ctx.moveTo(x, base);
-      ctx.lineTo(x, base - bh); ctx.lineTo(x + bw * 0.3, base - bh * (0.75 + menuHash(i, 14) * 0.25)); ctx.lineTo(x + bw * 0.45, base - bh * 0.55);
-      ctx.lineTo(x + bw * 0.7, base - bh * (0.8 + menuHash(i, 15) * 0.2)); ctx.lineTo(x + bw, base - bh * 0.4); ctx.lineTo(x + bw, base); ctx.fill();
-      ctx.fillStyle = 'rgba(240,120,70,0.25)';
-      for (let fy = 1; fy < 4; fy++) for (let fx = 0; fx < 3; fx++) if (menuHash(i * 7 + fx, fy) > 0.45 && base - fy * 16 * S > base - bh * 0.55) ctx.fillRect(x + bw * (0.15 + fx * 0.27), base - fy * 16 * S, 5 * S, 7 * S);
-      ctx.fillStyle = '#2c1626';
-    } else if (r < 0.62) {
-      const th = (18 + menuHash(i, 16) * 26) * S, cr = (9 + menuHash(i, 17) * 9) * S;
+      ctx.lineTo(x, base - bh); ctx.lineTo(x + bw * 0.3, base - bh * (0.75 + q(14) * 0.25)); ctx.lineTo(x + bw * 0.45, base - bh * 0.55);
+      ctx.lineTo(x + bw * 0.7, base - bh * (0.8 + q(15) * 0.2)); ctx.lineTo(x + bw, base - bh * 0.4); ctx.lineTo(x + bw, base); ctx.fill();
+      for (let fy = 1; fy < 4; fy++) for (let fx = 0; fx < 3; fx++) if (menuHash(i * 7 + fx, fy) > 0.45 && base - fy * 16 * S > base - bh * 0.55) win(x + bw * (0.15 + fx * 0.27), base - fy * 16 * S, 5 * S, 7 * S);
+    } else if (r < 0.2) { // багатоповерхівка з вибитими поверхами
+      const bw = cell * (0.9 + q(12) * 0.5), bh = (70 + q(13) * 50) * S, cut = q(14);
+      ctx.beginPath(); ctx.moveTo(x, base); ctx.lineTo(x, base - bh); ctx.lineTo(x + bw * (0.3 + cut * 0.3), base - bh);
+      ctx.lineTo(x + bw * (0.45 + cut * 0.3), base - bh * (0.7 + q(15) * 0.15)); ctx.lineTo(x + bw, base - bh * (0.55 + q(16) * 0.2)); ctx.lineTo(x + bw, base); ctx.fill();
+      // пробоїна від влучання, крізь неї видно небо
+      ctx.fillStyle = 'rgba(232,118,58,0.35)'; ctx.beginPath(); ctx.ellipse(x + bw * (0.3 + q(17) * 0.4), base - bh * (0.35 + q(18) * 0.2), 6 * S, 4.5 * S, q(19), 0, 7); ctx.fill(); ctx.fillStyle = COL;
+      for (let fy = 1; fy < 7; fy++) for (let fx = 0; fx < 4; fx++) if (menuHash(i * 13 + fx, fy + 3) > 0.7 && fy * 12 * S < bh * 0.55) win(x + bw * (0.1 + fx * 0.22), base - fy * 12 * S, 3.5 * S, 5 * S);
+    } else if (r < 0.225) { // церква з банею й хрестом (баня буває пробита)
+      const bw = cell * 1.1, bh = (34 + q(13) * 14) * S, tx = x + bw * 0.5, th = bh + 26 * S, dr = 9 * S;
+      ctx.fillRect(x, base - bh, bw, bh);
+      ctx.beginPath(); ctx.moveTo(x - 3 * S, base - bh); ctx.lineTo(tx, base - bh - 12 * S); ctx.lineTo(x + bw + 3 * S, base - bh); ctx.fill();
+      ctx.fillRect(tx - 6 * S, base - th, 12 * S, th - bh);
+      ctx.beginPath(); ctx.moveTo(tx - dr, base - th); ctx.quadraticCurveTo(tx - dr * 1.25, base - th - dr * 1.1, tx, base - th - dr * 1.9); ctx.quadraticCurveTo(tx + dr * 1.25, base - th - dr * 1.1, tx + dr, base - th); ctx.fill();
+      if (q(14) < 0.5) { ctx.fillStyle = 'rgba(232,118,58,0.3)'; ctx.beginPath(); ctx.arc(tx + dr * 0.35, base - th - dr * 0.7, dr * 0.35, 0, 7); ctx.fill(); ctx.fillStyle = COL; }
+      cross(tx, base - th - dr * 1.85, 12 * S, (q(15) - 0.5) * 0.5);
+      win(tx - 1.5 * S, base - th + 6 * S, 3 * S, 7 * S);
+    } else if (r < 0.29) { // водонапірна вежа або заводський комин
+      if (q(12) < 0.5) {
+        const th = (55 + q(13) * 20) * S;
+        ctx.beginPath(); ctx.moveTo(x - 6 * S, base); ctx.lineTo(x - 3 * S, base - th); ctx.lineTo(x + 3 * S, base - th); ctx.lineTo(x + 6 * S, base); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x - 9 * S, base - th); ctx.lineTo(x - 7 * S, base - th - 13 * S); ctx.lineTo(x + 7 * S, base - th - 13 * S); ctx.lineTo(x + 9 * S, base - th); ctx.fill();
+      } else {
+        const th = (70 + q(13) * 30) * S;
+        ctx.beginPath(); ctx.moveTo(x - 5 * S, base); ctx.lineTo(x - 3 * S, base - th); ctx.lineTo(x + 2 * S, base - th * (0.94 + q(14) * 0.06)); ctx.lineTo(x + 5 * S, base); ctx.fill();
+        ctx.fillRect(x - 14 * S, base - 22 * S, 28 * S, 22 * S);
+      }
+    } else if (r < 0.37) { // кругле листяне дерево
+      const th = (18 + q(16) * 26) * S, cr = (9 + q(17) * 9) * S;
       ctx.fillRect(x - 1.5 * S, base - th, 3 * S, th);
       ctx.beginPath(); ctx.arc(x, base - th, cr, 0, 7); ctx.arc(x - cr * 0.6, base - th + cr * 0.4, cr * 0.7, 0, 7); ctx.arc(x + cr * 0.6, base - th + cr * 0.3, cr * 0.75, 0, 7); ctx.fill();
-    } else if (r < 0.72) {
-      ctx.save(); ctx.translate(x, base); ctx.rotate((menuHash(i, 18) - 0.5) * 0.4);
+    } else if (r < 0.44) { // тополі рядком
+      const k = 1 + ((q(16) * 3) | 0);
+      for (let j = 0; j < k; j++) { const px = x + j * 9 * S, th = (40 + menuHash(i * 3 + j, 20) * 22) * S; ctx.fillRect(px - 1 * S, base - th * 0.3, 2 * S, th * 0.3); ctx.beginPath(); ctx.ellipse(px, base - th * 0.6, 4.5 * S, th * 0.42, 0, 0, 7); ctx.fill(); }
+    } else if (r < 0.5) { // ялини
+      const k = 1 + ((q(16) * 2) | 0);
+      for (let j = 0; j < k; j++) { const px = x + j * 11 * S, th = (30 + menuHash(i * 5 + j, 21) * 20) * S; ctx.fillRect(px - 1 * S, base - 5 * S, 2 * S, 5 * S); for (let t = 0; t < 3; t++) { const yy = base - 4 * S - t * th * 0.27, ww = (11 - t * 3) * S; ctx.beginPath(); ctx.moveTo(px - ww, yy); ctx.lineTo(px, yy - th * 0.42); ctx.lineTo(px + ww, yy); ctx.fill(); } }
+    } else if (r < 0.56) { // обгоріле дерево без листя
+      const th = (26 + q(16) * 22) * S;
+      ctx.strokeStyle = COL; ctx.lineCap = 'round';
+      ctx.lineWidth = 3 * S; ctx.beginPath(); ctx.moveTo(x, base); ctx.lineTo(x + 2 * S, base - th); ctx.stroke();
+      ctx.lineWidth = 1.6 * S;
+      for (let j = 0; j < 4; j++) { const yy = base - th * (0.45 + j * 0.15), sd = j % 2 ? 1 : -1, l = (7 + menuHash(i, 22 + j) * 8) * S; ctx.beginPath(); ctx.moveTo(x + 1.2 * S, yy); ctx.lineTo(x + sd * l, yy - l * 0.7); ctx.stroke(); }
+    } else if (r < 0.64) { // цвинтар: хрести різної висоти, дехто похилений, низька огорожа
+      const k = 3 + ((q(16) * 4) | 0);
+      for (let j = 0; j < k; j++) { const px = x + j * 7 * S + menuHash(i * 11 + j, 23) * 3 * S, hh = (8 + menuHash(i * 11 + j, 24) * 6) * S; ctx.beginPath(); ctx.ellipse(px + 2 * S, base, 3.6 * S, 1.8 * S, 0, Math.PI, 0); ctx.fill(); cross(px, base - 1 * S, hh, (menuHash(i * 11 + j, 25) - 0.5) * 0.35); }
+      ctx.fillRect(x - 4 * S, base - 3 * S, k * 7 * S + 6 * S, 1.2 * S);
+    } else if (r < 0.7) { // стовп із дротами
+      ctx.save(); ctx.translate(x, base); ctx.rotate((q(18) - 0.5) * 0.4);
       ctx.fillRect(-1.5 * S, -55 * S, 3 * S, 55 * S); ctx.fillRect(-9 * S, -50 * S, 18 * S, 2 * S); ctx.restore();
     }
   }
@@ -301,7 +366,7 @@ function menuSpawnTroops(L) {
 }
 function menuUpdateTroops(L, dt, rdt) {
   const S = L.S, sc = MENU.scroll;
-  if ((MENU.nextT -= rdt) <= 0) { MENU.nextT = mr(7, 13); menuSpawnTroops(L); }
+  if ((MENU.nextT -= rdt) <= 0) { MENU.nextT = mr(7, 13); if (!MENU.troops.some((T) => !T.dead)) menuSpawnTroops(L); }
   for (const T of MENU.troops) {
     const X = T.wx - sc * T.z, gy = menuTroopY(L), Sz = S * 0.3;
     T.flash = Math.max(0, T.flash - dt); T.fireCd = Math.max(0, T.fireCd - dt);
@@ -339,7 +404,27 @@ function menuDrawTroops(ctx, L) {
     const y = menuTroopY(L);
     cx.setTransform(1, 0, 0, 1, 0, 0); cx.globalCompositeOperation = 'source-over'; cx.clearRect(0, 0, W, Hh);
     cx.setTransform(Sz, 0, 0, Sz, W / 2, Hh * 0.9);
-    const h = Object.assign({}, MENU_HUMAN, { cine: false, vx: 0, anim: 0, facing: T.facing, stance: T.dead ? 'stand' : T.stance, aiming: !T.dead, aimA: T.aimA, fireCd: T.fireCd, dead: T.dead, lost: T.dead && T.facing > 0 ? 'arm' : null });
+    // смерть: спершу політ (тіло відкидає від вибуху, воно обертається), потім — лежить
+    const FLY = T.fly || 0.6, aw = T.away || 1, tt = T.dead ? Math.max(0, T.deadT - (T.del || 0)) : 0;
+    const flying = T.dead && tt < FLY, ft = Math.min(tt, FLY), k = ft / FLY, crumple = T.dk === 'crumple';
+    const hd = crumple ? T.cd : aw; // куди падає тіло
+    let offX = 0, offY = 0, rot = 0, st = T.dead ? 'stand' : T.stance;
+    if (T.dead && crumple) { // осідає на коліна й падає без польоту
+      st = 'crouch';
+      rot = hd * (Math.PI / 2) * Math.max(0, Math.min(1, (k - 0.3) / 0.7)) ** 1.6; offX = hd * 10 * Sz * k;
+    } else if (T.dead) { // відкидає дугою, тіло обертається (при «flip» — через голову)
+      offX = aw * 140 * Sz * ft * T.flyV; offY = flying ? -4 * 34 * T.flyV * k * (1 - k) * Sz : 0;
+      rot = T.dk === 'flip' ? aw * (Math.PI * 1.5) * Math.pow(k, 0.8) : aw * (Math.PI / 2) * Math.pow(k, 0.5 + 0.6 * T.spin); // закінчує рівно лежачи — без стрибка
+    }
+    // «ганчір'яна лялька»: у польоті руки й ноги бовтаються; після падіння тіло лишається в тій позі,
+    // у якій упало (горілиць, долілиць, із розкинутими руками чи підібганими ногами) — поза завмирає
+    const rag = T.dead ? (crumple ? (k > 0.3 ? { w: ft * 9 + (T.seed || 0), f: 0.5 * Math.min(1, (k - 0.3) / 0.3), arch: 0.2, low: true } : null)
+      : { w: ft * 13 + (T.seed || 0), f: Math.min(1, k * 4) * (1 - 0.4 * k), arch: Math.min(1, k * 3) }) : null;
+    const h = Object.assign({}, MENU_HUMAN, { rag, cine: false, vx: 0, anim: 0, facing: T.dead ? (crumple ? T.cd : -aw) : T.facing, stance: rag ? 'stand' : st, aiming: !T.dead, aimA: T.aimA, fireCd: T.fireCd, dead: false, weapon: T.dead && (!crumple || k > 0.3) ? null : MENU_HUMAN.weapon });
+    if (T.dead && rot) { // обертання навколо стегон; лягаючи, стегна опускаються до землі
+      const pv = rag && rag.low ? 15 : 24;
+      cx.translate(0, -pv + (pv - 5) * Math.abs(Math.sin(rot))); cx.rotate(rot); cx.translate(0, pv);
+    }
     drawHuman(cx, h, MENU.t, 1);
     cx.setTransform(1, 0, 0, 1, 0, 0);
     cx.globalCompositeOperation = 'source-atop'; cx.fillStyle = '#140810'; cx.fillRect(0, 0, W, Hh);
@@ -350,14 +435,22 @@ function menuDrawTroops(ctx, L) {
       cx.fillStyle = g; cx.beginPath(); cx.arc(mx, my, 5 * Sz * 1.6, 0, 7); cx.fill();
     }
     ctx.save(); ctx.globalAlpha = 1; ctx.filter = 'blur(0.6px)'; // непрозорі, лише трохи розмиті (далеко)
-    ctx.drawImage(c, X - W / 2, y - Hh * 0.9);
+    ctx.drawImage(c, X - W / 2 + offX, y - Hh * 0.9 + offY);
     ctx.restore();
   }
 }
 // ---- вибух: спалах, стовп землі вгору, бурий пил, темний дим, вирва ----
 function menuBoom(L, wx, y, z, air) {
   const S = L.S * (z === MENU_Z.near ? 1.15 : z === MENU_Z.far ? 0.62 : z), sc = MENU.scroll, X = wx - sc * z;
-  if (!air) for (const T of MENU.troops) if (!T.dead && T.z === z && Math.abs(T.wx - wx) < 26 * S) { T.dead = true; T.deadT = 0; T.facing = wx > T.wx ? 1 : -1; }
+  if (!air) for (const T of MENU.troops) if (!T.dead && T.z === z && Math.abs(T.wx - wx) < 16 * S) {
+    // кожна смерть своя: що ближче до вибуху — то далі відкидає; відкидає на спину, перекидає або людина осідає
+    const d = Math.abs(T.wx - wx) / (16 * S), r = MENU.rnd();
+    T.dead = true; T.deadT = 0; T.away = T.wx >= wx ? 1 : -1;
+    T.dk = d < 0.35 && r < 0.4 ? 'flip' : d > 0.6 && r < 0.6 ? 'crumple' : r < 0.25 ? 'crumple' : 'throw';
+    T.flyV = (1.35 - d * 0.75) * mr(0.8, 1.15); T.spin = T.dk === 'flip' ? mr(1.6, 2.1) : mr(0.7, 1.3);
+    T.fly = T.dk === 'crumple' ? mr(0.6, 0.9) : mr(0.45, 0.8); T.del = mr(0, 0.035); // відлітає майже одразу з вибухом
+    T.cd = MENU.rnd() < 0.5 ? 1 : -1; T.seed = mr(0, 6.28); // куди осідає; власна фаза бовтання
+  }
   MENU.booms.push({ wx, y, z, t: 0, max: MENU_SHEETS.boom.frames && !air ? 2.9 : 0.45, air, flip: MENU.rnd() < 0.5 });
   const near = z === MENU_Z.near, far = z === MENU_Z.far;
   MENU.shake = Math.min(1, MENU.shake + (far ? 0.15 : near ? 0.9 : 0.55));
@@ -391,6 +484,8 @@ function menuUpdateFx(L, dt) {
   const S = L.S, sc = MENU.scroll;
   for (const b of MENU.booms) b.t += dt;
   MENU.booms = MENU.booms.filter((b) => b.t < b.max);
+  // забагато хмар одночасно — найстаріші швидко дотлівають (без різкого зникнення)
+  for (let i = 0; i < MENU.booms.length - 6; i++) { const b = MENU.booms[i]; b.t = Math.max(b.t, b.max * 0.84); }
   for (const p of MENU.parts) {
     p.life -= dt; p.wx += p.vx * dt; p.y += p.vy * dt;
     const gyp = menuGroundY(L, p.z, p.wx - sc * p.z);
@@ -398,8 +493,10 @@ function menuUpdateFx(L, dt) {
     else { p.vy += 1100 * S * p.z * dt; p.rot += p.spin * dt; if (p.y > gyp && p.vy > 0) { p.y = gyp; p.vy *= -0.18; p.vx *= 0.4; p.spin *= 0.4; } }
   }
   MENU.parts = MENU.parts.filter((p) => p.life > 0 && p.wx - sc * p.z > -300);
+  if (MENU.parts.length > 260) MENU.parts.splice(0, MENU.parts.length - 260);
   for (const p of MENU.smoke) { p.life -= dt; p.wx += p.vx * dt; p.y += p.vy * dt; p.vy *= p.k === 'dust' ? 0.97 : 0.995; p.vx *= 0.99; }
   MENU.smoke = MENU.smoke.filter((p) => p.life > 0);
+  if (MENU.smoke.length > 50) MENU.smoke.splice(0, MENU.smoke.length - 50);
   for (const c of MENU.craters) c.life -= dt;
   MENU.craters = MENU.craters.filter((c) => c.life > 0);
   for (const t of MENU.tracers) t.t += dt;
@@ -441,7 +538,7 @@ function menuDrawBoom(ctx, b, X, S) {
     const n = BS.frames.length, u = b.t / b.max, ph = Math.min(n - 1.001, Math.pow(u, BS.pow || 0.75) * (n - 1)), i0 = Math.floor(ph), q = ph - i0;
     const hh = 125 * S / (BS.vid || 1), k2 = hh / BS.fh, a0 = ctx.globalAlpha * Math.min(1, (1 - u) * 6); // висота відео ≈ 125 px, продовжені краї — понад це
     ctx.save();
-    ctx.translate(X, b.y + 4 * S); if (b.flip) ctx.scale(-1, 1);
+    ctx.translate(X, b.y + 14 * S); if (b.flip) ctx.scale(-1, 1); // трохи нижче лінії ґрунту
     for (const [fr, al] of [[BS.frames[i0], 1], [BS.frames[i0 + 1], q]]) {
       if (!fr || al <= 0.01) continue;
       ctx.globalAlpha = a0 * al; ctx.drawImage(fr, -fr.ax * k2, -hh, fr.width * k2, hh);
@@ -718,7 +815,7 @@ function menuIntroStart() {
     let done = false;
     const reveal = () => {
       if (done) return; done = true;
-      MENU.t = 0; MENU.scroll = 0; MENU.drones = []; MENU.booms = []; MENU.parts = []; MENU.smoke = []; MENU.troops = []; MENU.nextT = 2.5; MENU.nextD = 2.2; // сцена починається з початку
+      MENU.t = 0; MENU.scroll = 0; MENU.drones = []; MENU.booms = []; MENU.parts = []; MENU.smoke = []; MENU.troops = []; MENU.nextT = 2.5; MENU.raid = 0; MENU.raidCd = 9; MENU.nextD = 2.2; // сцена починається з початку
       lobbyEl.classList.add('reveal'); lobbyEl.classList.remove('pre');
       intro.classList.add('out');
       setTimeout(() => { intro.classList.remove('on', 'out'); lobbyEl.classList.remove('reveal'); menuIntro.active = false; }, 3300);

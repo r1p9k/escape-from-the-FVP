@@ -209,7 +209,15 @@ function drawBodyUpright(ctx, h, t, C) {
   const busyDig = h.digT > 0 || h.digging;
   // ноги: кути стегна й гомілки (абсолютні; 0 — вниз)
   let legs;
-  if (h.onLadder) {
+  const rag = h.rag;
+  if (rag) {
+    // тіло, яке кинуло вибухом: ноги зігнуті й бовтаються, кожна у своєму ритмі
+    const w = rag.w, f = rag.f;
+    legs = [
+      { t: 0.25 + 0.55 * f * Math.sin(w), s: 0.25 + 0.55 * f * Math.sin(w) - 0.7 - 0.6 * f * (0.5 + 0.5 * Math.sin(w * 1.3 + 1)) },
+      { t: -0.3 + 0.45 * f * Math.sin(w * 0.8 + 2), s: -0.3 + 0.45 * f * Math.sin(w * 0.8 + 2) - 1.0 - 0.5 * f * (0.5 + 0.5 * Math.sin(w + 2.5)) },
+    ];
+  } else if (h.onLadder) {
     const q = Math.sin(ph);
     legs = [{ t: 0.6 + 0.45 * q, s: -0.35 + 0.25 * q }, { t: 0.6 - 0.45 * q, s: -0.35 - 0.25 * q }];
   } else if (air) legs = [{ t: -0.25, s: -0.95 }, { t: 0.65, s: -0.25 }];
@@ -221,14 +229,17 @@ function drawBodyUpright(ctx, h, t, C) {
     const cn = h.cine ? clamp((sp - 0.3) / 0.7, 0, 1) : 0;
     const A = 0.22 + 0.42 * sp + 0.32 * cn, K = 0.45 + 1.0 * sp + 0.75 * cn;
     // перенос ноги вперед (cos q > 0) — коліно зігнуте, опора (стегно йде назад) — нога майже пряма
+    // згин коліна: у грі — обрізаний косинус; у кіношному бігу — гладка крива без зламів (п'ята плавно проходить верхню точку)
+    const kneeShape = (q) => { const c = Math.cos(q - 0.35), sm = Math.pow((1 + c) / 2, 2); return Math.max(0, c) * (1 - cn) + sm * cn; };
     const wave = (q) => cn > 0 ? Math.sin(q) * (1 - 0.6 * cn) + (2 / Math.PI) * Math.asin(Math.sin(q)) * 0.6 * cn : Math.sin(q);
     // у бігуна коліно ніколи не випрямляється повністю: винесена вперед нога й опорна лишаються трохи зігнутими
-    legs = [0, Math.PI].map((o) => { const q = ph + o, th = A * wave(q); return { t: th, s: th - (0.08 + 0.22 * cn + 0.28 * cn * Math.max(0, th / A) + K * Math.max(0, Math.cos(q - 0.35))) }; });
+    legs = [0, Math.PI].map((o) => { const q = ph + o, th = A * wave(q); return { t: th, s: th - (0.08 + 0.22 * cn + 0.28 * cn * Math.max(0, th / A) + K * kneeShape(q)) }; });
   } else legs = [{ t: -0.09, s: -0.13 }, { t: 0.11, s: 0.03 }];
   // висота стегон — нижня ступня торкається землі
   let drop = 0;
   for (const l of legs) drop = Math.max(drop, Math.cos(l.t) * RIG.thigh + Math.cos(l.s) * RIG.shin);
   if (h.onLadder || air) drop = 24;
+  if (rag) drop = rag.low ? 15 : 22; // осідання — на колінах
   // кіношний біг: між доторками тіло летить — коли ноги розведені, стегна не опускаються до землі, а злітають;
   // на опорі (ноги схрещуються) — присідання. Без цього ступні ніби примагнічені до ґрунту.
   const cine = h.cine && sp > 0.08 && !crouch && !air && !h.onLadder ? clamp((sp - 0.3) / 0.7, 0, 1) : 0;
@@ -237,12 +248,15 @@ function drawBodyUpright(ctx, h, t, C) {
     const smax = (a, b, e) => (a + b + Math.sqrt((a - b) * (a - b) + e * e)) / 2;
     drop = drop * (1 - cine) + smax(drop - 0.8, T, 3) * cine;
   }
+  // кут стопи: у грі — майже пласка; у кіношному бігу стопа йде за гомілкою (носок униз при відштовхуванні й замаху назад, на п'яту при постановці)
+  const footAng = (sh) => h.onLadder ? 0 : cine > 0 ? (-sh * 0.85 > 0 ? 1.4 * Math.tanh(-sh * 0.85 / 1.4) : Math.max(-0.45, -sh * 0.85)) * cine + Math.min(0.5, Math.max(-0.4, sh * 0.4)) * (1 - cine) : Math.min(0.5, Math.max(-0.4, sh * 0.4));
   const H = { x: crouch ? -1.5 : 0, y: -drop - (sp > 0.5 && !crouch && !cine ? Math.abs(Math.cos(ph)) * 1.2 : 0) };
   // нахил тулуба
   let lean = crouch ? 0.55 : 0.04 + 0.17 * sp + 0.08 * cine;
   if (h.aiming) lean = crouch ? 0.32 : 0.05;
   if (h.onLadder) lean = -0.05;
   if (busyDig) lean = 0.5;
+  if (rag) lean = -0.45 * rag.arch + 0.15 * rag.f * Math.sin(rag.w * 0.7); // прогин назад, тіло не жорстке
   if (h.meleeT > 0) lean += (h.meleeHow === 'shovel' ? 0.32 : 0.18) * Math.sin((1 - h.meleeT / MELEE_T) * Math.PI);
   if (h.hurtT > 0) lean -= 0.2 * clamp(h.hurtT / 0.4, 0, 1);
   lean += Math.sin(t * 2.3 + h.x * 0.01) * 0.012 * (1 - sp); // дихання
@@ -251,7 +265,12 @@ function drawBodyUpright(ctx, h, t, C) {
   // ---- що в руках: цілі для кистей ----
   let back = null, front = null, gun = null, gunBack = !!h.weapon, prop = null, extra = null;
   const rec = h.weapon ? clamp(h.fireCd / WEAPONS[h.weapon.type].rate, 0, 1) : 0;
-  if (h.meleeT > 0 && h.meleeHow === 'shovel') {
+  if (rag) {
+    // руки розкидані й відстають від руху тіла (злітають угору-назад, кожна по-своєму)
+    const w = rag.w, f = rag.f;
+    front = { x: Sh.x + 3 - 9 * f + 4 * f * Math.sin(w * 1.4), y: Sh.y + 8 - 20 * f + 4 * f * Math.cos(w * 1.1) };
+    back = { x: Sh.x - 4 - 7 * f + 4 * f * Math.sin(w * 1.2 + 2), y: Sh.y + 7 - 17 * f + 4 * f * Math.cos(w + 1.5) };
+  } else if (h.meleeT > 0 && h.meleeHow === 'shovel') {
     // замах лопатою: з-за спини над головою — і різко вперед-униз
     const a = shovelSwingA(1 - h.meleeT / MELEE_T);
     const dx = Math.cos(a), dy = Math.sin(a);
@@ -310,16 +329,17 @@ function drawBodyUpright(ctx, h, t, C) {
   else if (!front || h.canister) armAngles(ctx, ShB, swing(Math.PI) - (crouch ? 0.2 : 0), swing(Math.PI) + 0.35 + 0.3 * sp, C.uniD);
   const legPts = (l) => { const k = seg(H, l.t, RIG.thigh); return [H, k, seg(k, l.s, RIG.shin)]; };
   const L0 = legPts(legs[0]), L1 = legPts(legs[1]);
-  legBoot(ctx, L0, 5.6, C.pantsD, h.onLadder ? 0 : Math.min(0.5, Math.max(-0.4, legs[0].s * 0.4)), true);
+  legBoot(ctx, L0, 5.6, C.pantsD, footAng(legs[0].s), true);
   ctx.save(); ctx.translate(H.x, H.y); ctx.rotate(lean);
   if (gunBack && h.weapon) { ctx.save(); ctx.translate(-9, -TL + 2); ctx.rotate(1.15); drawGunShape(ctx, h.weapon.type); ctx.restore(); } // зброя за спиною
   drawTorso(ctx, h, C, TL);
   ctx.restore();
-  legBoot(ctx, L1, 5.6, C.pants, h.onLadder ? 0 : Math.min(0.5, Math.max(-0.4, legs[1].s * 0.4)), false);
+  legBoot(ctx, L1, 5.6, C.pants, footAng(legs[1].s), false);
   if (!HSP.ready) { ctx.fillStyle = HCOL.rigD; ctx.beginPath(); ctx.arc(L1[1].x + 1, L1[1].y, 2.2, 0, 7); ctx.fill(); } // наколінник
   let tilt = lean * 0.6;
   if (h.aiming && (gun || prop)) tilt = clamp(h.aimA * 0.45, -0.5, 0.3);
   if (h.onLadder) tilt = -0.25;
+  if (rag) tilt = -0.35 * rag.arch + 0.25 * rag.f * Math.sin(rag.w * 0.9 + 1); // голова закидається
   drawHead(ctx, rot(H, lean, 1.6, -TL - 6.6), tilt, C.team, { goggles: h.piloting, mask: h.gasmask && !h.piloting });
   if (gun) drawGunAt(ctx, h.weapon.type, gun.B, gun.ang);
   if (prop) drawProp(ctx, h.carry, prop.x, prop.y + 6, h.aiming ? h.aimA : 0);
