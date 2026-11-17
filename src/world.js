@@ -388,6 +388,7 @@ function makeVehicle(type, x, mg) {
   return { type, x, y: 0, vx: 0, dir: 1, ang: 0, hp: T.hp, driver: null, gunner: null, hasMG: !!mg, mgAmmo: mg ? WEAPONS.mg.ammo : 0, input: 0, dead: false, burn: 0, fuel: T.tank * rand(0.3, 1) };
 }
 
+function makeThemeAt(loc, width) { return (x) => (loc !== 'mixed' ? loc : x < width * 0.36 ? 'fields' : x < width * 0.66 ? 'forest' : 'city'); }
 function makeWorld(loc, seed, lenId, team) {
   RND = mulberry32(seed);
   const ML = MAP_LENGTHS.find((m) => m.id === lenId) || MAP_LENGTHS[0];
@@ -397,7 +398,7 @@ function makeWorld(loc, seed, lenId, team) {
     ground: new Float32Array(Math.ceil(width / GS) + 4),
     solids: [], covers: [], hides: [], ladders: [], pickups: [], vehicles: [], trees: [], bushes: [], backs: [], decor: [], props: [], mounts: [], shops: [], ditches: [],
   };
-  const themeAt = (x) => (loc !== 'mixed' ? loc : x < width * 0.36 ? 'fields' : x < width * 0.66 ? 'forest' : 'city');
+  const themeAt = makeThemeAt(loc, width);
   W.themeAt = themeAt;
   const p1 = rand(0, 6.28), p2 = rand(0, 6.28);
   for (let i = 0; i < W.ground.length; i++) {

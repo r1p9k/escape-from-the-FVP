@@ -55,9 +55,9 @@ function newGame(slots, loc, opts) {
   const tc = [0, 0], th = [0, 0];
   if (mode === 'team') { initTeam(); initSupply(); baseOnlyPickups(); }
   slots.forEach((s, i) => {
-    const p = { name: s.name, color: s.color, role: s.role, bot: !!s.bot, cam: { x: 0, y: 0, wide: false }, idx: i, score: 0, team: -1 };
+    const p = { name: s.name, color: s.color, role: s.role, bot: !!s.bot, remote: !!s.remote, cid: s.cid || 0, cam: { x: 0, y: 0, wide: false }, idx: i, score: 0, team: -1 };
     if (mode === 'team') { p.team = s.team === 1 ? 1 : s.team === 0 ? 0 : i % 2; p.color = TEAMS[p.team].cols[tc[p.team]++ % 2]; }
-    p.ctrl = s.bot ? new BotController(p, s.level) : CONTROLLERS[s.scheme];
+    p.ctrl = s.bot ? new BotController(p, s.level) : s.remote ? netCtrl(s) : CONTROLLERS[s.scheme];
     if (s.role === 'human') {
       const h = makeHuman(p, W.start.x + hi * 40); hi++;
       if (mode === 'dm') { h.x = randomSpawnX(); h.y = gAt(W, h.x); }
@@ -1990,6 +1990,12 @@ function updateGame(dt) {
   G.rebs = G.rebs.filter((r) => r.t > 0);
   for (const f of G.feed) f.t -= dt;
   G.feed = G.feed.filter((f) => f.t > 0);
+  updateParts(dt);
+  updateTunnelIntel();
+  updateGameTail(dt);
+}
+// частинки (пил, дим, уламки, кров) — у гравця по мережі рахуються на його ПК
+function updateParts(dt) {
   for (let i = G.parts.length - 1; i >= 0; i--) {
     const p = G.parts[i];
     p.life -= dt;
@@ -2009,7 +2015,8 @@ function updateGame(dt) {
       if (p.type === 'gun') p.rot += dt * 10;
     }
   }
-  updateTunnelIntel();
+}
+function updateGameTail(dt) {
   // відкритість людей (для стрілки дрона)
   for (const h of G.humans) {
     if (h.dead || h.saved || covered(h) || buried(h) || humanConcealed(h)) h.openTime = 0;

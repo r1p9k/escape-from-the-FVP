@@ -105,7 +105,9 @@ function layoutViews(n, w, h) {
 
 function renderGame(ctx, w, h, t) {
   // екран ділиться лише між живими гравцями; боти власного вікна не мають
-  const real = G.players.filter((p) => !p.bot);
+  // гра по мережі: у гравця — лише його вікно, у хоста — лише вікна гравців за цим ПК
+  let real = NET.role === 'client' ? G.players.filter((p) => p.cid === NET.cid) : G.players.filter((p) => !p.bot && !p.remote);
+  if (!real.length) real = G.players.filter((p) => !p.bot).slice(0, 1); // за хостом ніхто не грає — дивиться за першим гравцем
   const views = layoutViews(real.length, w, h);
   real.forEach((p, i) => renderView(ctx, views[i], p, t));
   ctx.strokeStyle = '#000'; ctx.lineWidth = 3;

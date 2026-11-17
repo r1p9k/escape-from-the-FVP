@@ -113,3 +113,19 @@ h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 1.5px; color: v
 .opt { background: var(--card); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .opt > span { font-size: 14px; font-weight: 600; }
 .opt small { color: var(--muted); font-size: 12px; }
+
+/* гра по мережі */
+.net { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; background: var(--card); border: 2px solid var(--line); border-radius: var(--radius); padding: 14px; }
+.net small { flex-basis: 100%; color: var(--muted); }
+.net button, .net input { font: inherit; color: var(--text); background: var(--card-hi); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; }
+.net button { cursor: pointer; }
+.net button:hover { border-color: var(--accent); }
+.net input { width: 150px; }
+.net-join { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.net .code { color: var(--accent); font-size: 22px; letter-spacing: 3px; }
+.net code { background: rgba(0,0,0,.35); padding: 2px 6px; border-radius: 5px; color: var(--accent); user-select: all; }
+.net.wait { flex-direction: column; align-items: flex-start; max-width: 720px; margin: 0 auto; }
+.net-list { margin: 4px 0; padding-left: 0; list-style: none; }
+.net-list li { border-left: 4px solid var(--pc); padding: 3px 10px; margin: 4px 0; }
+.net-list li.me { font-weight: 700; color: var(--accent); }
+.net-err { margin-top: 8px; color: var(--danger); text-align: center; }
