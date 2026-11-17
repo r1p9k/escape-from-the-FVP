@@ -477,7 +477,7 @@ function menuBoom(L, wx, y, z, air) {
   } else {
     for (let i = 0; i < 10; i++) { const a = mr(0, 6.28), v = mr(50, 200) * S; P.push({ k: 'frag', z, wx, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60 * S, life: mr(1.2, 2.2), max: 2.2, r: mr(0.5, 1.3) * S, rot: mr(0, 6), spin: mr(-14, 14), col: '#161016' }); }
   }
-  for (let i = 0; i < (air ? 10 : 0); i++) { const a = mr(Math.PI * 1.1, Math.PI * 1.9), v = mr(120, 460) * S; P.push({ k: 'ember', z, wx, y: y - 4 * S, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: mr(0.4, 1.2), max: 1.2 }); }
+  for (let i = 0; i < (air ? 22 : 0); i++) { const a = (i / 22) * Math.PI * 2 + mr(-0.15, 0.15), v = mr(90, 300) * S; P.push({ k: 'ember', z, wx, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: mr(0.25, 0.6), max: 0.6, sz: mr(0.6, 1.2) }); }
   // темний дим після вогню
   for (let i = 0; i < (air ? 3 : 6); i++) MENU.smoke.push({ k: 'smoke', z, wx: wx + mr(-12, 12) * S, y: y - mr(10, 40) * S, vx: mr(-10, 10) * S, vy: -mr(15, 45) * S, r: mr(14, 24) * S, life: mr(3.5, 6), max: 6, rot: mr(0, 6), spin: mr(-0.6, 0.6), v: (MENU.rnd() * 5) | 0 });
   // боєць пригинається від близького вибуху
@@ -489,7 +489,7 @@ function menuUpdateFx(L, dt) {
   for (const b of MENU.booms) b.t += dt;
   MENU.booms = MENU.booms.filter((b) => b.t < b.max);
   // забагато хмар одночасно — найстаріші швидко дотлівають (без різкого зникнення)
-  for (let i = 0; i < MENU.booms.length - 6; i++) { const b = MENU.booms[i]; b.t = Math.max(b.t, b.max * 0.84); }
+  for (let i = 0; i < MENU.booms.length - 6; i++) MENU.booms[i].t += dt * 2.5;
   for (const p of MENU.parts) {
     p.life -= dt; p.wx += p.vx * dt; p.y += p.vy * dt;
     const gyp = menuGroundY(L, p.z, p.wx - sc * p.z);
@@ -497,10 +497,10 @@ function menuUpdateFx(L, dt) {
     else { p.vy += 1100 * S * p.z * dt; p.rot += p.spin * dt; if (p.y > gyp && p.vy > 0) { p.y = gyp; p.vy *= -0.18; p.vx *= 0.4; p.spin *= 0.4; } }
   }
   MENU.parts = MENU.parts.filter((p) => p.life > 0 && p.wx - sc * p.z > -300);
-  if (MENU.parts.length > 260) MENU.parts.splice(0, MENU.parts.length - 260);
+  for (let i = 0; i < MENU.parts.length - 260; i++) MENU.parts[i].life -= dt * 4;
   for (const p of MENU.smoke) { p.life -= dt; p.wx += p.vx * dt; p.y += p.vy * dt; p.vy *= p.k === 'dust' ? 0.97 : 0.995; p.vx *= 0.99; }
   MENU.smoke = MENU.smoke.filter((p) => p.life > 0);
-  if (MENU.smoke.length > 50) MENU.smoke.splice(0, MENU.smoke.length - 50);
+  for (let i = 0; i < MENU.smoke.length - 50; i++) MENU.smoke[i].life -= dt * 3;
   for (const c of MENU.craters) c.life -= dt;
   MENU.craters = MENU.craters.filter((c) => c.life > 0);
   for (const t of MENU.tracers) t.t += dt;
@@ -524,7 +524,7 @@ function menuDrawLayer(ctx, L, z, withHuman) {
   for (const p of MENU.parts) {
     if (p.z !== z) continue;
     const X = p.wx - sc * z, k = p.life / p.max;
-    if (p.k === 'ember') { ctx.fillStyle = 'rgba(255,' + (150 + 80 * k | 0) + ',80,' + k + ')'; ctx.fillRect(X - 1 * S, p.y - 1 * S, 2 * S, 2 * S); }
+    if (p.k === 'ember') { const e = (p.sz || 1) * S; ctx.fillStyle = 'rgba(255,' + (170 + 70 * k | 0) + ',' + (90 + 80 * k | 0) + ',' + k + ')'; ctx.fillRect(X - e, p.y - e, 2 * e, 2 * e); }
     else {
       ctx.save(); ctx.globalAlpha *= Math.min(1, k * 3);
       if (p.k !== 'frag') { // слід руху (для грудок землі; уламки дрона — без сліду)
@@ -543,7 +543,7 @@ function menuDrawBoom(ctx, b, X, S) {
   const BS = MENU_SHEETS.boom;
   if (BS.frames && !b.air) {
     const n = BS.frames.length, u = b.t / b.max, ph = Math.min(n - 1.001, Math.pow(u, BS.pow || 0.75) * (n - 1)), i0 = Math.floor(ph), q = ph - i0;
-    const hh = 125 * S / (BS.vid || 1), k2 = hh / BS.fh, a0 = ctx.globalAlpha * Math.min(1, (1 - u) * 6); // висота відео ≈ 125 px, продовжені краї — понад це
+    const hh = 125 * S / (BS.vid || 1), k2 = hh / BS.fh, a0 = ctx.globalAlpha * (() => { const v = Math.min(1, (1 - u) / 0.4); return v * v * (3 - 2 * v); })(); // висота відео ≈ 125 px, продовжені краї — понад це
     ctx.save();
     ctx.translate(X, b.y + 14 * S); if (b.flip) ctx.scale(-1, 1); // трохи нижче лінії ґрунту
     // справжнє змішування двох кадрів (сума (1-q)·A + q·B у допоміжному полотні) з якісним зменшенням —
@@ -560,15 +560,15 @@ function menuDrawBoom(ctx, b, X, S) {
   }
   const k = Math.min(1, b.t / 0.45), y = b.y;
   // короткий спалах (на землі — ледь помітний)
-  const fk = b.air ? 0.3 : 0.1;
+  const fk = b.air ? 0.22 : 0.1;
   if (k < fk) {
-    const a = (1 - k / fk) * (b.air ? 1 : 0.4), r = (b.air ? 10 + k * 40 : 7 + k * 60) * S;
-    const g = ctx.createRadialGradient(X, y - r * 0.2, 0, X, y - r * 0.2, r);
+    // у повітрі — рівний круглий спалах, що швидко розширюється й гасне
+    const a = b.air ? Math.pow(1 - k / fk, 1.6) : (1 - k / fk) * 0.4, r = (b.air ? 6 + k * 120 : 7 + k * 60) * S, cy = b.air ? y : y - r * 0.2;
+    const g = ctx.createRadialGradient(X, cy, 0, X, cy, r);
     g.addColorStop(0, 'rgba(255,245,210,' + a + ')'); g.addColorStop(0.5, 'rgba(255,170,70,' + a * 0.7 + ')'); g.addColorStop(1, 'rgba(255,110,40,0)');
-    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(X, y - r * 0.2, r, 0, 7); ctx.fill();
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(X, cy, r, 0, 7); ctx.fill();
   }
-  // язики вогню, що швидко гаснуть у димі
-  const fa = b.air ? Math.max(0, 1 - k * 1.3) : 0;
+  const fa = 0; // язики вогню прибрано
   if (fa > 0) {
     ctx.fillStyle = 'rgba(255,' + (120 + 60 * fa | 0) + ',40,' + fa * 0.85 + ')';
     for (let i = 0; i < 5; i++) {
