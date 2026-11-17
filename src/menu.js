@@ -16,7 +16,7 @@ const MENU_HUMAN = {
 function mr(a, b) { return a + (b - a) * MENU.rnd(); }
 // Аркуші кадрів від Gemini: чорні силуети на білому тлі в один ряд. Кадри знаходяться автоматично
 // (стовпці без темних пікселів — проміжки), біле тло прибирається, сіре стає напівпрозорим.
-const MENU_SHEETS = { boom: { src: 'art/menu/boom.jpg', col: [34, 22, 18], grid: [6, 4], n: 24, pow: 0.625, vid: 180 / 306 } };
+const MENU_SHEETS = { boom: { src: 'art/menu/boom.jpg', col: [34, 22, 18], grid: [10, 8], n: 80, pow: 1 / 1.3, vid: 135 / 230 } };
 function menuSheetPrep(sh, img) {
   if (sh.grid) return menuGridPrep(sh, img);
   const N = 8, W = img.width, H = img.height, c = document.createElement('canvas'); c.width = W; c.height = H;
