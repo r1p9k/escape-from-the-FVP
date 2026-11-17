@@ -248,7 +248,26 @@ function menuRidge(ctx, w, base, amp, off, f, col, a) {
   ctx.globalAlpha = 1;
 }
 // горизонт: руїни, багатоповерхівки, церква, вежа, дерева різних порід, цвинтар, стовпи (детерміновано за клітинкою)
+// горизонт із панорами (силуети від Gemini, зібрані з п'яти смуг; повторюється без шва).
+// Поки картинка не завантажилась — намальований кодом горизонт нижче.
+const MENU_SKY = { img: null };
+(function menuSkyLoad() {
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+    const x = c.getContext('2d'); x.drawImage(img, 0, 0); x.globalCompositeOperation = 'source-in'; x.fillStyle = '#2c1626'; x.fillRect(0, 0, c.width, c.height);
+    MENU_SKY.img = c;
+  };
+  img.src = 'art/menu/skyline.png';
+})();
 function menuSkyline(ctx, w, h, base, off, S) {
+  const P = MENU_SKY.img;
+  if (!P) return menuSkylineDrawn(ctx, w, h, base, off, S);
+  ctx.fillStyle = '#2c1626'; ctx.fillRect(-20, base - 1, w + 40, h);
+  const k = S / 1.5, TW = P.width * k, TH = P.height * k;
+  for (let x = -(((off % TW) + TW) % TW) - 20; x < w + 20; x += TW) ctx.drawImage(P, x, base - TH + 1, TW + 0.5, TH);
+}
+function menuSkylineDrawn(ctx, w, h, base, off, S) {
   const cell = 46 * S, COL = '#2c1626', WIN = 'rgba(240,120,70,0.25)';
   ctx.fillStyle = COL;
   ctx.fillRect(-20, base - 2, w + 40, h);
