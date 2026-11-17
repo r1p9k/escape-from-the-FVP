@@ -80,11 +80,12 @@ server.on('upgrade', (req, socket) => {
     if (!room) {
       let m; try { m = JSON.parse(msg); } catch (e) { return; }
       if (m.t === 'host') {
-        isHost = true; room = { code: newCode(), host: ws, clients: new Map() }; rooms.set(room.code, room);
+        const want = String(m.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
+        isHost = true; room = { code: want && !rooms.has(want) ? want : newCode(), host: ws, clients: new Map() }; rooms.set(room.code, room);
         ws.send(JSON.stringify({ t: 'room', code: room.code, addrs: lanAddrs() }));
         console.log('кімната ' + room.code + ' створена');
       } else if (m.t === 'join') {
-        const r = rooms.get(String(m.code || '').trim());
+        const r = rooms.get(String(m.code || '').toUpperCase().replace(/[^A-Z0-9]/g, ''));
         if (!r) { ws.send(JSON.stringify({ t: 'err', text: 'Кімнату ' + m.code + ' не знайдено' })); return; }
         room = r; cid = nextCid++; r.clients.set(cid, ws);
         ws.send(JSON.stringify({ t: 'welcome', cid, code: r.code }));

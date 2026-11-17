@@ -1,30 +1,120 @@
 'use strict';
 // ===== Гра по мережі =====
 // Хост рахує всю гру, як завжди. Гравці на інших ПК надсилають хосту стан своїх клавіш,
-// а хост ~30 разів на секунду розсилає зміни стану гри (лише ті об'єкти, що змінилися).
+// а хост до 60 разів на секунду розсилає зміни стану гри (лише ті об'єкти, що змінилися, стиснено).
 // Гравець лише малює свою частину екрана; частинки (пил, дим, уламки) дораховує сам.
+// Зв'язок: WebRTC напряму між браузерами (PeerJS — лише щоб знайти одне одного, TURN — якщо напряму не вийшло).
+// Якщо гра відкрита з node serve.js — запасний шлях через його WebSocket.
 const NET = {
-  ws: null, role: null, code: null, cid: 0, addrs: [], err: '', peers: new Map(),
-  rc: new Map(),            // хост: cid → RemoteController
-  sendT: 0, rate: 1 / 30,   // хост: як часто розсилати стан
+  role: null, code: null, cid: 0, addrs: [], err: '', status: '',
+  peer: null, ws: null,
+  links: new Map(),          // хост: cid → з'єднання з гравцем
+  peers: new Map(),          // хост: cid → { name }
+  rc: new Map(),             // хост: cid → RemoteController
+  sendT: 0, rate: 1 / 60, pingT: 0, nextCid: 1000,
   rec: false, depth: 0, sfx: [], buzz: [0, 150], // звуки, що прозвучали за кадр
   // гравець
-  lobby: null, started: false, pz: false, snapT: 0, snapDt: 1 / 30, ip: new Map(), lastIn: '', inT: 0, userZ: 1, ctrl: null,
+  link: null, lobby: null, started: false, pz: false, snapT: 0, snapDt: 1 / 60, ip: new Map(), lastIn: '', inT: 0, userZ: 1, ctrl: null,
+  rtt: 0, via: '', chunks: null,
 };
-function netUrl() { return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'; }
-function netOpen(first, onmsg) {
-  try { NET.ws = new WebSocket(netUrl()); } catch (e) { NET.err = 'Немає з\'єднання з сервером гри'; return; }
-  NET.ws.onopen = () => NET.ws.send(JSON.stringify(first));
-  NET.ws.onmessage = (e) => onmsg(e.data);
-  NET.ws.onclose = () => {
-    const was = NET.role;
-    NET.ws = null; NET.role = null; NET.code = null; NET.started = false;
-    if (was === 'client') { NET.err = NET.err || 'З\'єднання з хостом утрачено'; state = 'lobby'; lobbyEl.classList.remove('hidden'); }
-    if (was === 'host') { Lobby.slots = Lobby.slots.filter((s) => !s.remote); Lobby.renumber(); NET.err = 'Кімнату закрито'; }
-    if (state === 'lobby') renderLobbyDOM();
-  };
+const NET_PREFIX = 'vtecha-vid-fpv-v1-';
+const NET_ABC = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+// STUN — дізнатися свою зовнішню адресу; TURN — ретранслятор, коли пряме з'єднання неможливе
+const NET_ICE = {
+  iceServers: [
+    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+    { urls: ['turn:free.expressturn.com:3478', 'turn:free.expressturn.com:3478?transport=tcp'], username: '000000002109359899', credential: '0+3ta8H72FlMQ4EjVCilU2qX/Sg=' },
+  ],
+};
+const NET_PEER_OPTS = { debug: 0, config: NET_ICE };
+const NET_CHUNK = 60000; // більші повідомлення WebRTC ріже на шматки
+function netCode() { const a = new Uint32Array(5); crypto.getRandomValues(a); let s = ''; for (const x of a) s += NET_ABC[x % NET_ABC.length]; return s; }
+function netNormCode(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5); }
+function netHasPeer() { return typeof Peer !== 'undefined' && typeof RTCPeerConnection !== 'undefined'; }
+function netWsUrl() { return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'; }
+function netPeerErr(type) {
+  return {
+    'peer-unavailable': 'Кімнату не знайдено. Перевірте код і що хост не закрив гру. Якщо в когось увімкнений VPN — вимкніть його.',
+    network: 'Немає з\'єднання із сервером зв\'язку. Перевірте інтернет.',
+    'server-error': 'Сервер зв\'язку недоступний. Спробуйте за хвилину.',
+    'browser-incompatible': 'Цей браузер не підтримує WebRTC.',
+    timeout: 'Не вдалося з\'єднатися. Можливо, мережа блокує пряме з\'єднання — спробуйте іншу мережу.',
+  }[type] || 'Помилка з\'єднання (' + type + ')';
 }
-function netClose() { NET.err = ''; if (NET.ws) NET.ws.close(); }
+// який шлях обрав WebRTC: напряму в локальній мережі, напряму через інтернет чи через ретранслятор
+async function netPathOf(conn) {
+  try {
+    const st = await conn.peerConnection.getStats();
+    let pair = null;
+    st.forEach((r) => { if (r.type === 'transport' && r.selectedCandidatePairId) pair = st.get(r.selectedCandidatePairId); });
+    if (!pair) st.forEach((r) => { if (r.type === 'candidate-pair' && r.state === 'succeeded' && (r.nominated || r.selected)) pair = pair || r; });
+    const lc = pair && st.get(pair.localCandidateId), rc = pair && st.get(pair.remoteCandidateId);
+    if (!lc) return 'напряму';
+    if (lc.candidateType === 'relay' || (rc && rc.candidateType === 'relay')) return 'через ретранслятор';
+    return lc.candidateType === 'host' && (!rc || rc.candidateType === 'host') ? 'напряму (локальна мережа)' : 'напряму';
+  } catch (e) { return 'напряму'; }
+}
+// реєстрація на сервері PeerJS із повторними спробами
+function netWatchPeer(peer) {
+  peer.on('disconnected', () => setTimeout(() => { if (NET.peer === peer && !peer.destroyed && peer.disconnected) try { peer.reconnect(); } catch (e) { /* наступного разу */ } }, 1000));
+}
+function netClose() {
+  const was = NET.role;
+  NET.role = null; NET.code = null; NET.started = false; NET.status = '';
+  for (const l of NET.links.values()) l.close();
+  NET.links.clear(); NET.peers.clear();
+  if (NET.link) { NET.link.close(); NET.link = null; }
+  if (NET.peer) { const p = NET.peer; NET.peer = null; setTimeout(() => p.destroy(), 200); }
+  if (NET.ws) { const w = NET.ws; NET.ws = null; w.onclose = null; w.close(); }
+  if (was === 'host') { Lobby.slots = Lobby.slots.filter((s) => !s.remote); Lobby.renumber(); }
+}
+// з'єднання WebRTC → однаковий інтерфейс для хоста й гравця
+function netWrapConn(conn, onmsg, onclose) {
+  let closed = false;
+  const L = {
+    kind: 'p', conn, rtt: 0, via: '', stale: false,
+    buffered: () => (conn.dataChannel ? conn.dataChannel.bufferedAmount : 0),
+    send(d) {
+      if (closed || !conn.open) return;
+      try {
+        if (typeof d !== 'string' && d.byteLength > NET_CHUNK) {
+          const n = Math.ceil(d.byteLength / NET_CHUNK);
+          conn.send('{"t":"chunks","n":' + n + '}');
+          for (let i = 0; i < n; i++) conn.send(d.slice(i * NET_CHUNK, (i + 1) * NET_CHUNK));
+        } else conn.send(d);
+      } catch (e) { /* канал закривається */ }
+    },
+    close() { if (closed) return; closed = true; try { conn.close(); } catch (e) { /* уже */ } },
+  };
+  let parts = null, need = 0;
+  conn.on('data', (d) => {
+    if (typeof d === 'string') {
+      if (d.startsWith('{"t":"chunks"')) { need = JSON.parse(d).n; parts = []; return; }
+      onmsg(d);
+    } else {
+      const u8 = d instanceof ArrayBuffer ? new Uint8Array(d) : new Uint8Array(d.buffer || d, d.byteOffset || 0, d.byteLength);
+      if (parts) {
+        parts.push(u8);
+        if (parts.length < need) return;
+        const all = new Uint8Array(parts.reduce((a, p) => a + p.length, 0)); let o = 0;
+        for (const p of parts) { all.set(p, o); o += p.length; }
+        parts = null; onmsg(all);
+      } else onmsg(u8);
+    }
+  });
+  const lost = () => { if (closed) return; closed = true; onclose(); };
+  conn.on('close', lost); conn.on('error', lost);
+  if (conn.peerConnection) conn.peerConnection.addEventListener('iceconnectionstatechange', () => { const s = conn.peerConnection.iceConnectionState; if (s === 'failed' || s === 'closed') lost(); });
+  setTimeout(async () => { L.via = await netPathOf(conn); }, 1500);
+  return L;
+}
+
+// стиснення: deflate; WebRTC отримує байти, WebSocket — base64 з префіксом «z»
+const NET_Z = typeof CompressionStream !== 'undefined';
+function b64enc(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
+function b64dec(s) { const b = atob(s), u8 = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u8[i] = b.charCodeAt(i); return u8; }
+async function zPack(text) { return new Uint8Array(await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()); }
+async function zUnpack(u8) { return new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text(); }
 
 // ---------- Хост ----------
 class RemoteController {
@@ -37,50 +127,85 @@ class RemoteController {
   label(a) { return codeLabel(KB_SCHEMES.kb.keys[a][0]); }
 }
 function netCtrl(s) { let c = NET.rc.get(s.cid); if (!c) NET.rc.set(s.cid, (c = new RemoteController(s.cid))); return c; }
-function netHost() {
-  NET.err = ''; NET.role = 'host';
-  netOpen({ t: 'host' }, (raw) => {
-    if (raw[0] === '{') {
-      const m = JSON.parse(raw);
-      if (m.t === 'room') { NET.code = m.code; NET.addrs = m.addrs || []; renderLobbyDOM(); }
-      return;
-    }
-    const k = raw.indexOf('|'), cid = +raw.slice(0, k), m = JSON.parse(raw.slice(k + 1));
-    if (m.t === 'in') {
-      netCtrl({ cid }).feed(m.s);
-      if (state === 'game' && m.z) { const p = G.players.find((q) => q.cid === cid); if (p) p.cam.userZ = clamp(m.z, 1, 2.4); }
-    } else if (m.t === 'joined') {
-      NET.peers.set(cid, { name: m.name || 'Гравець' });
-      if (state === 'lobby' && Lobby.slots.length < 8) {
-        Lobby.slots.push({ scheme: 'net' + cid, remote: true, cid, pname: m.name || '', role: Lobby.autoRole(), level: 1, team: Lobby.slots.length % 2 });
-        Lobby.renumber(); renderLobbyDOM();
-      }
-      netLobbyChanged();
-    } else if (m.t === 'left') {
-      NET.peers.delete(cid);
-      if (state === 'lobby') { Lobby.slots = Lobby.slots.filter((s) => s.cid !== cid); Lobby.renumber(); renderLobbyDOM(); netLobbyChanged(); }
-      else if (G) feed('Гравець по мережі відключився', '#ccc');
-    }
-  });
+function netHost(tries) {
+  netClose();
+  NET.err = ''; NET.role = 'host'; NET.code = netCode(); NET.status = 'Створюю кімнату…';
+  const code = NET.code;
+  if (netHasPeer()) {
+    const peer = new Peer(NET_PREFIX + code, NET_PEER_OPTS);
+    NET.peer = peer; netWatchPeer(peer);
+    peer.on('open', () => { if (NET.peer === peer) { NET.status = ''; renderLobbyIfIdle(); } });
+    peer.on('error', (e) => {
+      if (NET.peer !== peer) return;
+      if (e.type === 'unavailable-id' && (tries || 0) < 3) { netHost((tries || 0) + 1); return; }
+      if (e.type === 'peer-unavailable') return;
+      NET.status = ''; NET.err = netPeerErr(e.type) + (NET.ws ? ' Працює лише локальна мережа.' : ''); renderLobbyIfIdle();
+    });
+    peer.on('connection', (conn) => {
+      const t = setTimeout(() => { if (!conn.open) conn.close(); }, 25000);
+      conn.on('open', () => {
+        clearTimeout(t);
+        if (NET.peer !== peer) { conn.close(); return; }
+        const cid = NET.nextCid++;
+        const L = netWrapConn(conn, (d) => netHostRecv(cid, d), () => netHostLeft(cid));
+        NET.links.set(cid, L);
+        netHostJoined(cid, (conn.metadata && conn.metadata.name) || '');
+      });
+    });
+  }
+  // запасний шлях — WebSocket сервера гри (якщо гра відкрита з node serve.js)
+  try {
+    const ws = new WebSocket(netWsUrl());
+    NET.ws = ws;
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'host', code }));
+    ws.onerror = () => { if (NET.ws === ws) NET.ws = null; if (!netHasPeer()) { NET.err = 'Гра по мережі недоступна: немає ні WebRTC, ні сервера гри'; renderLobbyIfIdle(); } };
+    ws.onclose = () => { if (NET.ws === ws) NET.ws = null; };
+    ws.onmessage = (e) => {
+      const raw = e.data;
+      if (raw[0] === '{') { const m = JSON.parse(raw); if (m.t === 'room') { NET.addrs = m.addrs || []; if (!netHasPeer()) NET.status = ''; renderLobbyIfIdle(); } return; }
+      const k = raw.indexOf('|'), cid = +raw.slice(0, k), body = raw.slice(k + 1), m = JSON.parse(body);
+      if (m.t === 'joined') {
+        NET.links.set(cid, { kind: 'w', rtt: 0, via: 'через сервер гри', stale: false, buffered: () => ws.bufferedAmount, send(d) { if (ws.readyState === 1) ws.send(cid + '|' + (typeof d === 'string' ? d : 'z' + b64enc(d))); }, close() {} });
+        netHostJoined(cid, m.name);
+      } else if (m.t === 'left') netHostLeft(cid);
+      else netHostRecv(cid, body);
+    };
+  } catch (e) { NET.ws = null; }
+  renderLobbyIfIdle();
 }
-// стиснення знімків (у ~5 разів менше трафіку): deflate → base64, порядок повідомлень зберігається
-function b64enc(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
-function b64dec(s) { const b = atob(s), u8 = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u8[i] = b.charCodeAt(i); return u8; }
-const NET_Z = typeof CompressionStream !== 'undefined';
-async function zPack(text) { return b64enc(new Uint8Array(await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer())); }
-async function zUnpack(b64) { return new Response(new Blob([b64dec(b64)]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text(); }
-NET.zq = Promise.resolve();
-function netSendZ(to, text) {
-  if (!NET_Z) { netSend(to, text); return; }
-  NET.zq = NET.zq.then(() => zPack(text)).then((z) => netSend(to, 'z' + z)).catch((e) => console.warn('мережа: стиснення', e));
+function renderLobbyIfIdle() { if (state === 'lobby' && !(document.activeElement && document.activeElement.tagName === 'INPUT')) renderLobbyDOM(); }
+function netHostJoined(cid, name) {
+  NET.peers.set(cid, { name: name || 'Гравець' });
+  const L = NET.links.get(cid);
+  if (L) L.send(JSON.stringify({ t: 'welcome', cid, code: NET.code }));
+  if (state === 'lobby' && Lobby.slots.length < 8) {
+    Lobby.slots.push({ scheme: 'net' + cid, remote: true, cid, pname: name || '', role: Lobby.autoRole(), level: 1, team: Lobby.slots.length % 2 });
+    Lobby.renumber(); renderLobbyIfIdle();
+  } else if (state === 'game') { if (L) L.send(JSON.stringify({ t: 'busy' })); }
+  netLobbyChanged();
 }
-function netSend(to, obj) { if (NET.ws && NET.ws.readyState === 1) NET.ws.send(to + '|' + (typeof obj === 'string' ? obj : JSON.stringify(obj))); }
+function netHostLeft(cid) {
+  if (!NET.peers.has(cid)) return;
+  const name = NET.peers.get(cid).name;
+  NET.peers.delete(cid); NET.links.delete(cid);
+  if (state === 'lobby') { Lobby.slots = Lobby.slots.filter((s) => s.cid !== cid); Lobby.renumber(); renderLobbyIfIdle(); netLobbyChanged(); }
+  else if (G) feed(name + ' (по мережі) відключився', '#ccc');
+}
+function netHostRecv(cid, d) {
+  if (typeof d !== 'string') return;
+  const m = JSON.parse(d), L = NET.links.get(cid);
+  if (m.t === 'in') {
+    netCtrl({ cid }).feed(m.s);
+    if (state === 'game' && m.z) { const p = G.players.find((q) => q.cid === cid); if (p) p.cam.userZ = clamp(m.z, 1, 2.4); }
+  } else if (m.t === 'pong' && L) L.rtt = Math.round(lerp(L.rtt || (performance.now() - m.h), performance.now() - m.h, 0.3));
+}
+function netSendAll(d) { for (const L of NET.links.values()) L.send(d); }
 // гравцям — хто в лобі
 function netLobbyChanged() {
   if (NET.role !== 'host') return;
-  netSend('*', { t: 'lobby', mode: Lobby.mode, loc: LOCATIONS[Lobby.loc].name, slots: Lobby.slots.map((s) => ({ name: s.name, role: s.role, bot: !!s.bot, cid: s.cid || 0, team: s.team || 0, color: s.color })) });
+  netSendAll(JSON.stringify({ t: 'lobby', mode: Lobby.mode, loc: LOCATIONS[Lobby.loc].name, slots: Lobby.slots.map((s) => ({ name: s.name, role: s.role, bot: !!s.bot, cid: s.cid || 0, team: s.team || 0, color: s.color })) }));
 }
-function netToLobby() { if (NET.role === 'host') { netSend('*', { t: 'tolobby' }); netLobbyChanged(); } }
+function netToLobby() { if (NET.role === 'host') { netSendAll('{"t":"tolobby"}'); netLobbyChanged(); } }
 
 // кодування стану: кожен об'єкт гри — вузол з номером, посилання — {"#": номер}
 const ENC = { ids: new WeakMap(), next: 1, last: new Map(), parts: new WeakSet() };
@@ -93,7 +218,8 @@ function plainKind(v) {
   const pr = Object.getPrototypeOf(v);
   return pr === Object.prototype || pr === null ? 'o' : null;
 }
-function encState(full) {
+// full — усі вузли; keep — повний знімок для одного гравця, не чіпаючи спільного стану розсилки
+function encState(full, keep) {
   const out = [], seen = new Set([G]), stack = [G], SKIPV = encState;
   const idOf = (v) => { let id = ENC.ids.get(v); if (!id) { id = ENC.next++; ENC.ids.set(v, id); } return id; };
   const val = (v) => {
@@ -121,8 +247,10 @@ function encState(full) {
       }
     }
     const s = JSON.stringify(d);
-    if (full || ENC.last.get(id) !== s) { ENC.last.set(id, s); out.push('"' + id + '":' + s); }
+    if (keep) out.push('"' + id + '":' + (ENC.last.get(id) || s));
+    else if (full || ENC.last.get(id) !== s) { ENC.last.set(id, s); out.push('"' + id + '":' + s); }
   }
+  if (keep) return '"r":' + root + ',"n":{' + out.join(',') + '},"p":[]';
   // об'єкти, яких уже немає в грі, забути: якщо повернуться — надіслати заново
   for (const id of ENC.last.keys()) if (!vis.has(id)) ENC.last.delete(id);
   // нові частинки — гравці рахують їх самі
@@ -136,21 +264,48 @@ function encState(full) {
   }
   return '"r":' + root + ',"n":{' + out.join(',') + '},"p":' + JSON.stringify(np);
 }
+// розсилка зі стисненням; порядок повідомлень зберігається
+NET.zq = Promise.resolve();
+function netSendZ(links, text) {
+  if (!NET_Z) { for (const L of links) L.send(text); return; }
+  NET.zq = NET.zq.then(() => zPack(text)).then((z) => { for (const L of links) L.send(z); }).catch((e) => console.warn('мережа: стиснення', e));
+}
+function netStartMsg(st) { return '{"t":"start","loc":' + JSON.stringify(G.W.loc) + ',"width":' + G.W.width + ',' + st + '}'; }
 function netStartHost() {
   if (NET.role !== 'host') return;
   encReset();
   for (const p of G.parts) ENC.parts.add(p);
-  netSendZ('*', '{"t":"start","loc":' + JSON.stringify(G.W.loc) + ',"width":' + G.W.width + ',' + encState(true) + '}');
+  for (const L of NET.links.values()) L.stale = false;
+  netSendZ([...NET.links.values()], netStartMsg(encState(true)));
   NET.sendT = 0; NET.sfx = [];
 }
 function netHostTick(dt) {
-  if (NET.role !== 'host' || !NET.peers.size || state !== 'game') { NET.sfx = []; return; }
+  if (NET.role !== 'host') return;
+  // пінг кожну секунду (і в лобі)
+  NET.pingT += dt;
+  if (NET.pingT > 1) {
+    NET.pingT = 0;
+    for (const L of NET.links.values()) L.send('{"t":"ping","h":' + performance.now().toFixed(1) + ',"rtt":' + (L.rtt || 0) + ',"via":' + JSON.stringify(L.via || '') + '}');
+    if (state === 'lobby') { const el = document.getElementById('netPeers'); if (el) el.innerHTML = netPeersHtml(); }
+  }
+  if (!NET.links.size || state !== 'game') { NET.sfx = []; return; }
+  // частота: 60 знімків/с, якщо гравців небагато й канали встигають, інакше 30
+  const links = [...NET.links.values()];
+  const busy = links.some((L) => L.buffered() > 64e3);
+  NET.rate = links.length <= 3 && !busy ? 1 / 60 : 1 / 30;
   NET.sendT += dt;
-  if (NET.sendT < NET.rate) return;
+  if (NET.sendT < NET.rate - 0.002) return;
   NET.sendT = 0;
+  // канал гравця переповнений (повільний інтернет) — пропустити, потім надіслати повний знімок
+  const ok = [];
+  for (const L of links) {
+    if (L.stale) { if (L.buffered() < 32e3) { L.stale = false; netSendZ([L], netStartMsg(encState(true, true))); } continue; }
+    if (L.buffered() > 512e3) { L.stale = true; continue; }
+    ok.push(L);
+  }
   const msg = '{"t":"s",' + encState(false) + ',"f":' + JSON.stringify(NET.sfx) + ',"b":' + JSON.stringify(NET.buzz) + ',"pz":' + (paused ? 1 : 0) + '}';
   NET.sfx = [];
-  netSendZ('*', msg);
+  if (ok.length) netSendZ(ok, msg);
 }
 // звуки хоста повторюються в гравців
 (function netWrapSfx() {
@@ -169,44 +324,83 @@ function netHostTick(dt) {
 // ---------- Гравець ----------
 const DEC = { objs: new Map() };
 function netJoin(code, name) {
-  NET.err = ''; NET.role = 'client'; NET.lobby = null; NET.started = false;
+  netClose();
+  code = netNormCode(code);
+  NET.err = ''; NET.role = 'client'; NET.lobby = null; NET.started = false; NET.code = code; NET.status = 'Підключаюся…';
   savePref('netName', name || '');
   NET.dq = Promise.resolve();
-  netOpen({ t: 'join', code, name }, (raw) => {
-    if (raw[0] === 'z') { NET.dq = NET.dq.then(() => zUnpack(raw.slice(1))).then(netClientMsg).catch((e) => console.warn('мережа: знімок', e)); return; }
-    NET.dq = NET.dq.then(() => netClientMsg(raw));
+  const recv = (d) => {
+    if (typeof d === 'string' && d[0] === 'z') d = b64dec(d.slice(1));
+    if (typeof d === 'string') NET.dq = NET.dq.then(() => netClientMsg(d));
+    else NET.dq = NET.dq.then(() => zUnpack(d)).then(netClientMsg).catch((e) => console.warn('мережа: знімок', e));
+  };
+  const lost = () => {
+    if (NET.role !== 'client') return;
+    netClose();
+    NET.err = NET.err || 'З\'єднання з хостом утрачено';
+    state = 'lobby'; lobbyEl.classList.remove('hidden'); renderLobbyDOM();
+  };
+  // запасний шлях — WebSocket сервера гри
+  const viaWs = (why) => {
+    if (NET.role !== 'client') return;
+    let ws;
+    try { ws = new WebSocket(netWsUrl()); } catch (e) { NET.err = why; lost(); return; }
+    NET.ws = ws;
+    let opened = false;
+    ws.onopen = () => { opened = true; ws.send(JSON.stringify({ t: 'join', code, name })); };
+    ws.onmessage = (e) => {
+      if (e.data[0] === '{' && e.data.startsWith('{"t":"err"')) { NET.err = why; ws.onclose = null; lost(); return; }
+      if (!NET.link) NET.link = { kind: 'w', send: (s) => { if (ws.readyState === 1) ws.send(s); }, close() {}, buffered: () => ws.bufferedAmount };
+      recv(e.data);
+    };
+    ws.onclose = () => { if (NET.ws === ws) { NET.ws = null; if (!opened) NET.err = why; lost(); } };
+  };
+  if (!netHasPeer()) { viaWs('WebRTC недоступний, а сервера гри немає'); return; }
+  const peer = new Peer(NET_PEER_OPTS);
+  NET.peer = peer; netWatchPeer(peer);
+  let done = false;
+  const fail = (type) => { if (done) return; done = true; if (NET.peer === peer) { NET.peer = null; setTimeout(() => peer.destroy(), 200); } viaWs(netPeerErr(type)); };
+  const to = setTimeout(() => fail('timeout'), 20000);
+  peer.on('error', (e) => { if (!done) fail(e.type); });
+  peer.on('open', () => {
+    const conn = peer.connect(NET_PREFIX + code, { reliable: true, serialization: 'raw', metadata: { name } });
+    conn.on('open', () => {
+      if (done) { conn.close(); return; }
+      done = true; clearTimeout(to);
+      NET.link = netWrapConn(conn, recv, lost);
+      NET.status = '';
+    });
   });
 }
 function netClientMsg(raw) {
-  {
-    const m = JSON.parse(raw);
-    if (m.t === 'welcome') { NET.cid = m.cid; NET.code = m.code; renderLobbyDOM(); }
-    else if (m.t === 'err') { NET.err = m.text; NET.role = null; if (NET.ws) { const w = NET.ws; NET.ws = null; w.onclose = null; w.close(); } renderLobbyDOM(); }
-    else if (m.t === 'lobby') { NET.lobby = m; if (state === 'lobby') renderLobbyDOM(); }
-    else if (m.t === 'closed') { NET.err = 'Хост закрив кімнату'; if (NET.ws) NET.ws.close(); }
-    else if (m.t === 'tolobby') { state = 'lobby'; NET.started = false; Sfx.setBuzz(0, 150); lobbyEl.classList.remove('hidden'); renderLobbyDOM(); }
-    else if (m.t === 'start') {
-      DEC.objs = new Map(); NET.ip = new Map();
-      decApply(m.n, false);
-      G = DEC.objs.get(m.r);
-      G.W.themeAt = makeThemeAt(m.loc, m.width);
-      G.W.cavMap = new Map();
-      G.parts = m.p || [];
-      netLocalCtrl();
-      NET.started = true; NET.pz = false; NET.snapT = performance.now();
-      state = 'net'; lobbyEl.classList.add('hidden');
-    } else if (m.t === 's' && NET.started) {
-      const now = performance.now();
-      NET.snapDt = clamp(lerp(NET.snapDt, (now - NET.snapT) / 1000, 0.2), 0.016, 0.12); NET.snapT = now;
-      decApply(m.n, true);
-      G.W.cavMap = new Map();
-      for (const p of m.p) G.parts.push(p);
-      for (const [n, a] of m.f) if (Sfx[n]) Sfx[n](...a);
-      Sfx.setBuzz(m.b[0], m.b[1]);
-      NET.pz = !!m.pz;
-      netLocalCtrl();
-      if (now - (NET.pruneT || 0) > 3000) { NET.pruneT = now; decPrune(); }
-    }
+  const m = JSON.parse(raw);
+  if (m.t === 'welcome') { NET.cid = m.cid; NET.code = m.code; NET.status = ''; renderLobbyIfIdle(); }
+  else if (m.t === 'busy') { NET.err = 'Гра в цій кімнаті вже йде — зачекайте, поки хост повернеться в лобі'; }
+  else if (m.t === 'ping') { if (NET.link) NET.link.send('{"t":"pong","h":' + m.h + '}'); NET.rtt = m.rtt; NET.via = m.via; const el = document.getElementById('netPing'); if (el) el.innerHTML = netPingHtml(); }
+  else if (m.t === 'closed') { netClose(); NET.err = 'Хост закрив кімнату'; state = 'lobby'; lobbyEl.classList.remove('hidden'); renderLobbyDOM(); }
+  else if (m.t === 'lobby') { NET.lobby = m; NET.err = ''; if (state === 'lobby') renderLobbyIfIdle(); }
+  else if (m.t === 'tolobby') { state = 'lobby'; NET.started = false; Sfx.setBuzz(0, 150); lobbyEl.classList.remove('hidden'); renderLobbyDOM(); }
+  else if (m.t === 'start') {
+    DEC.objs = new Map(); NET.ip = new Map();
+    decApply(m.n, false);
+    G = DEC.objs.get(m.r);
+    G.W.themeAt = makeThemeAt(m.loc, m.width);
+    G.W.cavMap = new Map();
+    G.parts = m.p || [];
+    netLocalCtrl();
+    NET.started = true; NET.pz = false; NET.snapT = performance.now();
+    state = 'net'; lobbyEl.classList.add('hidden');
+  } else if (m.t === 's' && NET.started) {
+    const now = performance.now();
+    NET.snapDt = clamp(lerp(NET.snapDt, (now - NET.snapT) / 1000, 0.2), 0.012, 0.12); NET.snapT = now;
+    decApply(m.n, true);
+    G.W.cavMap = new Map();
+    for (const p of m.p) G.parts.push(p);
+    for (const [n, a] of m.f) if (Sfx[n]) Sfx[n](...a);
+    Sfx.setBuzz(m.b[0], m.b[1]);
+    NET.pz = !!m.pz;
+    netLocalCtrl();
+    if (now - (NET.pruneT || 0) > 3000) { NET.pruneT = now; decPrune(); }
   }
 }
 // гравець: прибрати об'єкти, недосяжні зі стану гри (кулі, вибухи, що минули)
@@ -268,9 +462,9 @@ function netClientFrame(dt, t) {
   NET.ctrl.prev = NET.ctrl.cur; NET.ctrl.cur = s;
   const js = JSON.stringify(s);
   NET.inT += dt;
-  if ((js !== NET.lastIn || NET.inT > 0.25) && NET.ws && NET.ws.readyState === 1) {
+  if ((js !== NET.lastIn || NET.inT > 0.25) && NET.link) {
     NET.lastIn = js; NET.inT = 0;
-    NET.ws.send('{"t":"in","s":' + js + ',"z":' + NET.userZ + '}');
+    NET.link.send('{"t":"in","s":' + js + ',"z":' + NET.userZ + '}');
   }
   // плавний рух між знімками
   const k = clamp((performance.now() - NET.snapT) / 1000 / NET.snapDt, 0, 1);
@@ -283,43 +477,63 @@ function netClientFrame(dt, t) {
     centerText(ctx, 'Хост поставив гру на паузу', VW / 2, VH / 2 + 24, 18, '#ddd');
   }
 }
+// пінг у куті екрана: у гравця — до хоста, у хоста — до кожного гравця
+function netPingColor(ms) { return ms < 60 ? '#6fcf97' : ms < 120 ? '#f2c94c' : '#eb5757'; }
+function drawNetInfo(ctx, w, h) {
+  let rows = [];
+  if (NET.role === 'client' && NET.started) rows = [['Пінг ' + (NET.rtt || '…') + ' мс · ' + (NET.via || (NET.link && NET.link.kind === 'w' ? 'через сервер гри' : '')), NET.rtt]];
+  else if (NET.role === 'host' && NET.links.size) for (const [cid, L] of NET.links) rows.push([(NET.peers.get(cid) || {}).name + ': ' + (L.rtt || '…') + ' мс' + (L.via ? ' · ' + L.via : '') + (L.stale ? ' · наздоганяє' : ''), L.rtt]);
+  if (!rows.length) return;
+  ctx.font = FONT(12); ctx.textAlign = 'right';
+  rows.forEach(([text, ms], i) => {
+    const y = h - 10 - (rows.length - 1 - i) * 16, tw = ctx.measureText(text).width + 12;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(w - tw - 6, y - 12, tw, 16);
+    ctx.fillStyle = ms ? netPingColor(ms) : '#ccc'; ctx.fillText(text, w - 12, y);
+  });
+  ctx.textAlign = 'left';
+}
 
 // ---------- Лобі ----------
+function netEsc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function netLobbyHtml() {
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const err = NET.err ? '<div class="net-err">' + esc(NET.err) + '</div>' : '';
+  const err = NET.err ? '<div class="net-err">' + netEsc(NET.err) + '</div>' : '';
   if (NET.role === 'host') {
+    const link = location.origin + location.pathname + '?join=' + NET.code;
     const port = location.port ? ':' + location.port : '';
-    const links = (NET.addrs.length ? NET.addrs : [location.hostname]).map((a) => '<code>' + location.protocol + '//' + a + port + '/?join=' + NET.code + '</code>').join(' або ');
-    return '<div class="net">' + (NET.code
-      ? '<div>Кімната <b class="code">' + NET.code + '</b> · підключено гравців: ' + NET.peers.size + '</div>' +
-        '<small>На інших ПК відкрийте ' + links + ' (або введіть код кімнати в цьому розділі). Підключені гравці з\'являються в учасниках — оберіть їм роль і почніть гру.</small>'
-      : '<div>Створюю кімнату…</div>') +
+    const lan = NET.ws && NET.addrs.length && /^(localhost|127\.)/.test(location.hostname) ? ' У локальній мережі: ' + NET.addrs.map((a) => '<code>' + location.protocol + '//' + a + port + location.pathname + '?join=' + NET.code + '</code>').join(' ') : '';
+    return '<div class="net">' + (NET.status ? '<div>' + NET.status + '</div>' :
+      '<div>Кімната <b class="code">' + NET.code + '</b> · підключено гравців: ' + NET.peers.size + '</div>' +
+      '<small>Друзі відкривають <code>' + netEsc(link) + '</code> або вводять код у цьому розділі.' + lan + ' Підключені гравці з\'являються в учасниках — оберіть їм роль і почніть гру.</small>' +
+      '<ul class="net-list" id="netPeers">' + netPeersHtml() + '</ul>') +
       '<button data-act="netclose">Закрити кімнату</button></div>' + err;
   }
   return '<div class="net"><button data-act="nethost">🌐 Створити кімнату</button>' +
-    '<span class="net-join"><input id="netName" placeholder="Ваше ім\'я" maxlength="20" value="' + esc(loadPref('netName', '')) + '">' +
-    '<input id="netCode" placeholder="Код кімнати" maxlength="4" inputmode="numeric"><button data-act="netjoin">Приєднатися</button></span>' +
-    '<small>Один ПК — хост: на ньому йде гра, решта підключаються за кодом і грають на своїх клавіатурах чи геймпадах. Усі мають відкривати гру з одного сервера (node serve.js).</small></div>' + err;
+    '<span class="net-join"><input id="netName" placeholder="Ваше ім\'я" maxlength="20" value="' + netEsc(loadPref('netName', '')) + '">' +
+    '<input id="netCode" placeholder="Код кімнати" maxlength="5" autocapitalize="characters"><button data-act="netjoin">Приєднатися</button></span>' +
+    '<small>Один ПК — хост: на ньому йде гра, друзі підключаються за кодом з будь-якого місця й грають на своїх клавіатурах чи геймпадах. Зв\'язок напряму між браузерами (WebRTC).</small></div>' + err;
 }
+function netPeersHtml() {
+  return [...NET.peers].map(([cid, p]) => { const L = NET.links.get(cid) || {}; return '<li>' + netEsc(p.name) + (L.rtt ? ' · <span style="color:' + netPingColor(L.rtt) + '">' + L.rtt + ' мс</span>' : '') + (L.via ? ' · ' + L.via : '') + '</li>'; }).join('');
+}
+function netPingHtml() { return NET.rtt ? 'пінг <span style="color:' + netPingColor(NET.rtt) + '">' + NET.rtt + ' мс</span>' + (NET.via ? ', ' + NET.via : '') : ''; }
 // екран гравця, що чекає на старт
 function netWaitHtml() {
   const L = NET.lobby;
-  const rows = L ? L.slots.map((s) => '<li style="--pc:' + s.color + '"' + (s.cid === NET.cid ? ' class="me"' : '') + '>' + s.name + (s.cid === NET.cid ? ' (це ви)' : s.bot ? ' 🤖' : s.cid ? ' 🌐' : '') +
+  const rows = L ? L.slots.map((s) => '<li style="--pc:' + s.color + '"' + (s.cid === NET.cid ? ' class="me"' : '') + '>' + netEsc(s.name) + (s.cid === NET.cid ? ' (це ви)' : s.bot ? ' 🤖' : s.cid ? ' 🌐' : '') +
     ' — ' + (s.role === 'human' ? '🏃 людина' : '🛸 FPV-дрон') + (L.mode === 'team' ? ' · ' + TEAMS[s.team].name : '') + '</li>').join('') : '';
   return '<div class="wrap"><header><h1>ВТЕЧА ВІД FPV</h1><p>Гра по мережі</p></header>' +
-    '<div class="net wait">' + (NET.code ? '<div>Ви в кімнаті <b class="code">' + NET.code + '</b>. Хост налаштовує гру й почне її, коли всі будуть готові.</div>' : '<div>Підключаюся…</div>') +
-    (L ? '<div>Режим: ' + ({ escape: 'Втеча', dm: 'Дезматч', team: 'Команди' }[L.mode] || L.mode) + ' · Локація: ' + L.loc + '</div><ul class="net-list">' + rows + '</ul>' : '') +
+    '<div class="net wait">' + (NET.cid ? '<div>Ви в кімнаті <b class="code">' + NET.code + '</b> · <span id="netPing">' + netPingHtml() + '</span>. Хост налаштовує гру й почне її, коли всі будуть готові.</div>' : '<div>' + (NET.status || 'Підключаюся…') + ' Кімната ' + netEsc(NET.code || '') + '</div>') +
+    (L ? '<div>Режим: ' + ({ escape: 'Втеча', dm: 'Дезматч', team: 'Команди' }[L.mode] || L.mode) + ' · Локація: ' + netEsc(L.loc) + '</div><ul class="net-list">' + rows + '</ul>' : '') +
     '<small>Ваше керування: клавіатура (WASD, Пробіл, F, E, R, Q, Shift, 1–3) або геймпад. Колесо миші — віддалити камеру.</small>' +
-    '<button data-act="netclose">Вийти з кімнати</button></div>' + (NET.err ? '<div class="net-err">' + NET.err + '</div>' : '') + '</div>';
+    '<button data-act="netclose">Вийти з кімнати</button></div>' + (NET.err ? '<div class="net-err">' + netEsc(NET.err) + '</div>' : '') + '</div>';
 }
 function netLobbyClick(act) {
   if (act === 'nethost') { netHost(); return true; }
-  if (act === 'netclose') { netClose(); NET.role = null; renderLobbyDOM(); return true; }
+  if (act === 'netclose') { netClose(); NET.err = ''; renderLobbyDOM(); return true; }
   if (act === 'netjoin') {
-    const code = (document.getElementById('netCode') || {}).value || '', name = (document.getElementById('netName') || {}).value || '';
-    if (!/^\d{4}$/.test(code.trim())) { NET.err = 'Введіть 4 цифри коду кімнати'; renderLobbyDOM(); return true; }
-    netJoin(code.trim(), name.trim()); renderLobbyDOM(); return true;
+    const code = netNormCode((document.getElementById('netCode') || {}).value), name = ((document.getElementById('netName') || {}).value || '').trim();
+    if (code.length < 4) { NET.err = 'Введіть код кімнати'; renderLobbyDOM(); return true; }
+    netJoin(code, name); renderLobbyDOM(); return true;
   }
   return false;
 }

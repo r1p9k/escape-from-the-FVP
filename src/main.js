@@ -261,8 +261,8 @@ if (/[?&]demo/.test(location.search)) {
 } else if (/[?&]bots/.test(location.search)) {
   Lobby.slots = [{ scheme: 'kb', role: 'drone' }, { scheme: 'bot1', bot: true, role: 'human', level: 1 }, { scheme: 'bot2', bot: true, role: 'drone', level: 1 }];
   Lobby.renumber(); startGame();
-} else if (/[?&]join=(\d{4})/.test(location.search)) {
-  netJoin(location.search.match(/[?&]join=(\d{4})/)[1], loadPref('netName', '')); renderLobbyDOM();
+} else if (/[?&]join=([A-Za-z0-9]{4,5})/.test(location.search)) {
+  netJoin(location.search.match(/[?&]join=([A-Za-z0-9]{4,5})/)[1], loadPref('netName', '')); renderLobbyDOM();
 } else renderLobbyDOM();
 
 let last = performance.now();
@@ -274,6 +274,7 @@ function frame(now) {
   GlobalKeys.poll();
   if (state === 'net') netClientFrame(dt, t);
   else if (state === 'lobby') {
+    netHostTick(dt);
     if (GlobalKeys.pressed('Enter') && NET.role !== 'client' && !(document.activeElement && document.activeElement.tagName === 'INPUT')) startGame();
   } else {
     if (GlobalKeys.pressed('Escape') && !G.over) { paused = !paused; Sfx.setBuzz(0, 150); }
