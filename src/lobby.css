@@ -17,17 +17,47 @@ html, body { margin: 0; height: 100%; background: #111; overflow: hidden; font-f
 canvas { display: block; width: 100vw; height: 100vh; }
 
 #lobby {
-  position: fixed; inset: 0; overflow-y: auto;
-  background: linear-gradient(180deg, var(--bg), var(--bg2));
-  padding: 28px 16px 40px;
+  position: fixed; inset: 0; overflow-y: auto; overflow-x: hidden;
+  background: linear-gradient(180deg, #1a1020 0, #150d1b 60%, #0f0a13 100%);
+  padding: 0 16px 40px;
 }
 #lobby.hidden { display: none; }
 .wrap { max-width: 1120px; margin: 0 auto; }
-header { text-align: center; margin-bottom: 22px; }
-header h1 { margin: 0; font-size: clamp(34px, 5vw, 56px); letter-spacing: 2px; color: var(--accent); }
-header p { margin: 6px 0 0; color: var(--muted); font-size: 16px; }
+#lobby > .wrap > header { margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); }
+header { text-align: center; height: 52vh; min-height: 300px; display: flex; flex-direction: column; justify-content: flex-start; padding-top: 4vh; position: relative;
+  margin: 0 -16px 8px; padding-left: 16px; padding-right: 16px; overflow: hidden; }
+header h1, header p { position: relative; z-index: 1; }
+.scene-slot { position: absolute; inset: 0; z-index: 0; }
+.scene-slot canvas.scene { width: 100%; height: 100%; display: block; }
+.scene-slot::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 40px; background: linear-gradient(180deg, rgba(26,16,32,0), #1a1020); }
+header .down { position: absolute; bottom: 2vh; left: 50%; transform: translateX(-50%); color: #f3dcc8; opacity: .75; font-size: 14px; text-shadow: 0 1px 6px #000; animation: bob 2.4s ease-in-out infinite; cursor: pointer; }
+@keyframes bob { 50% { transform: translate(-50%, 6px); } }
+header h1 { margin: 0; font-size: clamp(40px, 7vw, 84px); letter-spacing: 6px; color: #ffd27a; font-weight: 900;
+  text-shadow: 0 2px 0 #7a2e1c, 0 0 30px rgba(255,140,60,.55), 0 6px 24px rgba(0,0,0,.6); }
+header p { margin: 10px auto 0; color: #f3dcc8; font-size: 16px; max-width: 640px; text-shadow: 0 1px 6px rgba(0,0,0,.8); }
 
-h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--muted); margin: 26px 0 10px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 2.5px; color: #e9c7a8; margin: 28px 0 10px; text-shadow: 0 1px 4px rgba(0,0,0,.8); }
+
+/* панелі — темне скло над заставкою */
+.card, .opt, .net, .loc, .help section {
+  background: rgba(22, 13, 26, 0.74) !important; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border-color: rgba(255, 210, 160, 0.14);
+}
+.card.empty { background: transparent !important; backdrop-filter: none; border: 2px dashed rgba(255,255,255,.08); }
+.add-card { justify-content: center; }
+.add-card .add { flex: 1; min-height: 0; font-size: 16px; color: var(--text); }
+.add-card .add b { font-size: 26px; }
+.add-card .add small { color: var(--muted); font-size: 12px; }
+.add:disabled { opacity: .35; cursor: default; border-color: var(--line) !important; }
+.seg button.team { color: var(--tc); }
+.seg button.team.on { background: var(--tc); color: #111; }
+.music {
+  position: fixed; top: 14px; right: 18px; z-index: 5; padding: 8px 14px; border-radius: 20px; cursor: pointer;
+  border: 1px solid rgba(255,210,160,.3); background: rgba(22,13,26,.6); color: #f3dcc8; font: 600 14px "Segoe UI", system-ui, sans-serif;
+  backdrop-filter: blur(6px);
+}
+.music:hover { border-color: var(--accent); }
+.credit { text-align: center; color: rgba(243,220,200,.55); font-size: 12px; margin-top: 26px; }
 
 .slots { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 @media (max-width: 900px) { .slots { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -91,9 +121,10 @@ h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 1.5px; color: v
 
 .start-row { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 26px; flex-wrap: wrap; }
 .start {
-  padding: 14px 46px; font-size: 22px; font-weight: 800; letter-spacing: 1px; border: 0; border-radius: 12px;
-  background: var(--accent); color: #1b1b1b; cursor: pointer;
+  padding: 14px 46px; font-size: 22px; font-weight: 800; letter-spacing: 2px; border: 0; border-radius: 12px;
+  background: linear-gradient(180deg, #ffd27a, #f2994a); color: #2a1408; cursor: pointer; box-shadow: 0 6px 24px rgba(242,153,74,.35);
 }
+.start:hover:not(:disabled) { filter: brightness(1.08); }
 .start:disabled { background: #555; color: #999; cursor: default; }
 .status { font-size: 15px; color: var(--warn); }
 .status.ok { color: var(--ok); }
