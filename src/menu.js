@@ -4,19 +4,19 @@
 const MENU = {
   t: 0, scroll: 0, drones: [], booms: [], parts: [], smoke: [], craters: [], tracers: [],
   nextD: 1.2, shake: 0, flash: 0, flashX: 0, flashY: 0, hc: null, rnd: mulberry32(7),
-  aim: null, aimCd: 3, flinch: 0, pace: 1, muzzle: 0, corpses: {},
+  aim: null, aimCd: 3, flinch: 0, pace: 1, muzzle: 0, corpses: {}, troops: [], nextT: 2.5,
 };
 const MENU_SLOW = 0.3; // сповільнення часу
 const MENU_Z = { far: 0.45, mid: 1, near: 1.7 };
 const MENU_HUMAN = {
   player: { color: '#f2c94c', name: '' }, x: 0, y: 0, stance: 'stand', facing: 1, onGround: true, onLadder: false, climb: null,
   vx: 175, anim: 0, hp: 100, weapon: { type: 'rifle', mag: 9, ammo: 27 }, aiming: false, aimA: -0.3, hurtT: 0, dead: false, hidden: null,
-  canister: false, carry: null, healT: 0, alT: 0, protT: 0, digT: 0, digging: null, piloting: false, fireCd: 0, bloom: 0,
+  canister: false, carry: null, healT: 0, alT: 0, protT: 0, digT: 0, digging: null, piloting: false, fireCd: 0, bloom: 0, cine: true, // cine — кіношний біг із фазою польоту
 };
 function mr(a, b) { return a + (b - a) * MENU.rnd(); }
 // Аркуші кадрів від Gemini: чорні силуети на білому тлі в один ряд. Кадри знаходяться автоматично
 // (стовпці без темних пікселів — проміжки), біле тло прибирається, сіре стає напівпрозорим.
-const MENU_SHEETS = { run: { src: 'art/menu/run.jpg', col: [0, 0, 0], solo: true, skip: [1, 5], head: true }, boom: { src: 'art/menu/boom.jpg', col: [34, 22, 18], grid: [6, 4], n: 24, pow: 0.625, vid: 180 / 306 } };
+const MENU_SHEETS = { boom: { src: 'art/menu/boom.jpg', col: [34, 22, 18], grid: [10, 8], n: 80, pow: 1 / 1.3, vid: 135 / 230 } };
 function menuSheetPrep(sh, img) {
   if (sh.grid) return menuGridPrep(sh, img);
   const N = 8, W = img.width, H = img.height, c = document.createElement('canvas'); c.width = W; c.height = H;
@@ -169,12 +169,18 @@ function drawMenuScene(ctx, w, h, rdt) {
   menuUpdateDrones(L, dt);
   menuUpdateFx(L, dt);
   menuUpdateHuman(L, dt);
+  menuUpdateTroops(L, dt, rdt);
 
   // ---- далекий план: за руїнами, у серпанку ----
   ctx.save(); ctx.globalAlpha = 0.55;
   menuDrawLayer(ctx, L, MENU_Z.far);
   ctx.restore();
   menuSkyline(ctx, w, h, hy + h * 0.1, sc * 0.3, S);
+  // бійці вдалині — перед руїнами, на лінії горизонту; вибухи, що їх накривають, теж тут
+  menuDrawTroops(ctx, L);
+  ctx.save(); ctx.globalAlpha = 0.85;
+  for (const b of MENU.booms) if (b.front) menuDrawBoom(ctx, b, b.wx - sc * b.z, S * b.z);
+  ctx.restore();
   // земля середнього плану
   ctx.fillStyle = '#1b0f18';
   ctx.beginPath(); ctx.moveTo(-20, h + 20);
@@ -201,7 +207,7 @@ function drawMenuScene(ctx, w, h, rdt) {
   // трасери й спалах пострілу
   for (const tr of MENU.tracers) {
     const k = tr.t / tr.max;
-    ctx.strokeStyle = 'rgba(255,230,150,' + (1 - k) + ')'; ctx.lineWidth = 1.4 * S;
+    ctx.strokeStyle = 'rgba(255,230,150,' + (1 - k) * (tr.a || 1) + ')'; ctx.lineWidth = (tr.lw || 1.4) * S;
     const ax = lerp(tr.x1, tr.x2, Math.max(0, k * 1.6 - 0.6)), ay = lerp(tr.y1, tr.y2, Math.max(0, k * 1.6 - 0.6));
     const bx = lerp(tr.x1, tr.x2, Math.min(1, k * 1.6)), by = lerp(tr.y1, tr.y2, Math.min(1, k * 1.6));
     ctx.beginPath(); ctx.moveTo(ax - sc + tr.sc0, ay); ctx.lineTo(bx - sc + tr.sc0, by); ctx.stroke();
@@ -275,17 +281,83 @@ function menuUpdateDrones(L, dt) {
   const S = L.S;
   for (const d of MENU.drones) {
     // ціль прив'язана до екрана: на середньому плані — обабіч бійця, на ближньому — обабіч кадру
-    const tx = d.rel != null ? L.hx + d.rel : d.sx;
+    const tx = d.troop ? d.troop.wx - MENU.scroll * d.z : d.rel != null ? L.hx + d.rel : d.sx;
     const dx = tx - d.x, dy = d.ty - d.y, dist = Math.hypot(dx, dy), sp = d.v * dt;
-    if (dist <= sp) { d.dead = true; menuBoom(L, tx + MENU.scroll * d.z, d.ty, d.z, false); continue; }
+    if (dist <= sp) { d.dead = true; menuBoom(L, tx + MENU.scroll * d.z, d.ty, d.z, false); if (d.troop) MENU.booms[MENU.booms.length - 1].front = true; continue; }
     d.x += (dx / dist) * sp; d.y += (dy / dist) * sp;
     d.ang = Math.atan2(dy, dx); d.v += 240 * S * d.z * dt;
   }
   MENU.drones = MENU.drones.filter((d) => !d.dead);
 }
+// ---- бійці на задньому плані: стріляють по дронах, але дрони їх убивають ----
+function menuTroopY(L) { return L.hy + L.h * 0.1 + 1; } // лінія, де стоять руїни
+function menuSpawnTroops(L) {
+  const S = L.S, z = MENU_Z.far, n = 1 + ((MENU.rnd() * 3) | 0), X0 = L.w * mr(1.02, 1.15);
+  for (let i = 0; i < n; i++) {
+    const X = X0 + i * mr(7, 14) * S;
+    MENU.troops.push({ z, wx: X + MENU.scroll * z, facing: MENU.rnd() < 0.75 ? 1 : -1, stance: MENU.rnd() < 0.35 ? 'crouch' : 'stand',
+      aimA: -mr(0.5, 1.1), shotCd: mr(0.1, 0.6), burst: 0, fireCd: 0, flash: 0, onT: 0, huntAt: mr(1.4, 3.6) + i * mr(0.3, 0.9), hunted: false, dead: false, deadT: 0 });
+  }
+}
+function menuUpdateTroops(L, dt, rdt) {
+  const S = L.S, sc = MENU.scroll;
+  if ((MENU.nextT -= rdt) <= 0) { MENU.nextT = mr(7, 13); menuSpawnTroops(L); }
+  for (const T of MENU.troops) {
+    const X = T.wx - sc * T.z, gy = menuTroopY(L), Sz = S * 0.3;
+    T.flash = Math.max(0, T.flash - dt); T.fireCd = Math.max(0, T.fireCd - dt);
+    if (T.dead) { T.deadT += dt; continue; }
+    if (X > L.w * 0.95) continue; // ще за кадром
+    T.onT += dt;
+    // за ними полює дрон, якого вони не можуть збити
+    if (!T.hunted && T.onT > T.huntAt && X > L.w * 0.08) {
+      T.hunted = true;
+      const from = T.facing > 0 ? 1 : -1;
+      MENU.drones.push({ z: T.z, troop: T, rel: null, sx: null, x: X + from * mr(0.18, 0.32) * L.w, y: -30 * S - mr(0, 40) * S, ty: gy - 2 * S, v: 300 * S * T.z, ang: 0, hits: 0, need: 1e9 });
+    }
+    // ціль: свій мисливець, інакше будь-який дрон далекого плану, інакше — небо
+    const tgt = MENU.drones.find((d) => d.troop === T) || MENU.drones.find((d) => d.z === T.z && d.y < gy - 20 * Sz);
+    const sy = gy + (T.stance === 'crouch' ? -28 : -40) * Sz;
+    if (tgt) { const dx = tgt.x - X; T.facing = dx >= 0 ? 1 : -1; T.aimA = clamp(Math.atan2(tgt.y - sy, Math.max(8, Math.abs(dx))), -1.35, -0.15); }
+    if ((T.shotCd -= dt) <= 0) {
+      if (T.burst <= 0) { T.burst = 3 + ((MENU.rnd() * 5) | 0); }
+      T.burst--; T.shotCd = T.burst > 0 ? mr(0.06, 0.1) : mr(0.35, 1.1);
+      const a = T.aimA + mr(-0.08, 0.08), mx = X + T.facing * Math.cos(T.aimA) * 34 * 1.0 * Sz, my = sy + Math.sin(T.aimA) * 34 * Sz, len = mr(50, 120) * S;
+      MENU.tracers.push({ x1: mx + sc, y1: my, x2: mx + sc + T.facing * Math.cos(a) * len, y2: my + Math.sin(a) * len, t: 0, max: 0.08, sc0: 0, lw: 0.5, a: 0.7 });
+      T.flash = 0.03; T.fireCd = WEAPONS.rifle.rate;
+      if (menuMusic.on && MENU.rnd() < 0.6) menuSfxShot(0.22);
+    }
+  }
+  MENU.troops = MENU.troops.filter((T) => T.wx - sc * T.z > -60 * S);
+}
+function menuDrawTroops(ctx, L) {
+  const S = L.S, Sz = S * 0.3, sc = MENU.scroll;
+  const W = Math.ceil(90 * Sz), Hh = Math.ceil(70 * Sz);
+  if (!MENU.tc || MENU.tc.width !== W || MENU.tc.height !== Hh) { MENU.tc = document.createElement('canvas'); MENU.tc.width = W; MENU.tc.height = Hh; }
+  const c = MENU.tc, cx = c.getContext('2d');
+  for (const T of MENU.troops) {
+    const X = T.wx - sc * T.z; if (X < -W || X > L.w + W) continue;
+    const y = menuTroopY(L);
+    cx.setTransform(1, 0, 0, 1, 0, 0); cx.globalCompositeOperation = 'source-over'; cx.clearRect(0, 0, W, Hh);
+    cx.setTransform(Sz, 0, 0, Sz, W / 2, Hh * 0.9);
+    const h = Object.assign({}, MENU_HUMAN, { cine: false, vx: 0, anim: 0, facing: T.facing, stance: T.dead ? 'stand' : T.stance, aiming: !T.dead, aimA: T.aimA, fireCd: T.fireCd, dead: T.dead, lost: T.dead && T.facing > 0 ? 'arm' : null });
+    drawHuman(cx, h, MENU.t, 1);
+    cx.setTransform(1, 0, 0, 1, 0, 0);
+    cx.globalCompositeOperation = 'source-atop'; cx.fillStyle = '#140810'; cx.fillRect(0, 0, W, Hh);
+    if (T.flash > 0) { // спалах із дула
+      const mx = W / 2 + T.facing * Math.cos(T.aimA) * 34 * Sz, my = Hh * 0.9 + ((T.stance === 'crouch' ? -28 : -40) + Math.sin(T.aimA) * 34) * Sz;
+      cx.globalCompositeOperation = 'source-over';
+      const g = cx.createRadialGradient(mx, my, 0, mx, my, 5 * Sz * 1.6); g.addColorStop(0, 'rgba(255,235,170,1)'); g.addColorStop(1, 'rgba(255,170,60,0)');
+      cx.fillStyle = g; cx.beginPath(); cx.arc(mx, my, 5 * Sz * 1.6, 0, 7); cx.fill();
+    }
+    ctx.save(); ctx.globalAlpha = 1; ctx.filter = 'blur(0.6px)'; // непрозорі, лише трохи розмиті (далеко)
+    ctx.drawImage(c, X - W / 2, y - Hh * 0.9);
+    ctx.restore();
+  }
+}
 // ---- вибух: спалах, стовп землі вгору, бурий пил, темний дим, вирва ----
 function menuBoom(L, wx, y, z, air) {
   const S = L.S * (z === MENU_Z.near ? 1.15 : z === MENU_Z.far ? 0.62 : z), sc = MENU.scroll, X = wx - sc * z;
+  if (!air) for (const T of MENU.troops) if (!T.dead && T.z === z && Math.abs(T.wx - wx) < 26 * S) { T.dead = true; T.deadT = 0; T.facing = wx > T.wx ? 1 : -1; }
   MENU.booms.push({ wx, y, z, t: 0, max: MENU_SHEETS.boom.frames && !air ? 2.9 : 0.45, air, flip: MENU.rnd() < 0.5 });
   const near = z === MENU_Z.near, far = z === MENU_Z.far;
   MENU.shake = Math.min(1, MENU.shake + (far ? 0.15 : near ? 0.9 : 0.55));
@@ -308,7 +380,7 @@ function menuBoom(L, wx, y, z, air) {
   } else {
     for (let i = 0; i < 18; i++) { const a = mr(0, 6.28), v = mr(60, 260) * S; P.push({ k: 'clod', z, wx, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 80 * S, life: mr(1.5, 2.5), max: 2.5, r: mr(1, 2.8) * S, rot: mr(0, 6), spin: mr(-10, 10), col: '#151015' }); }
   }
-  for (let i = 0; i < (air ? 14 : 22); i++) { const a = mr(Math.PI * 1.1, Math.PI * 1.9), v = mr(120, 460) * S; P.push({ k: 'ember', z, wx, y: y - 4 * S, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: mr(0.4, 1.2), max: 1.2 }); }
+  for (let i = 0; i < (air ? 10 : 0); i++) { const a = mr(Math.PI * 1.1, Math.PI * 1.9), v = mr(120, 460) * S; P.push({ k: 'ember', z, wx, y: y - 4 * S, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: mr(0.4, 1.2), max: 1.2 }); }
   // темний дим після вогню
   for (let i = 0; i < (air ? 3 : 6); i++) MENU.smoke.push({ k: 'smoke', z, wx: wx + mr(-12, 12) * S, y: y - mr(10, 40) * S, vx: mr(-10, 10) * S, vy: -mr(15, 45) * S, r: mr(14, 24) * S, life: mr(3.5, 6), max: 6, rot: mr(0, 6), spin: mr(-0.6, 0.6), v: (MENU.rnd() * 5) | 0 });
   // боєць пригинається від близького вибуху
@@ -346,7 +418,7 @@ function menuDrawLayer(ctx, L, z, withHuman) {
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(X, p.y, r, 0, 7); ctx.fill();
     } else smokePuff(ctx, X, p.y, p.r * (1 + (1 - k) * 2), 0.5 * Math.pow(k, 0.8), false, p.rot + (1 - k) * p.spin, p.v);
   }
-  for (const b of MENU.booms) if (b.z === z) menuDrawBoom(ctx, b, b.wx - sc * z, z === MENU_Z.near ? L.S * 1.15 : S);
+  for (const b of MENU.booms) if (b.z === z && !b.front) menuDrawBoom(ctx, b, b.wx - sc * z, z === MENU_Z.near ? L.S * 1.15 : S);
   if (withHuman) menuDrawHuman(ctx, L);
   for (const p of MENU.parts) {
     if (p.z !== z) continue;
@@ -370,22 +442,23 @@ function menuDrawBoom(ctx, b, X, S) {
     const hh = 125 * S / (BS.vid || 1), k2 = hh / BS.fh, a0 = ctx.globalAlpha * Math.min(1, (1 - u) * 6); // висота відео ≈ 125 px, продовжені краї — понад це
     ctx.save();
     ctx.translate(X, b.y + 4 * S); if (b.flip) ctx.scale(-1, 1);
-    for (const [fr, al] of [[BS.frames[i0], 1 - q], [BS.frames[i0 + 1], q]]) {
+    for (const [fr, al] of [[BS.frames[i0], 1], [BS.frames[i0 + 1], q]]) {
       if (!fr || al <= 0.01) continue;
       ctx.globalAlpha = a0 * al; ctx.drawImage(fr, -fr.ax * k2, -hh, fr.width * k2, hh);
     }
     ctx.restore();
   }
   const k = Math.min(1, b.t / 0.45), y = b.y;
-  // короткий спалах
-  if (k < 0.3) {
-    const a = 1 - k / 0.3, r = (10 + k * 40) * S;
+  // короткий спалах (на землі — ледь помітний)
+  const fk = b.air ? 0.3 : 0.1;
+  if (k < fk) {
+    const a = (1 - k / fk) * (b.air ? 1 : 0.4), r = (b.air ? 10 + k * 40 : 7 + k * 60) * S;
     const g = ctx.createRadialGradient(X, y - r * 0.2, 0, X, y - r * 0.2, r);
     g.addColorStop(0, 'rgba(255,245,210,' + a + ')'); g.addColorStop(0.5, 'rgba(255,170,70,' + a * 0.7 + ')'); g.addColorStop(1, 'rgba(255,110,40,0)');
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(X, y - r * 0.2, r, 0, 7); ctx.fill();
   }
   // язики вогню, що швидко гаснуть у димі
-  const fa = Math.max(0, 1 - k * 1.3);
+  const fa = b.air ? Math.max(0, 1 - k * 1.3) : 0;
   if (fa > 0) {
     ctx.fillStyle = 'rgba(255,' + (120 + 60 * fa | 0) + ',40,' + fa * 0.85 + ')';
     for (let i = 0; i < 5; i++) {
@@ -393,8 +466,8 @@ function menuDrawBoom(ctx, b, X, S) {
       ctx.beginPath(); ctx.ellipse(X + Math.cos(ang) * len * 0.5, y + Math.sin(ang) * len * 0.5, 3.2 * S, len * 0.55, ang + Math.PI / 2, 0, 7); ctx.fill();
     }
   }
-  if (!b.air) { // ударна хвиля по землі
-    ctx.strokeStyle = 'rgba(255,220,170,' + (0.35 * (1 - k)) + ')'; ctx.lineWidth = 1.5 * S;
+  if (!b.air && k < 0.5) { // ударна хвиля по землі — слабка й коротка
+    ctx.strokeStyle = 'rgba(255,220,170,' + (0.12 * (1 - k * 2)) + ')'; ctx.lineWidth = 1.5 * S;
     ctx.beginPath(); ctx.ellipse(X, y + 3 * S, (16 + k * 90) * S, (3 + k * 8) * S, 0, 0, 7); ctx.stroke();
   }
 }
@@ -430,11 +503,31 @@ function menuDrawDebrisField(ctx, L) {
   }
 }
 // ---- боєць: біг, пригинання, стрільба по дронах ----
+// Рівномірність руху: у деяких фазах кроку поза майже не змінюється (тіло в нижній чи верхній точці,
+// п'ята вгорі) — і біг ніби застигає. Один раз міряємо, наскільки змінюється силует між сусідніми фазами,
+// і далі в повільних фазах проходимо цикл швидше, у швидких — повільніше (середній темп той самий).
+function menuGaitWarp() {
+  if (MENU.gait) return MENU.gait;
+  const N = 96, c = document.createElement('canvas'); c.width = 100; c.height = 100;
+  const x = c.getContext('2d', { willReadFrequently: true }), fr = [];
+  for (let i = 0; i <= N; i++) {
+    x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, 100, 100); x.setTransform(1.2, 0, 0, 1.2, 50, 90);
+    drawHuman(x, Object.assign({}, MENU_HUMAN, { anim: i / N * Math.PI * 2, vx: 175, aiming: false }), 0, 1);
+    const d = x.getImageData(0, 0, 100, 100).data, a = new Uint8Array(10000);
+    for (let p = 0; p < 10000; p++) a[p] = d[p * 4 + 3] > 128 ? 1 : 0;
+    fr.push(a);
+  }
+  let m = []; for (let i = 0; i < N; i++) { let k = 0; for (let p = 0; p < 10000; p++) if (fr[i][p] !== fr[i + 1][p]) k++; m.push(k + 1); }
+  for (let pass = 0; pass < 3; pass++) m = m.map((v, i) => (m[(i + N - 1) % N] + 2 * v + m[(i + 1) % N]) / 4); // згладити
+  const avg = m.reduce((a, b) => a + b, 0) / N;
+  return (MENU.gait = m.map((v) => clamp(avg / v, 0.55, 1.8)));
+}
 function menuUpdateHuman(L, dt) {
   const H = MENU_HUMAN, S = L.S;
-  H.anim += dt * 10 * (0.35 + 0.65 * MENU.pace);
+  const G = menuGaitWarp(), gi = ((H.anim / (Math.PI * 2)) % 1 + 1) % 1 * G.length, g0 = G[Math.floor(gi) % G.length], g1 = G[(Math.floor(gi) + 1) % G.length];
+  const warp = H.aiming ? 1 : 1 + (g0 + (g1 - g0) * (gi % 1) - 1) * MENU.pace;
+  H.anim += dt * 10 * (0.35 + 0.65 * MENU.pace) * warp;
   H.stance = 'stand';
-  MENU.runPh = (MENU.runPh || 0) + (dt / MENU_SLOW) / 1.7 * (0.3 + 0.7 * MENU.pace);
   MENU.muzzle = Math.max(0, MENU.muzzle - dt);
   H.fireCd = Math.max(0, H.fireCd - dt); // віддача
   // вибрати ціль: дрон середнього плану попереду-вгорі
@@ -472,16 +565,7 @@ function menuDrawHuman(ctx, L) {
   const lean = H.aiming ? 0 : 0.07 * MENU.pace + (H.stance === 'crouch' ? 0.1 : 0);
   cx.setTransform(S * 1.25, 0, 0, S * 1.25, W / 2, Hh * 0.92);
   cx.rotate(lean);
-  const RS = MENU_SHEETS.run;
-  if (RS.frames && !H.aiming) {
-    // кадр бігу: фаза від H.anim; висота силуету ≈ зріст людини
-    const n = RS.frames.length, ph = (MENU.runPh % 1) * n, i0 = Math.floor(ph), fr0 = RS.frames[i0], fr1 = RS.frames[(i0 + 1) % n], q = Math.max(0, Math.min(1, (ph - i0 - 0.75) / 0.25)); // змішувати лише в момент переходу (без «двійника»)
-    const hh = 64, sc2 = hh / RS.fh;
-    cx.rotate(-lean); // у кадрі вже є природний нахил
-    cx.globalAlpha = 1; cx.drawImage(fr0, -fr0.ax * sc2, -hh, fr0.width * sc2, hh);
-    if (q > 0) cx.globalAlpha = q, cx.drawImage(fr1, -fr1.ax * sc2, -hh, fr1.width * sc2, hh);
-    cx.globalAlpha = 1;
-  } else drawHuman(cx, H, MENU.t, 1);
+  drawHuman(cx, H, MENU.t, 1);
   if (MENU.muzzle > 0) { // спалах із дула
     const mx = 2 + Math.cos(H.aimA) * 34, my = -40 + Math.sin(H.aimA) * 34;
     const g = cx.createRadialGradient(mx, my, 0, mx, my, 9); g.addColorStop(0, 'rgba(255,240,180,1)'); g.addColorStop(1, 'rgba(255,170,60,0)');
@@ -565,11 +649,11 @@ function menuSfxBoom(vol) {
   // гуркіт ґрунту, що осідає
   menuNoiseHit(B, t + 0.03, { f0: 300, f1: 80, fT: 2.4, at: 0.12, dec: 3, vol: 0.45 * vol, rate: 0.6, send: 0.5 });
 }
-function menuSfxShot() {
+function menuSfxShot(v = 1) {
   const B = menuSfxBus(); if (!B) return;
   const t = B.ctx.currentTime;
-  menuNoiseHit(B, t, { f0: 900, f1: 180, fT: 0.08, at: 0.003, dec: 0.22, vol: 0.32, send: 0.8 });
-  menuNoiseHit(B, t, { f0: 140, f1: 70, fT: 0.15, at: 0.006, dec: 0.3, vol: 0.35, send: 0.2, order: 3 });
+  menuNoiseHit(B, t, { f0: 900 * (v < 1 ? 0.6 : 1), f1: 180, fT: 0.08, at: 0.003, dec: 0.22, vol: 0.32 * v, send: v < 1 ? 1 : 0.8 });
+  if (v >= 1) menuNoiseHit(B, t, { f0: 140, f1: 70, fT: 0.15, at: 0.006, dec: 0.3, vol: 0.35, send: 0.2, order: 3 });
 }
 // ===== Музика меню =====
 const menuMusic = {
@@ -634,7 +718,7 @@ function menuIntroStart() {
     let done = false;
     const reveal = () => {
       if (done) return; done = true;
-      MENU.t = 0; MENU.scroll = 0; MENU.drones = []; MENU.booms = []; MENU.parts = []; MENU.smoke = []; MENU.nextD = 2.2; // сцена починається з початку
+      MENU.t = 0; MENU.scroll = 0; MENU.drones = []; MENU.booms = []; MENU.parts = []; MENU.smoke = []; MENU.troops = []; MENU.nextT = 2.5; MENU.nextD = 2.2; // сцена починається з початку
       lobbyEl.classList.add('reveal'); lobbyEl.classList.remove('pre');
       intro.classList.add('out');
       setTimeout(() => { intro.classList.remove('on', 'out'); lobbyEl.classList.remove('reveal'); menuIntro.active = false; }, 3300);
