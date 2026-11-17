@@ -455,10 +455,9 @@ function netLocalCtrl() {
   if (G) for (const p of G.players) if (!p.ctrl) p.ctrl = NET.ctrl;
 }
 function netClientFrame(dt, t) {
-  // зібрати клавіші: клавіатура + перший геймпад
-  const kb = CONTROLLERS.kb.cur, gp = CONTROLLERS.gp0.cur, s = { ax: 0, ay: 0 };
-  for (const a of ACTIONS) s[a] = !!(kb[a] || gp[a]);
-  s.ax = gp.ax || kb.ax || 0; s.ay = gp.ay || kb.ay || 0;
+  // клавіші цього ПК
+  const kb = CONTROLLERS.kb.cur, s = { ax: kb.ax || 0, ay: kb.ay || 0 };
+  for (const a of ACTIONS) s[a] = !!kb[a];
   NET.ctrl.prev = NET.ctrl.cur; NET.ctrl.cur = s;
   const js = JSON.stringify(s);
   NET.inT += dt;
@@ -510,7 +509,7 @@ function netLobbyHtml() {
   return '<div class="net"><button data-act="nethost">🌐 Створити кімнату</button>' +
     '<span class="net-join"><input id="netName" placeholder="Ваше ім\'я" maxlength="20" value="' + netEsc(loadPref('netName', '')) + '">' +
     '<input id="netCode" placeholder="Код кімнати" maxlength="5" autocapitalize="characters"><button data-act="netjoin">Приєднатися</button></span>' +
-    '<small>Один ПК — хост: на ньому йде гра, друзі підключаються за кодом з будь-якого місця й грають на своїх клавіатурах чи геймпадах. Зв\'язок напряму між браузерами (WebRTC).</small></div>' + err;
+    '<small>Один ПК — хост: на ньому йде гра, друзі підключаються за кодом з будь-якого місця й грають на своїх клавіатурах. Зв\'язок напряму між браузерами (WebRTC).</small></div>' + err;
 }
 function netPeersHtml() {
   return [...NET.peers].map(([cid, p]) => { const L = NET.links.get(cid) || {}; return '<li>' + netEsc(p.name) + (L.rtt ? ' · <span style="color:' + netPingColor(L.rtt) + '">' + L.rtt + ' мс</span>' : '') + (L.via ? ' · ' + L.via : '') + '</li>'; }).join('');
@@ -521,10 +520,10 @@ function netWaitHtml() {
   const L = NET.lobby;
   const rows = L ? L.slots.map((s) => '<li style="--pc:' + s.color + '"' + (s.cid === NET.cid ? ' class="me"' : '') + '>' + netEsc(s.name) + (s.cid === NET.cid ? ' (це ви)' : s.bot ? ' 🤖' : s.cid ? ' 🌐' : '') +
     ' — ' + (s.role === 'human' ? '🏃 людина' : '🛸 FPV-дрон') + (L.mode === 'team' ? ' · ' + TEAMS[s.team].name : '') + '</li>').join('') : '';
-  return '<div class="wrap"><header><h1>ВТЕЧА ВІД FPV</h1><p>Гра по мережі</p></header>' +
+  return menuMusicBtn() + '<div class="wrap"><header><div class="scene-slot"></div><h1>ВТЕЧА ВІД FPV</h1><p>Гра по мережі</p></header>' +
     '<div class="net wait">' + (NET.cid ? '<div>Ви в кімнаті <b class="code">' + NET.code + '</b> · <span id="netPing">' + netPingHtml() + '</span>. Хост налаштовує гру й почне її, коли всі будуть готові.</div>' : '<div>' + (NET.status || 'Підключаюся…') + ' Кімната ' + netEsc(NET.code || '') + '</div>') +
     (L ? '<div>Режим: ' + ({ escape: 'Втеча', dm: 'Дезматч', team: 'Команди' }[L.mode] || L.mode) + ' · Локація: ' + netEsc(L.loc) + '</div><ul class="net-list">' + rows + '</ul>' : '') +
-    '<small>Ваше керування: клавіатура (WASD, Пробіл, F, E, R, Q, Shift, 1–3) або геймпад. Колесо миші — віддалити камеру.</small>' +
+    '<small>Ваше керування: клавіатура (WASD, Пробіл, F, E, R, Q, Shift, 1–3). Колесо миші — віддалити камеру.</small>' +
     '<button data-act="netclose">Вийти з кімнати</button></div>' + (NET.err ? '<div class="net-err">' + netEsc(NET.err) + '</div>' : '') + '</div>';
 }
 function netLobbyClick(act) {

@@ -107,7 +107,7 @@ class Controller {
   label(a) { return this.isPad ? GP_LABELS[a] : codeLabel(KB_SCHEMES[this.id].keys[a][0]); }
 }
 const CONTROLLERS = {};
-for (const id of ['kb', 'gp0', 'gp1', 'gp2', 'gp3']) CONTROLLERS[id] = new Controller(id);
+CONTROLLERS.kb = new Controller('kb'); // за одним ПК — лише клавіатура (решта — боти або гравці по мережі)
 
 // Глобальні клавіші (Enter, Esc)
 const GlobalKeys = {

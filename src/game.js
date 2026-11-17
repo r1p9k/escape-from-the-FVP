@@ -2132,6 +2132,9 @@ function updatePickups(dt) {
   const W = G.W;
   for (const p of W.pickups) if (p.life != null && !p.taken && (p.life -= dt) <= 0) p.taken = true;
   if (W.pickups.length > 300) W.pickups = W.pickups.filter((p) => !p.taken);
+  // на позиціях (окопи, вогневі позиції, бліндажі) час від часу лишається зброя
+  if (G.posT == null) G.posT = rand(12, 25);
+  if ((G.posT -= dt) <= 0) { G.posT = rand(22, 40); spawnPositionWeapon(); }
   if (G.bonusT == null) G.bonusT = rand(25, 40);
   if ((G.bonusT -= dt) > 0) return;
   G.bonusT = rand(35, 55);
@@ -2142,6 +2145,20 @@ function updatePickups(dt) {
   for (let t = 0; t < 12; t++) { x = clamp(h.x + dir * rand(450, 1300), 300, W.width - 400); if (groundFree(x)) break; }
   const type = weighted(G.mode === 'team' ? TEAM_BONUS : HUMAN_BONUS); // у командах зброя й аптечки — лише на базах
   W.pickups.push({ type, x, y: gAt(W, x), timed: true, life: 45, max: 45 });
+}
+const POS_LOOT = { rifle: 1, shotgun: 0.7, mg: 0.35, grenade: 0.45 };
+function spawnPositionWeapon() {
+  const W = G.W, live = G.humans.filter((h) => !h.dead && !h.saved);
+  if (!live.length || W.pickups.filter((p) => p.pos && !p.taken).length >= 3) return;
+  const spots = [];
+  for (const c of W.covers) if (c.type === 'trench') spots.push(c.x + rand(0.25, 0.75) * c.w);
+  for (const sp of W.hides) if (sp.type === 'bunker' && !sp.ruined && !sp.basement) spots.push(sp.x + pick([-1, 1]) * 34);
+  // ближчі до людей позиції — частіше (але не просто під ногами)
+  const ok = spots.filter((x) => x > 60 && x < W.width - 60 && live.some((h) => Math.abs(h.x - x) > 100 && Math.abs(h.x - x) < 2400) &&
+    !W.pickups.some((p) => !p.taken && Math.abs(p.x - x) < 90));
+  if (!ok.length) return;
+  const x = pick(ok);
+  W.pickups.push({ type: weighted(POS_LOOT), x, y: surfaceY(W, x), timed: true, pos: true, life: 60, max: 60 });
 }
 function applyAirBonus(d, type) {
   if (type === 'lock') d.lock = true;

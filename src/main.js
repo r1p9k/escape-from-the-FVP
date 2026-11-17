@@ -74,7 +74,7 @@ function keyHtml(c) {
 }
 
 function renderLobbyDOM() {
-  if (NET.role === 'client') { lobbyEl.innerHTML = netWaitHtml(); return; }
+  if (NET.role === 'client') { lobbyEl.innerHTML = netWaitHtml(); menuMount(); return; }
   const L = Lobby, st = L.status();
   const used = new Set(L.slots.map((s) => s.scheme));
   let cards = '';
@@ -82,18 +82,11 @@ function renderLobbyDOM() {
   for (let i = 0; i < nCards; i++) {
     const s = L.slots[i];
     if (!s) {
-      if (L.menuFor === i || (L.menuFor === -1 && false)) {
-        const opts = Object.keys(CONTROLLERS).map((id) => {
-          const c = CONTROLLERS[id];
-          const extra = c.isPad && !c.connected() ? ' <small>(не підключено)</small>' : '';
-          return '<button data-act="add" data-scheme="' + id + '"' + (used.has(id) ? ' disabled' : '') + '>' + c.name + extra + '</button>';
-        }).join('');
-        cards += '<div class="card"><div class="menu"><div class="title">Чим керуватиме гравець?</div>' + opts +
-          '<button class="bot" data-act="add" data-scheme="bot">🤖 Бот (комп\'ютер)</button>' +
-          '<button data-act="cancel">Скасувати</button></div></div>';
-      } else if (i === L.slots.length) {
-        cards += '<div class="card"><button class="add" data-act="menu" data-i="' + i + '"><b>+</b>Додати гравця або бота</button></div>';
-      } else cards += '<div class="card" style="opacity:.35"></div>';
+      if (i === L.slots.length) {
+        cards += '<div class="card add-card">' +
+          '<button class="add" data-act="add" data-scheme="kb"' + (used.has('kb') ? ' disabled title="Клавіатура вже зайнята"' : '') + '><b>⌨️</b>Гравець<small>клавіатура</small></button>' +
+          '<button class="add" data-act="add" data-scheme="bot"><b>🤖</b>Бот<small>комп\'ютер</small></button></div>';
+      } else cards += '<div class="card empty"></div>';
       continue;
     }
     const c = s.bot ? null : s.remote ? { name: '🌐 По мережі' + (s.pname ? ': ' + s.pname : ''), label: (a) => codeLabel(KB_SCHEMES.kb.keys[a][0]) } : CONTROLLERS[s.scheme];
@@ -103,7 +96,7 @@ function renderLobbyDOM() {
     const extra = s.bot
       ? '<div class="seg small">' + BOT_LEVELS.map((lv, k) => '<button data-act="level" data-i="' + i + '" data-v="' + k + '" class="' + (s.level === k ? 'on' : '') + '">' + lv.name + '</button>').join('') + '</div>'
       : '<div class="keys">' + keyHtml(c) + '</div>';
-    const teamSeg = L.mode === 'team' ? '<div class="seg small">' + TEAMS.map((tm, k) => '<button data-act="team" data-i="' + i + '" data-v="' + k + '" class="' + ((s.team || 0) === k ? 'on' : '') + '">🚩 ' + tm.name + '</button>').join('') + '</div>' : '';
+    const teamSeg = L.mode === 'team' ? '<div class="seg small">' + TEAMS.map((tm, k) => '<button data-act="team" data-i="' + i + '" data-v="' + k + '" style="--tc:' + tm.col + '" class="team ' + ((s.team || 0) === k ? 'on' : '') + '">🚩 ' + tm.name + '</button>').join('') + '</div>' : '';
     cards += '<div class="card filled" style="--pc:' + (L.mode === 'team' ? TEAMS[s.team || 0].col : s.color) + '">' +
       '<button class="x" title="Прибрати" data-act="remove" data-i="' + i + '">✕</button>' +
       '<div class="name">' + s.name + '</div><div class="sub">' + (s.bot ? 'Комп\'ютер' : c.name) + '</div>' +
@@ -111,19 +104,20 @@ function renderLobbyDOM() {
   }
   const locs = LOCATIONS.map((l, k) => '<button class="loc ' + (L.loc === k ? 'on' : '') + '" data-act="loc" data-v="' + k + '"><b>' + l.name.replace(/ \(.*\)/, '') + '</b><span>' + LOC_INFO[l.id] + '</span></button>').join('');
   const keyRows = [
-    ['Рух', '<kbd>A</kbd><kbd>D</kbd> або <kbd>←</kbd><kbd>→</kbd>', 'стік / хрестовина'],
-    ['Вгору: стрибок, драбина, підвестися', '<kbd>W</kbd> або <kbd>↑</kbd>', '<kbd>A</kbd>'],
-    ['Вниз: присісти, лягти; на бігу — кидок', '<kbd>S</kbd> або <kbd>↓</kbd>', '<kbd>B</kbd>'],
-    ['Прискорення / форсаж', '<kbd>Shift</kbd>', '<kbd>LB</kbd>'],
-    ['Позиція для стрільби (тримати) / огляд дрона', '<kbd>Пробіл</kbd>', '<kbd>LT</kbd>'],
-    ['Вогонь / підрив дрона', '<kbd>F</kbd> або <kbd>J</kbd>', '<kbd>RB</kbd>'],
-    ['Дія: сісти, підібрати, сховатися / тип скиду', '<kbd>E</kbd>', '<kbd>X</kbd>'],
-    ['Спец: РЕБ / скид з дрона', '<kbd>Q</kbd>', '<kbd>Y</kbd>'],
-    ['1 — викинути каністру / покласти предмет, 2 — аптечка (5 с), 3 — граната', '<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd>', '<kbd>Back</kbd><kbd>L3</kbd><kbd>R3</kbd>'],
-  ].map((r) => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td><td>' + r[2] + '</td></tr>').join('');
+    ['Рух', '<kbd>A</kbd><kbd>D</kbd> або <kbd>←</kbd><kbd>→</kbd>'],
+    ['Вгору: стрибок, драбина, підвестися', '<kbd>W</kbd> або <kbd>↑</kbd>'],
+    ['Вниз: присісти, лягти; на бігу — кидок', '<kbd>S</kbd> або <kbd>↓</kbd>'],
+    ['Прискорення / форсаж', '<kbd>Shift</kbd>'],
+    ['Позиція для стрільби (тримати) / огляд дрона', '<kbd>Пробіл</kbd>'],
+    ['Вогонь / підрив дрона / удар', '<kbd>F</kbd> або <kbd>J</kbd>'],
+    ['Дія: сісти, підібрати, сховатися / тип скиду', '<kbd>E</kbd>'],
+    ['Копати (зі Shift — протитанковий рів)', '<kbd>R</kbd>'],
+    ['Спец: РЕБ / скид з дрона', '<kbd>Q</kbd>'],
+    ['1 — викинути каністру / покласти предмет, 2 — аптечка (5 с), 3 — граната', '<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd>'],
+  ].map((r) => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('');
 
-  lobbyEl.innerHTML = '<div class="wrap">' +
-    '<header><h1>ВТЕЧА ВІД FPV</h1><p>Людина біжить до укриття, дрон не дає їй утекти. 2–8 учасників на одному екрані, можна з ботами.</p></header>' +
+  lobbyEl.innerHTML = menuMusicBtn() + '<div class="wrap">' +
+    '<header><div class="scene-slot"></div><h1>ВТЕЧА ВІД FPV</h1><p>Людина біжить до укриття, дрон не дає їй утекти. За цим ПК — один гравець на клавіатурі, решта — боти або друзі по мережі.</p></header>' +
     '<h2>Гра по мережі</h2>' + netLobbyHtml() +
     '<h2>Учасники</h2><div class="slots">' + cards + '</div>' +
     '<h2>Локація</h2><div class="locs">' + locs + '</div>' +
@@ -203,16 +197,20 @@ function renderLobbyDOM() {
     '<li><b>Ждун у кущах</b> невидимий для людей і ботів (крім детектора). Людина не бачить дрон крізь стіни, лише чує, звідки він летить</li>' +
     '<li>Можна залітати в будівлі через вікна, двері й проломи — так видно людей усередині</li>' +
     '<li><b>Бонуси в повітрі</b> (кружечки): ЦІЛЬ — автозахоплення людини поруч, дрон летить сам навіть під РЕБом; БРОНЯ — 10 влучань, щоб збити; ×2 — подвійна швидкість на 25 с; АКБ — запасна батарея; +СКИД — поповнити скиди гранатами. Бонуси з\'являються в різних місцях і за 25–45 с зникають</li></ul></section>' +
-    '<section class="wide"><h3>⌨️ Клавіші</h3><table><tr><th>Дія</th><th>Клавіатура</th><th>Геймпад</th></tr>' + keyRows + '</table>' +
-    '<p class="keys">Одна клавіатура — один гравець, решта грає на геймпадах або це боти. Цілитися: тримайте Пробіл, кут — W/S, бік — A/D, стріляти — F. Esc — пауза, Enter у лобі — почати.</p></section>' +
-    '</div></div>';
+    '<section class="wide"><h3>⌨️ Клавіші</h3><table><tr><th>Дія</th><th>Клавіша</th></tr>' + keyRows + '</table>' +
+    '<p class="keys">Одна клавіатура — один гравець; решта — боти або друзі по мережі. Цілитися: тримайте Пробіл, кут — W/S, бік — A/D, стріляти — F. Esc — пауза, Enter у лобі — почати.</p></section>' +
+    '</div><p class="credit">Музика: ' + menuMusic.credit + '</p></div>';
+  menuMount();
 }
+function menuMount() { const slot = lobbyEl.querySelector('.scene-slot'); if (slot) slot.appendChild(menuCanvas()); }
 
 lobbyEl.addEventListener('click', (e) => {
   const b = e.target.closest('[data-act]');
   if (!b || b.disabled) return;
   Sfx.unlock();
   const L = Lobby, i = +b.dataset.i, act = b.dataset.act;
+  if (act === 'scrolldown') { lobbyEl.scrollTo({ top: window.innerHeight * 0.7, behavior: 'smooth' }); return; }
+  if (act === 'music') { menuMusicToggle(); b.outerHTML = menuMusicBtn(); return; }
   if (netLobbyClick(act)) return;
   if (act === 'menu') L.menuFor = i;
   else if (act === 'cancel') L.menuFor = -1;
@@ -232,9 +230,6 @@ lobbyEl.addEventListener('click', (e) => {
   netLobbyChanged();
 });
 lobbyEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'netCode') { e.stopPropagation(); netLobbyClick('netjoin'); } });
-// оновлювати статус геймпадів
-window.addEventListener('gamepadconnected', () => { if (state === 'lobby') renderLobbyDOM(); });
-window.addEventListener('gamepaddisconnected', () => { if (state === 'lobby') renderLobbyDOM(); });
 
 function startGame() {
   if (!Lobby.status().ok) return;
@@ -272,8 +267,10 @@ function frame(now) {
   const t = now / 1000;
   for (const id in CONTROLLERS) CONTROLLERS[id].poll();
   GlobalKeys.poll();
+  menuMusicTick(dt);
   if (state === 'net') netClientFrame(dt, t);
   else if (state === 'lobby') {
+    menuFrame(dt);
     netHostTick(dt);
     if (GlobalKeys.pressed('Enter') && NET.role !== 'client' && !(document.activeElement && document.activeElement.tagName === 'INPUT')) startGame();
   } else {
