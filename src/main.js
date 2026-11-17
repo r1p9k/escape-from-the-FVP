@@ -270,7 +270,7 @@ function frame(now) {
   menuMusicTick(dt);
   if (state === 'net') netClientFrame(dt, t);
   else if (state === 'lobby') {
-    menuFrame(dt);
+    try { menuFrame(dt); } catch (e) { if (!MENU.errShown) { MENU.errShown = true; console.warn('заставка', e); } }
     netHostTick(dt);
     if (GlobalKeys.pressed('Enter') && NET.role !== 'client' && !(document.activeElement && document.activeElement.tagName === 'INPUT')) startGame();
   } else {

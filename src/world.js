@@ -71,7 +71,21 @@ function tunH(sp) { return sp.tall ? TUN_H_TALL : TUN_H; }
 const TUN_K = 1.2;      // нахил спуску (вертикаль на одиницю горизонталі): крутий — вузький отвір, легко перестрибнути
 const SHAFT_W = 24;     // ширина лазу з драбиною
 const BREAK_HITS = 3;   // скільки вибухів в одному місці обвалюють перекриття тунелю
-function tunFloor(W, sp, x) { return gAt(W, x) + sp.depth; }
+// підлога галереї: на глибині depth під поверхнею, але під ямами (окопи, вогневі позиції) не стрибає уступом —
+// плавно пірнає глибше з пологим схилом, щоб людина могла пройти, а над стелею лишався ґрунт
+// ухил ≤ 0,2: галерея лише трохи вища за людину, тож на крутішому ухилі голова впирається в стелю з нижчого боку
+const TUN_SLOPE = 0.2, TUN_REACH = 264;
+function tunFloor(W, sp, x) {
+  const k = Math.round(x);
+  if (!sp._fm || sp._fv !== W.cavMap) { sp._fm = new Map(); sp._fv = W.cavMap; } // кеш скидається разом із кешем порожнин
+  let f = W.cavMap ? sp._fm.get(k) : undefined;
+  if (f === undefined) {
+    f = gAt(W, k) + sp.depth;
+    for (let d = 8; d <= TUN_REACH; d += 8) f = Math.max(f, gAt(W, k - d) + sp.depth - d * TUN_SLOPE, gAt(W, k + d) + sp.depth - d * TUN_SLOPE);
+    if (W.cavMap) sp._fm.set(k, f);
+  }
+  return f;
+}
 
 // ---- Підземні порожнини: тунелі — справжній порожній простір у землі ----
 // Для стовпчика x — список вільних проміжків [top, bot] (згори вниз); перший — повітря над землею.
@@ -80,7 +94,7 @@ function pipeSpans(W, sp, x, out, human) {
   const H = tunH(sp), g = gAt(W, x);
   // галерея; крайній спуск сам веде вниз — під ним галерея не тягнеться (інакше «кишеня» внизу)
   if (x >= sp.a && x <= sp.b && sp.b > sp.a && !sp.exits.some((e) => e.kind === 'ramp' && (e.dir > 0 ? x > e.bx + 1 && e.bx > sp.b - 14 : x < e.bx - 1 && e.bx < sp.a + 14))) {
-    const f = g + sp.depth;
+    const f = tunFloor(W, sp, x);
     const br = sp.breaks && sp.breaks.find((q) => x >= q.a && x <= q.b);
     if (br) out.push([-1e9, f - br.fill * H]); // перекриття обвалилося: яма, засипана на fill
     else out.push([f - H, f]);
