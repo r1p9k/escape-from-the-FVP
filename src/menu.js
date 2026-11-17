@@ -14,6 +14,60 @@ const MENU_HUMAN = {
   canister: false, carry: null, healT: 0, alT: 0, protT: 0, digT: 0, digging: null, piloting: false, fireCd: 0, bloom: 0,
 };
 function mr(a, b) { return a + (b - a) * MENU.rnd(); }
+// Аркуші кадрів від Gemini: чорні силуети на білому тлі в один ряд. Кадри знаходяться автоматично
+// (стовпці без темних пікселів — проміжки), біле тло прибирається, сіре стає напівпрозорим.
+const MENU_SHEETS = { run: { src: 'art/menu/run.jpg', col: [0, 0, 0], solo: true }, boom: { src: 'art/menu/boom.jpg', col: [34, 22, 18] } };
+function menuSheetPrep(sh, img) {
+  const N = 8, W = img.width, H = img.height, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0);
+  const d = x.getImageData(0, 0, W, H).data, lum = (i) => Math.min(d[i], d[i + 1], d[i + 2]);
+  const col = new Float32Array(W);
+  for (let px = 0; px < W; px++) for (let py = 0; py < H; py += 2) { const l = lum((py * W + px) * 4); if (l < 200) col[px] += (200 - l) / 200; }
+  // межі між кадрами: найсвітліший стовпець поблизу кожної рівної поділки
+  const cuts = [0];
+  for (let k = 1; k < N; k++) {
+    const c0 = Math.round(W * k / N), r = Math.round(W / N * 0.35);
+    let best = c0, bv = Infinity;
+    for (let px = c0 - r; px <= c0 + r; px++) { let v = 0; for (let q = -3; q <= 3; q++) v += col[px + q] || 0; if (v < bv) { bv = v; best = px; } }
+    cuts.push(best);
+  }
+  cuts.push(W);
+  let top = H, bot = 0;
+  for (let py = 0; py < H; py++) for (let px = 0; px < W; px += 3) if (lum((py * W + px) * 4) < 200) { if (py < top) top = py; if (py > bot) bot = py; }
+  const fh = bot - top + 1;
+  sh.frames = [];
+  for (let k = 0; k < N; k++) {
+    // одна фігура в кадрі: ширша ділянка, лишаємо лише пляму, зв'язану з тілом (без шматків сусідів)
+    const M = sh.solo ? Math.round(W / N * 0.3) : 0, a0 = Math.max(0, cuts[k] - M), a1 = Math.min(W, cuts[k + 1] + M), fw = a1 - a0, f = document.createElement('canvas'); f.width = fw; f.height = fh;
+    let keep = null;
+    if (sh.solo) {
+      const dark = (px, py) => lum(((top + py) * W + a0 + px) * 4) < 200;
+      keep = new Uint8Array(fw * fh);
+      // зерно: найтемніша точка посередині ділянки
+      let sx = Math.round((cuts[k] + cuts[k + 1]) / 2) - a0, sy = -1;
+      for (let py = Math.round(fh * 0.3); py < fh * 0.7 && sy < 0; py++) for (let dx = 0; dx < fw / 2 && sy < 0; dx++) for (const xx of [sx + dx, sx - dx]) if (xx >= 0 && xx < fw && dark(xx, py)) { sx = xx; sy = py; break; }
+      const st = [sx + sy * fw]; keep[st[0]] = 1;
+      while (st.length) { const p = st.pop(), px = p % fw, py = (p / fw) | 0;
+        for (let qy = -1; qy <= 1; qy++) for (let qx = -1; qx <= 1; qx++) { const nx = px + qx, ny = py + qy; if (nx < 0 || ny < 0 || nx >= fw || ny >= fh) continue; const q = nx + ny * fw; if (!keep[q] && dark(nx, ny)) { keep[q] = 1; st.push(q); } } }
+      // розширити на 2 px, щоб зберегти згладжений край
+      const k2 = keep.slice(); for (let py = 0; py < fh; py++) for (let px = 0; px < fw; px++) if (k2[px + py * fw]) for (let qy = -2; qy <= 2; qy++) for (let qx = -2; qx <= 2; qx++) { const nx = px + qx, ny = py + qy; if (nx >= 0 && ny >= 0 && nx < fw && ny < fh) keep[nx + ny * fw] = 1; }
+    }
+    const fx = f.getContext('2d'), id = fx.createImageData(fw, fh), o = id.data;
+    let mx = 0, mw = 0;
+    for (let py = 0; py < fh; py++) for (let px = 0; px < fw; px++) {
+      const l = lum(((top + py) * W + a0 + px) * 4), al = keep && !keep[px + py * fw] ? 0 : Math.max(0, Math.min(1, (235 - l) / 175)), j = (py * fw + px) * 4;
+      o[j] = sh.col[0]; o[j + 1] = sh.col[1]; o[j + 2] = sh.col[2]; o[j + 3] = Math.round(al * 255);
+      if (al > 0.5) { mx += px * al; mw += al; }
+    }
+    fx.putImageData(id, 0, 0);
+    f.ax = mw ? mx / mw : fw / 2; // якір по горизонталі — центр мас силуету
+    sh.frames.push(f);
+  }
+  sh.fh = fh;
+}
+(function menuSheetsLoad() {
+  for (const k in MENU_SHEETS) { const sh = MENU_SHEETS[k], img = new Image(); img.onload = () => { try { menuSheetPrep(sh, img); } catch (e) { console.warn('аркуш кадрів', k, e); } }; img.src = sh.src; }
+})();
 // силуети вдалині: детерміновані за номером клітинки
 function menuHash(i, k) { const s = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return s - Math.floor(s); }
 
@@ -45,7 +99,7 @@ function drawMenuScene(ctx, w, h, rdt) {
   MENU.t += dt;
   const L = menuGeo(w, h), S = L.S, gy = L.gy, hy = L.hy, hx = L.hx;
   // боєць: темп бігу (повільніше, коли стріляє чи пригнувся)
-  const wantPace = MENU.aim ? 0.28 : MENU.flinch > 0 ? 0.55 : 1;
+  const wantPace = MENU.aim ? 0.28 : 1;
   MENU.pace += (wantPace - MENU.pace) * Math.min(1, dt * 4);
   MENU_HUMAN.vx = 175 * MENU.pace;
   MENU.scroll += MENU_HUMAN.vx * S * dt;
@@ -180,11 +234,12 @@ function menuSpawnDrone(L) {
   let X;
   if (z === MENU_Z.mid) {
     // поруч із бійцем, але ніколи на ньому: з упередженням на його біг
-    var rel = (MENU.rnd() < 0.55 ? 1 : -1) * mr(85, 210) * S; // відносно бійця: ціль рухається разом із ним
+    // відносно бійця: позаду — обабіч, попереду — далеко (боєць добігає туди, коли лишився лише пил)
+    var rel = MENU.rnd() < 0.6 ? -mr(90, 230) * S : mr(300, 440) * S;
     X = L.hx + rel;
   } else if (z === MENU_Z.near) {
     X = MENU.rnd() < 0.5 ? mr(0.02, 0.24) * L.w : mr(0.58, 0.98) * L.w; // ближній план — обабіч, щоб не затуляв бійця
-  } else X = mr(0.05, 0.95) * L.w;
+  } else { X = mr(0.05, 0.95) * L.w; if (Math.abs(X - L.hx) < 0.09 * L.w) X += (X < L.hx ? -1 : 1) * 0.12 * L.w; } // далекий план — теж не за спиною бійця
   const ty = menuGroundY(L, z, X) - (z === MENU_Z.mid ? mr(-3, 12) : mr(0, 8)) * S * z;
   const from = MENU.rnd() < 0.5 ? -1 : 1;
   // політ — в екранних координатах свого плану (ціль не тікає разом зі сценою)
@@ -205,23 +260,23 @@ function menuUpdateDrones(L, dt) {
 // ---- вибух: спалах, стовп землі вгору, бурий пил, темний дим, вирва ----
 function menuBoom(L, wx, y, z, air) {
   const S = L.S * (z === MENU_Z.near ? 1.15 : z === MENU_Z.far ? 0.62 : z), sc = MENU.scroll, X = wx - sc * z;
-  MENU.booms.push({ wx, y, z, t: 0, max: 0.45, air });
+  MENU.booms.push({ wx, y, z, t: 0, max: MENU_SHEETS.boom.frames && !air ? 2.6 : 0.45, air, flip: MENU.rnd() < 0.5 });
   const near = z === MENU_Z.near, far = z === MENU_Z.far;
   MENU.shake = Math.min(1, MENU.shake + (far ? 0.15 : near ? 0.9 : 0.55));
   MENU.flash = Math.max(MENU.flash, far ? 0.3 : near ? 0.9 : 0.7); MENU.flashX = X; MENU.flashY = y;
   const P = MENU.parts;
   if (!air) {
     // земля — вгору конусом: багато грудок і пилу
-    for (let i = 0; i < 46; i++) {
-      const a = -Math.PI / 2 + mr(-0.5, 0.5), v = mr(160, 480) * S;
-      P.push({ k: 'dirt', z, wx: wx + mr(-6, 6) * S, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: mr(1.4, 2.6), max: 2.6, r: mr(1.2, 4.2) * S, rot: mr(0, 6), spin: mr(-9, 9), col: MENU.rnd() < 0.5 ? '#2c1a12' : '#41281a' });
+    for (let i = 0, nn = MENU_SHEETS.boom.frames ? 45 : 90; i < nn; i++) {
+      const a = -Math.PI / 2 + mr(-0.55, 0.55), v = mr(140, 470) * S;
+      P.push({ k: 'dirt', z, wx: wx + mr(-6, 6) * S, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: mr(1.2, 2.4), max: 2.4, r: mr(0.5, 1.6) * S, rot: mr(0, 6), spin: mr(-9, 9), col: MENU.rnd() < 0.5 ? '#2c1a12' : '#41281a' });
     }
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 4; i++) {
       const a = -Math.PI / 2 + mr(-0.8, 0.8), v = mr(120, 330) * S;
-      P.push({ k: 'clod', z, wx, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 2.6, max: 2.6, r: mr(4, 7) * S, rot: mr(0, 6), spin: mr(-5, 5), col: '#1c100b' });
+      P.push({ k: 'clod', z, wx, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 2.6, max: 2.6, r: mr(1.8, 3) * S, rot: mr(0, 6), spin: mr(-5, 5), col: '#1c100b' });
     }
     // пиловий стовп: бурі клуби піднімаються й розповзаються
-    for (let i = 0; i < 14; i++) MENU.smoke.push({ k: 'dust', z, wx: wx + mr(-14, 14) * S, y: y - mr(0, 70) * S * (i / 14), vx: mr(-18, 18) * S, vy: -mr(60, 200) * S * (1 - i / 20), r: mr(10, 20) * S, life: mr(2.2, 3.6), max: 3.6, rot: mr(0, 6), spin: mr(-0.5, 0.5) });
+    for (let i = 0, nd = MENU_SHEETS.boom.frames ? 5 : 14; i < nd; i++) MENU.smoke.push({ k: 'dust', z, wx: wx + mr(-14, 14) * S, y: y - mr(0, 70) * S * (i / 14), vx: mr(-18, 18) * S, vy: -mr(60, 200) * S * (1 - i / 20), r: mr(10, 20) * S, life: mr(2.2, 3.6), max: 3.6, rot: mr(0, 6), spin: mr(-0.5, 0.5) });
     MENU.craters.push({ wx, z, r: mr(16, 24) * S, life: 40 });
     if (MENU.craters.length > 14) MENU.craters.shift();
   } else {
@@ -231,8 +286,8 @@ function menuBoom(L, wx, y, z, air) {
   // темний дим після вогню
   for (let i = 0; i < (air ? 3 : 6); i++) MENU.smoke.push({ k: 'smoke', z, wx: wx + mr(-12, 12) * S, y: y - mr(10, 40) * S, vx: mr(-10, 10) * S, vy: -mr(15, 45) * S, r: mr(14, 24) * S, life: mr(3.5, 6), max: 6, rot: mr(0, 6), spin: mr(-0.6, 0.6), v: (MENU.rnd() * 5) | 0 });
   // боєць пригинається від близького вибуху
-  if (!far && Math.abs(X - L.hx) < 260 * L.S) MENU.flinch = 0.55;
-  if (typeof Sfx !== 'undefined' && Sfx.ctx && menuMusic.on && !far) Sfx.boom(near);
+  if (menuMusic.on && !far) menuSfxBoom(near ? 1 : 0.7);
+  else if (menuMusic.on) menuSfxBoom(0.35);
 }
 function menuUpdateFx(L, dt) {
   const S = L.S, sc = MENU.scroll;
@@ -271,12 +326,31 @@ function menuDrawLayer(ctx, L, z, withHuman) {
     if (p.z !== z) continue;
     const X = p.wx - sc * z, k = p.life / p.max;
     if (p.k === 'ember') { ctx.fillStyle = 'rgba(255,' + (150 + 80 * k | 0) + ',80,' + k + ')'; ctx.fillRect(X - 1 * S, p.y - 1 * S, 2 * S, 2 * S); }
-    else { ctx.save(); ctx.translate(X, p.y); ctx.rotate(p.rot); ctx.globalAlpha *= Math.min(1, k * 3); ctx.fillStyle = p.col; ctx.beginPath(); ctx.ellipse(0, 0, p.r, p.r * 0.7, 0, 0, 7); ctx.fill(); ctx.restore(); }
+    else {
+      ctx.save(); ctx.globalAlpha *= Math.min(1, k * 3);
+      const sp = Math.hypot(p.vx, p.vy), tl = Math.min(6, sp * 0.012) * p.r; // слід руху
+      ctx.strokeStyle = p.col; ctx.lineCap = 'round'; ctx.lineWidth = p.r * 1.4;
+      ctx.beginPath(); ctx.moveTo(X, p.y); ctx.lineTo(X - (p.vx / (sp || 1)) * tl, p.y - (p.vy / (sp || 1)) * tl); ctx.stroke();
+      if (p.k === 'clod') { ctx.translate(X, p.y); ctx.rotate(p.rot); ctx.fillStyle = p.col; ctx.beginPath(); ctx.moveTo(-p.r, -p.r * 0.3); ctx.lineTo(p.r * 0.2, -p.r * 0.8); ctx.lineTo(p.r, p.r * 0.1); ctx.lineTo(-p.r * 0.3, p.r * 0.7); ctx.closePath(); ctx.fill(); }
+      ctx.restore();
+    }
   }
   for (const d of MENU.drones) if (d.z === z) menuDrawDrone(ctx, d.x, d.y, d.ang, S);
 }
 function menuDrawBoom(ctx, b, X, S) {
-  const k = b.t / b.max, y = b.y;
+  const BS = MENU_SHEETS.boom;
+  if (BS.frames && !b.air) {
+    const n = BS.frames.length, u = b.t / b.max, ph = Math.min(n - 1.001, Math.pow(u, 0.75) * (n - 1)), i0 = Math.floor(ph), q = ph - i0;
+    const hh = 125 * S, k2 = hh / BS.fh, a0 = ctx.globalAlpha;
+    ctx.save();
+    ctx.translate(X, b.y + 4 * S); if (b.flip) ctx.scale(-1, 1);
+    for (const [fr, al] of [[BS.frames[i0], 1 - q], [BS.frames[i0 + 1], q]]) {
+      if (!fr || al <= 0.01) continue;
+      ctx.globalAlpha = a0 * al; ctx.drawImage(fr, -fr.ax * k2, -hh, fr.width * k2, hh);
+    }
+    ctx.restore();
+  }
+  const k = Math.min(1, b.t / 0.45), y = b.y;
   // короткий спалах
   if (k < 0.3) {
     const a = 1 - k / 0.3, r = (10 + k * 40) * S;
@@ -333,8 +407,8 @@ function menuDrawDebrisField(ctx, L) {
 function menuUpdateHuman(L, dt) {
   const H = MENU_HUMAN, S = L.S;
   H.anim += dt * 10 * (0.35 + 0.65 * MENU.pace);
-  MENU.flinch = Math.max(0, MENU.flinch - dt);
-  H.stance = MENU.flinch > 0.15 && !MENU.aim ? 'crouch' : 'stand';
+  H.stance = 'stand';
+  MENU.runPh = (MENU.runPh || 0) + (dt / MENU_SLOW) / 1.7 * (0.3 + 0.7 * MENU.pace);
   MENU.muzzle = Math.max(0, MENU.muzzle - dt);
   H.fireCd = Math.max(0, H.fireCd - dt); // віддача
   // вибрати ціль: дрон середнього плану попереду-вгорі
@@ -356,7 +430,7 @@ function menuUpdateHuman(L, dt) {
       const spread = mr(-0.05, 0.05), len = Math.hypot(dx, dy) * 1.4;
       MENU.tracers.push({ x1: mzx + MENU.scroll, y1: mzy, x2: mzx + MENU.scroll + Math.cos(H.aimA + spread) * len, y2: mzy + Math.sin(H.aimA + spread) * len, t: 0, max: 0.09, sc0: 0 });
       MENU.muzzle = 0.03; H.fireCd = WEAPONS.rifle.rate;
-      if (typeof Sfx !== 'undefined' && Sfx.ctx && menuMusic.on) Sfx.shot();
+      if (menuMusic.on) menuSfxShot();
       if (++d.hits >= d.need) { d.dead = true; MENU.drones = MENU.drones.filter((q) => q !== d); menuBoom(L, d.x + MENU.scroll * d.z, d.y, d.z, true); MENU.aim = null; H.aiming = false; }
     }
   }
@@ -372,18 +446,30 @@ function menuDrawHuman(ctx, L) {
   const lean = H.aiming ? 0 : 0.07 * MENU.pace + (H.stance === 'crouch' ? 0.1 : 0);
   cx.setTransform(S * 1.25, 0, 0, S * 1.25, W / 2, Hh * 0.92);
   cx.rotate(lean);
-  drawHuman(cx, H, MENU.t, 1);
+  const RS = MENU_SHEETS.run;
+  if (RS.frames && !H.aiming) {
+    // кадр бігу: фаза від H.anim; висота силуету ≈ зріст людини
+    const n = RS.frames.length, ph = (MENU.runPh % 1) * n, i0 = Math.floor(ph), fr0 = RS.frames[i0], fr1 = RS.frames[(i0 + 1) % n], q = Math.max(0, Math.min(1, (ph - i0 - 0.75) / 0.25)); // змішувати лише в момент переходу (без «двійника»)
+    const hh = 64, sc2 = hh / RS.fh;
+    cx.rotate(-lean); // у кадрі вже є природний нахил
+    cx.globalAlpha = 1; cx.drawImage(fr0, -fr0.ax * sc2, -hh, fr0.width * sc2, hh);
+    if (q > 0) cx.globalAlpha = q, cx.drawImage(fr1, -fr1.ax * sc2, -hh, fr1.width * sc2, hh);
+    cx.globalAlpha = 1;
+  } else drawHuman(cx, H, MENU.t, 1);
   if (MENU.muzzle > 0) { // спалах із дула
     const mx = 2 + Math.cos(H.aimA) * 34, my = -40 + Math.sin(H.aimA) * 34;
     const g = cx.createRadialGradient(mx, my, 0, mx, my, 9); g.addColorStop(0, 'rgba(255,240,180,1)'); g.addColorStop(1, 'rgba(255,170,60,0)');
     cx.fillStyle = g; cx.beginPath(); cx.arc(mx, my, 9, 0, 7); cx.fill();
   }
   cx.setTransform(1, 0, 0, 1, 0, 0);
+  // силует проти сонця: темний, а світиться лише край з боку сонця (праворуч)
+  if (!MENU.hc2 || MENU.hc2.width !== W) { MENU.hc2 = document.createElement('canvas'); MENU.hc2.width = W; MENU.hc2.height = Hh; }
+  const m2 = MENU.hc2.getContext('2d');
+  m2.globalCompositeOperation = 'source-over'; m2.clearRect(0, 0, W, Hh); m2.drawImage(c, 0, 0);
+  m2.globalCompositeOperation = 'source-in'; m2.fillStyle = '#140912'; m2.fillRect(0, 0, W, Hh);
   cx.globalCompositeOperation = 'source-atop';
-  cx.fillStyle = 'rgba(20,9,18,0.88)'; cx.fillRect(0, 0, W, Hh);
-  const rim = cx.createLinearGradient(W * 0.66, 0, W * 0.5, 0);
-  rim.addColorStop(0, 'rgba(255,165,85,' + (0.55 + MENU.flash * 0.3) + ')'); rim.addColorStop(1, 'rgba(255,165,85,0)');
-  cx.fillStyle = rim; cx.fillRect(0, 0, W, Hh);
+  cx.fillStyle = 'rgba(255,160,80,' + Math.min(1, 0.8 + MENU.flash * 0.2) + ')'; cx.fillRect(0, 0, W, Hh);
+  cx.drawImage(MENU.hc2, -Math.max(1.5, 1.6 * S), Math.max(0.5, 0.4 * S)); // зсунута тінь накриває все, крім світлого краю
   if (MENU.muzzle > 0) { cx.fillStyle = 'rgba(255,200,120,0.35)'; cx.fillRect(0, 0, W, Hh); }
   cx.globalCompositeOperation = 'source-over';
   ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(x - 4 * S, y + 1, 22 * S, 3 * S, 0, 0, 7); ctx.fill();
@@ -400,6 +486,31 @@ function menuDrawDrone(ctx, x, y, ang, S) {
   }
   ctx.fillStyle = 'rgba(255,60,60,' + (0.6 + 0.4 * Math.sin(MENU.t * 30)) + ')'; ctx.beginPath(); ctx.arc(0, 0, 1.5 * S, 0, 7); ctx.fill();
   ctx.restore();
+}
+// ===== Звуки заставки: глухі, ніби теж сповільнені (лише низькі частоти) =====
+function menuSfxBoom(vol) {
+  const ctx = Sfx.ctx; if (!ctx || !Sfx.noise) return;
+  const t = ctx.currentTime;
+  // гуркіт: шум крізь низькочастотний фільтр, повільно затухає
+  const src = ctx.createBufferSource(); src.buffer = Sfx.noise; src.playbackRate.value = 0.45; src.loop = true;
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(260, t); f.frequency.exponentialRampToValueAtTime(90, t + 2.2); f.Q.value = 0.6;
+  const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.9 * vol, t + 0.05); g.gain.exponentialRampToValueAtTime(0.001, t + 3);
+  src.connect(f); f.connect(g); g.connect(Sfx.master); src.start(t, Math.random() * 0.5); src.stop(t + 3.1);
+  // удар: низький тон, що сповзає вниз
+  const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(64, t); o.frequency.exponentialRampToValueAtTime(24, t + 1.4);
+  const og = ctx.createGain(); og.gain.setValueAtTime(0.0001, t); og.gain.exponentialRampToValueAtTime(0.75 * vol, t + 0.04); og.gain.exponentialRampToValueAtTime(0.001, t + 1.8);
+  o.connect(og); og.connect(Sfx.master); o.start(t); o.stop(t + 1.9);
+}
+function menuSfxShot() {
+  const ctx = Sfx.ctx; if (!ctx || !Sfx.noise) return;
+  const t = ctx.currentTime;
+  const src = ctx.createBufferSource(); src.buffer = Sfx.noise; src.playbackRate.value = 0.5;
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(420, t); f.frequency.exponentialRampToValueAtTime(140, t + 0.4);
+  const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.35, t + 0.01); g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+  src.connect(f); f.connect(g); g.connect(Sfx.master); src.start(t, Math.random() * 0.5); src.stop(t + 0.55);
+  const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.3);
+  const og = ctx.createGain(); og.gain.setValueAtTime(0.0001, t); og.gain.exponentialRampToValueAtTime(0.3, t + 0.01); og.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+  o.connect(og); og.connect(Sfx.master); o.start(t); o.stop(t + 0.45);
 }
 // ===== Музика меню =====
 const menuMusic = {
