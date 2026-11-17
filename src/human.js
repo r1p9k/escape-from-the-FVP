@@ -222,7 +222,8 @@ function drawBodyUpright(ctx, h, t, C) {
     const A = 0.22 + 0.42 * sp + 0.32 * cn, K = 0.45 + 1.0 * sp + 0.75 * cn;
     // перенос ноги вперед (cos q > 0) — коліно зігнуте, опора (стегно йде назад) — нога майже пряма
     const wave = (q) => cn > 0 ? Math.sin(q) * (1 - 0.6 * cn) + (2 / Math.PI) * Math.asin(Math.sin(q)) * 0.6 * cn : Math.sin(q);
-    legs = [0, Math.PI].map((o) => { const q = ph + o, th = A * wave(q); return { t: th, s: th - (0.08 + K * Math.max(0, Math.cos(q - 0.35))) }; });
+    // у бігуна коліно ніколи не випрямляється повністю: винесена вперед нога й опорна лишаються трохи зігнутими
+    legs = [0, Math.PI].map((o) => { const q = ph + o, th = A * wave(q); return { t: th, s: th - (0.08 + 0.22 * cn + 0.28 * cn * Math.max(0, th / A) + K * Math.max(0, Math.cos(q - 0.35))) }; });
   } else legs = [{ t: -0.09, s: -0.13 }, { t: 0.11, s: 0.03 }];
   // висота стегон — нижня ступня торкається землі
   let drop = 0;
