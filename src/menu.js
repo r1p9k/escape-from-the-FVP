@@ -11,7 +11,7 @@ const MENU_Z = { far: 0.45, mid: 1, near: 1.7 };
 const MENU_HUMAN = {
   player: { color: '#f2c94c', name: '' }, x: 0, y: 0, stance: 'stand', facing: 1, onGround: true, onLadder: false, climb: null,
   vx: 175, anim: 0, hp: 100, weapon: { type: 'rifle', mag: 9, ammo: 27 }, aiming: false, aimA: -0.3, hurtT: 0, dead: false, hidden: null,
-  canister: false, carry: null, healT: 0, alT: 0, protT: 0, digT: 0, digging: null, piloting: false, fireCd: 0, bloom: 0,
+  canister: false, carry: null, healT: 0, alT: 0, protT: 0, digT: 0, digging: null, piloting: false, fireCd: 0, bloom: 0, cine: true, // cine — кіношний біг із фазою польоту
 };
 function mr(a, b) { return a + (b - a) * MENU.rnd(); }
 // Аркуші кадрів від Gemini: чорні силуети на білому тлі в один ряд. Кадри знаходяться автоматично

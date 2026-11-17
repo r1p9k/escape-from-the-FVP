@@ -217,7 +217,9 @@ function drawBodyUpright(ctx, h, t, C) {
     if (sp > 0.08) legs = [0, Math.PI].map((o) => { const q = ph + o, th = 0.95 + 0.38 * sp * Math.sin(q); return { t: th, s: th - 1.5 - 0.3 * sp * Math.max(0, Math.cos(q)) }; });
     else legs = [{ t: 0.35, s: -1.3 }, { t: 1.3, s: -0.15 }];
   } else if (sp > 0.08) {
-    const A = 0.22 + 0.42 * sp, K = 0.45 + 1.0 * sp;
+    // у заставці (h.cine) — ширший крок і вищий замах п'яти назад
+    const cn = h.cine ? clamp((sp - 0.3) / 0.7, 0, 1) : 0;
+    const A = 0.22 + 0.42 * sp + 0.32 * cn, K = 0.45 + 1.0 * sp + 0.75 * cn;
     // перенос ноги вперед (cos q > 0) — коліно зігнуте, опора (стегно йде назад) — нога майже пряма
     legs = [0, Math.PI].map((o) => { const q = ph + o, th = A * Math.sin(q); return { t: th, s: th - (0.08 + K * Math.max(0, Math.cos(q - 0.35))) }; });
   } else legs = [{ t: -0.09, s: -0.13 }, { t: 0.11, s: 0.03 }];
@@ -225,9 +227,16 @@ function drawBodyUpright(ctx, h, t, C) {
   let drop = 0;
   for (const l of legs) drop = Math.max(drop, Math.cos(l.t) * RIG.thigh + Math.cos(l.s) * RIG.shin);
   if (h.onLadder || air) drop = 24;
-  const H = { x: crouch ? -1.5 : 0, y: -drop - (sp > 0.5 && !crouch ? Math.abs(Math.cos(ph)) * 1.2 : 0) };
+  // кіношний біг: між доторками тіло летить — коли ноги розведені, стегна не опускаються до землі, а злітають;
+  // на опорі (ноги схрещуються) — присідання. Без цього ступні ніби примагнічені до ґрунту.
+  const cine = h.cine && sp > 0.08 && !crouch && !air && !h.onLadder ? clamp((sp - 0.3) / 0.7, 0, 1) : 0;
+  if (cine > 0) {
+    const w = Math.pow(Math.abs(Math.sin(ph - 0.3)), 1.6) * cine, L = RIG.thigh + RIG.shin;
+    drop = drop * (1 - w) + (L * 0.98 + 6) * w - 1.6 * cine * (1 - w);
+  }
+  const H = { x: crouch ? -1.5 : 0, y: -drop - (sp > 0.5 && !crouch && !cine ? Math.abs(Math.cos(ph)) * 1.2 : 0) };
   // нахил тулуба
-  let lean = crouch ? 0.55 : 0.04 + 0.17 * sp;
+  let lean = crouch ? 0.55 : 0.04 + 0.17 * sp + 0.08 * cine;
   if (h.aiming) lean = crouch ? 0.32 : 0.05;
   if (h.onLadder) lean = -0.05;
   if (busyDig) lean = 0.5;
