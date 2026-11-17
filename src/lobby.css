@@ -22,6 +22,15 @@ canvas { display: block; width: 100vw; height: 100vh; }
   padding: 0 16px 40px;
 }
 #lobby.hidden { display: none; }
+/* вступ: чорний екран, поки не заграє музика; потім меню й заставка проступають разом із нею */
+#lobby.pre { opacity: 0; pointer-events: none; }
+#lobby.reveal { transition: opacity 3.2s ease-in; }
+#intro { position: fixed; inset: 0; z-index: 20; background: #050307; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 22px; cursor: pointer; transition: opacity 1.6s ease; }
+#intro.on { display: flex; }
+#intro.out { opacity: 0; pointer-events: none; }
+.intro-title { font: 900 clamp(28px, 4.5vw, 54px) "Segoe UI", system-ui, sans-serif; letter-spacing: 8px; color: rgba(255, 210, 122, 0.55); }
+.intro-hint { font: 15px "Segoe UI", system-ui, sans-serif; letter-spacing: 2px; color: rgba(243, 220, 200, 0.6); animation: introPulse 2.4s ease-in-out infinite; }
+@keyframes introPulse { 50% { opacity: 0.25; } }
 .wrap { max-width: 1120px; margin: 0 auto; }
 #lobby > .wrap > header { margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); }
 header { text-align: center; height: 52vh; min-height: 300px; display: flex; flex-direction: column; justify-content: flex-start; padding-top: 4vh; position: relative;
