@@ -221,9 +221,11 @@ function drawBodyUpright(ctx, h, t, C) {
     const cn = h.cine ? clamp((sp - 0.3) / 0.7, 0, 1) : 0;
     const A = 0.22 + 0.42 * sp + 0.32 * cn, K = 0.45 + 1.0 * sp + 0.75 * cn;
     // перенос ноги вперед (cos q > 0) — коліно зігнуте, опора (стегно йде назад) — нога майже пряма
+    // згин коліна: у грі — обрізаний косинус; у кіношному бігу — гладка крива без зламів (п'ята плавно проходить верхню точку)
+    const kneeShape = (q) => { const c = Math.cos(q - 0.35), sm = Math.pow((1 + c) / 2, 2); return Math.max(0, c) * (1 - cn) + sm * cn; };
     const wave = (q) => cn > 0 ? Math.sin(q) * (1 - 0.6 * cn) + (2 / Math.PI) * Math.asin(Math.sin(q)) * 0.6 * cn : Math.sin(q);
     // у бігуна коліно ніколи не випрямляється повністю: винесена вперед нога й опорна лишаються трохи зігнутими
-    legs = [0, Math.PI].map((o) => { const q = ph + o, th = A * wave(q); return { t: th, s: th - (0.08 + 0.22 * cn + 0.28 * cn * Math.max(0, th / A) + K * Math.max(0, Math.cos(q - 0.35))) }; });
+    legs = [0, Math.PI].map((o) => { const q = ph + o, th = A * wave(q); return { t: th, s: th - (0.08 + 0.22 * cn + 0.28 * cn * Math.max(0, th / A) + K * kneeShape(q)) }; });
   } else legs = [{ t: -0.09, s: -0.13 }, { t: 0.11, s: 0.03 }];
   // висота стегон — нижня ступня торкається землі
   let drop = 0;
@@ -237,6 +239,8 @@ function drawBodyUpright(ctx, h, t, C) {
     const smax = (a, b, e) => (a + b + Math.sqrt((a - b) * (a - b) + e * e)) / 2;
     drop = drop * (1 - cine) + smax(drop - 0.8, T, 3) * cine;
   }
+  // кут стопи: у грі — майже пласка; у кіношному бігу стопа йде за гомілкою (носок униз при відштовхуванні й замаху назад, на п'яту при постановці)
+  const footAng = (sh) => h.onLadder ? 0 : cine > 0 ? (-sh * 0.85 > 0 ? 1.4 * Math.tanh(-sh * 0.85 / 1.4) : Math.max(-0.45, -sh * 0.85)) * cine + Math.min(0.5, Math.max(-0.4, sh * 0.4)) * (1 - cine) : Math.min(0.5, Math.max(-0.4, sh * 0.4));
   const H = { x: crouch ? -1.5 : 0, y: -drop - (sp > 0.5 && !crouch && !cine ? Math.abs(Math.cos(ph)) * 1.2 : 0) };
   // нахил тулуба
   let lean = crouch ? 0.55 : 0.04 + 0.17 * sp + 0.08 * cine;
@@ -310,12 +314,12 @@ function drawBodyUpright(ctx, h, t, C) {
   else if (!front || h.canister) armAngles(ctx, ShB, swing(Math.PI) - (crouch ? 0.2 : 0), swing(Math.PI) + 0.35 + 0.3 * sp, C.uniD);
   const legPts = (l) => { const k = seg(H, l.t, RIG.thigh); return [H, k, seg(k, l.s, RIG.shin)]; };
   const L0 = legPts(legs[0]), L1 = legPts(legs[1]);
-  legBoot(ctx, L0, 5.6, C.pantsD, h.onLadder ? 0 : Math.min(0.5, Math.max(-0.4, legs[0].s * 0.4)), true);
+  legBoot(ctx, L0, 5.6, C.pantsD, footAng(legs[0].s), true);
   ctx.save(); ctx.translate(H.x, H.y); ctx.rotate(lean);
   if (gunBack && h.weapon) { ctx.save(); ctx.translate(-9, -TL + 2); ctx.rotate(1.15); drawGunShape(ctx, h.weapon.type); ctx.restore(); } // зброя за спиною
   drawTorso(ctx, h, C, TL);
   ctx.restore();
-  legBoot(ctx, L1, 5.6, C.pants, h.onLadder ? 0 : Math.min(0.5, Math.max(-0.4, legs[1].s * 0.4)), false);
+  legBoot(ctx, L1, 5.6, C.pants, footAng(legs[1].s), false);
   if (!HSP.ready) { ctx.fillStyle = HCOL.rigD; ctx.beginPath(); ctx.arc(L1[1].x + 1, L1[1].y, 2.2, 0, 7); ctx.fill(); } // наколінник
   let tilt = lean * 0.6;
   if (h.aiming && (gun || prop)) tilt = clamp(h.aimA * 0.45, -0.5, 0.3);
