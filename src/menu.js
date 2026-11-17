@@ -453,8 +453,8 @@ function menuBoom(L, wx, y, z, air) {
   }
   MENU.booms.push({ wx, y, z, t: 0, max: MENU_SHEETS.boom.frames && !air ? 2.9 : 0.45, air, flip: MENU.rnd() < 0.5 });
   const near = z === MENU_Z.near, far = z === MENU_Z.far;
-  MENU.shake = Math.min(1, MENU.shake + (far ? 0.15 : near ? 0.9 : 0.55));
-  MENU.flash = Math.max(MENU.flash, far ? 0.3 : near ? 0.9 : 0.7); MENU.flashX = X; MENU.flashY = y;
+  MENU.shake = Math.min(1, MENU.shake + (far ? 0.04 : near ? 0.9 : 0.55));
+  MENU.flash = Math.max(MENU.flash, far ? 0.06 : near ? 0.7 : 0.4); // далекі вибухи майже не підсвічують сцену (інакше під час нальоту — блимання) MENU.flashX = X; MENU.flashY = y;
   const P = MENU.parts;
   if (!air) {
     // земля — вгору конусом: багато грудок і пилу
@@ -471,7 +471,7 @@ function menuBoom(L, wx, y, z, air) {
     MENU.craters.push({ wx, z, r: mr(16, 24) * S, life: 40 });
     if (MENU.craters.length > 14) MENU.craters.shift();
   } else {
-    for (let i = 0; i < 18; i++) { const a = mr(0, 6.28), v = mr(60, 260) * S; P.push({ k: 'clod', z, wx, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 80 * S, life: mr(1.5, 2.5), max: 2.5, r: mr(1, 2.8) * S, rot: mr(0, 6), spin: mr(-10, 10), col: '#151015' }); }
+    for (let i = 0; i < 10; i++) { const a = mr(0, 6.28), v = mr(50, 200) * S; P.push({ k: 'frag', z, wx, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60 * S, life: mr(1.2, 2.2), max: 2.2, r: mr(0.5, 1.3) * S, rot: mr(0, 6), spin: mr(-14, 14), col: '#161016' }); }
   }
   for (let i = 0; i < (air ? 10 : 0); i++) { const a = mr(Math.PI * 1.1, Math.PI * 1.9), v = mr(120, 460) * S; P.push({ k: 'ember', z, wx, y: y - 4 * S, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: mr(0.4, 1.2), max: 1.2 }); }
   // темний дим після вогню
@@ -523,10 +523,13 @@ function menuDrawLayer(ctx, L, z, withHuman) {
     if (p.k === 'ember') { ctx.fillStyle = 'rgba(255,' + (150 + 80 * k | 0) + ',80,' + k + ')'; ctx.fillRect(X - 1 * S, p.y - 1 * S, 2 * S, 2 * S); }
     else {
       ctx.save(); ctx.globalAlpha *= Math.min(1, k * 3);
-      const sp = Math.hypot(p.vx, p.vy), tl = Math.min(6, sp * 0.012) * p.r; // слід руху
-      ctx.strokeStyle = p.col; ctx.lineCap = 'round'; ctx.lineWidth = p.r * 1.4;
-      ctx.beginPath(); ctx.moveTo(X, p.y); ctx.lineTo(X - (p.vx / (sp || 1)) * tl, p.y - (p.vy / (sp || 1)) * tl); ctx.stroke();
-      if (p.k === 'clod') { ctx.translate(X, p.y); ctx.rotate(p.rot); ctx.fillStyle = p.col; ctx.beginPath(); ctx.moveTo(-p.r, -p.r * 0.3); ctx.lineTo(p.r * 0.2, -p.r * 0.8); ctx.lineTo(p.r, p.r * 0.1); ctx.lineTo(-p.r * 0.3, p.r * 0.7); ctx.closePath(); ctx.fill(); }
+      if (p.k !== 'frag') { // слід руху (для грудок землі; уламки дрона — без сліду)
+        const sp = Math.hypot(p.vx, p.vy), tl = Math.min(6, sp * 0.012) * p.r;
+        ctx.strokeStyle = p.col; ctx.lineCap = 'round'; ctx.lineWidth = p.r * 1.4;
+        ctx.beginPath(); ctx.moveTo(X, p.y); ctx.lineTo(X - (p.vx / (sp || 1)) * tl, p.y - (p.vy / (sp || 1)) * tl); ctx.stroke();
+      }
+      if (p.k === 'frag') { ctx.translate(X, p.y); ctx.rotate(p.rot); ctx.fillStyle = p.col; ctx.beginPath(); ctx.moveTo(-p.r, 0); ctx.lineTo(p.r * 0.6, -p.r * 0.7); ctx.lineTo(p.r * 1.2, p.r * 0.3); ctx.closePath(); ctx.fill(); }
+      else if (p.k === 'clod') { ctx.translate(X, p.y); ctx.rotate(p.rot); ctx.fillStyle = p.col; ctx.beginPath(); ctx.moveTo(-p.r, -p.r * 0.3); ctx.lineTo(p.r * 0.2, -p.r * 0.8); ctx.lineTo(p.r, p.r * 0.1); ctx.lineTo(-p.r * 0.3, p.r * 0.7); ctx.closePath(); ctx.fill(); }
       ctx.restore();
     }
   }
@@ -539,10 +542,16 @@ function menuDrawBoom(ctx, b, X, S) {
     const hh = 125 * S / (BS.vid || 1), k2 = hh / BS.fh, a0 = ctx.globalAlpha * Math.min(1, (1 - u) * 6); // висота відео ≈ 125 px, продовжені краї — понад це
     ctx.save();
     ctx.translate(X, b.y + 14 * S); if (b.flip) ctx.scale(-1, 1); // трохи нижче лінії ґрунту
-    for (const [fr, al] of [[BS.frames[i0], 1], [BS.frames[i0 + 1], q]]) {
-      if (!fr || al <= 0.01) continue;
-      ctx.globalAlpha = a0 * al; ctx.drawImage(fr, -fr.ax * k2, -hh, fr.width * k2, hh);
-    }
+    // справжнє змішування двох кадрів (сума (1-q)·A + q·B у допоміжному полотні) з якісним зменшенням —
+    // без мерехтіння грудок при зміні кадрів, особливо на далекому плані
+    const f0 = BS.frames[i0], f1 = BS.frames[i0 + 1] || f0, dw = Math.max(1, Math.ceil(f0.width * k2)), dh = Math.max(1, Math.ceil(hh));
+    if (!MENU.boc) MENU.boc = document.createElement('canvas');
+    const oc = MENU.boc; if (oc.width < dw || oc.height < dh) { oc.width = Math.max(oc.width, dw); oc.height = Math.max(oc.height, dh); }
+    const ox = oc.getContext('2d'); ox.setTransform(1, 0, 0, 1, 0, 0); ox.globalCompositeOperation = 'source-over'; ox.globalAlpha = 1; ox.clearRect(0, 0, dw + 2, dh + 2);
+    ox.imageSmoothingEnabled = true; ox.imageSmoothingQuality = 'high'; ox.globalCompositeOperation = 'lighter';
+    ox.globalAlpha = 1 - q; ox.drawImage(f0, 0, 0, dw, dh);
+    if (q > 0.002) { ox.globalAlpha = q; ox.drawImage(f1, 0, 0, dw, dh); }
+    ctx.globalAlpha = a0; ctx.drawImage(oc, 0, 0, dw, dh, -f0.ax * k2, -hh, dw, dh);
     ctx.restore();
   }
   const k = Math.min(1, b.t / 0.45), y = b.y;
@@ -631,14 +640,16 @@ function menuUpdateHuman(L, dt) {
   MENU.aimCd -= dt;
   if (!MENU.aim && MENU.aimCd <= 0) {
     const foot = L.gy, mx = L.hx;
-    const d = MENU.drones.find((q) => q.z === MENU_Z.mid && q.x - mx > 30 * S && q.y < foot - 60 * S && q.y > 20 * S);
-    if (d) { MENU.aim = { d, t: 0, shot: 0 }; MENU.aimCd = mr(2.5, 5); }
+    const sy0 = L.gy - 50 * S;
+    const d = MENU.drones.find((q) => q.z === MENU_Z.mid && q.x - mx > 70 * S && q.y < foot - 50 * S && q.y > 10 * S && sy0 - q.y < (q.x - mx) * 2); // попереду й не надто круто
+    if (d) { MENU.aim = { d, t: 0, shot: 0 }; MENU.aimCd = mr(1.2, 3); }
   }
   if (MENU.aim) {
     const A = MENU.aim, d = A.d;
     A.t += dt;
-    if (!MENU.drones.includes(d) || A.t > 1.6) { MENU.aim = null; H.aiming = false; return; }
     const mxs = L.hx, sy = L.gy - 40 * 1.25 * S, dx = d.x - mxs, dy = d.y - sy;
+    // дрон зник, довго не вдається або вже заходить над голову — не стріляти вгору йому в слід
+    if (!MENU.drones.includes(d) || A.t > 1.6 || dx < 30 * S || -dy > dx * 2.6) { MENU.aim = null; H.aiming = false; return; }
     H.aiming = true; H.facing = 1; H.aimA = clamp(Math.atan2(dy, Math.max(10, dx)), -1.35, 0.15);
     if (A.t > 0.18 && (A.shot -= dt) <= 0) {
       A.shot = 0.07;
@@ -647,7 +658,7 @@ function menuUpdateHuman(L, dt) {
       MENU.tracers.push({ x1: mzx + MENU.scroll, y1: mzy, x2: mzx + MENU.scroll + Math.cos(H.aimA + spread) * len, y2: mzy + Math.sin(H.aimA + spread) * len, t: 0, max: 0.09, sc0: 0 });
       MENU.muzzle = 0.03; H.fireCd = WEAPONS.rifle.rate;
       if (menuMusic.on) menuSfxShot();
-      if (++d.hits >= d.need) { d.dead = true; MENU.drones = MENU.drones.filter((q) => q !== d); menuBoom(L, d.x + MENU.scroll * d.z, d.y, d.z, true); MENU.aim = null; H.aiming = false; }
+      if (++d.hits >= Math.min(d.need, 3)) { d.dead = true; MENU.drones = MENU.drones.filter((q) => q !== d); menuBoom(L, d.x + MENU.scroll * d.z, d.y, d.z, true); MENU.aim = null; H.aiming = false; }
     }
   }
 }
