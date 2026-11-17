@@ -171,6 +171,8 @@ function renderView(ctx, vp, p, t) {
   if (G.mode === 'team') for (const o of G.objs) if (inX(o.x - 220, o.x + 220)) drawObjFlag(ctx, o, t);
   for (const sd of solidsNear(W, x0, x1)) drawSolid(ctx, sd, t);
   for (const l of W.ladders) if (inX(l.x - 15, l.x + 15) && !(l.sp && !knowP(l.sp))) drawLadder(ctx, l); // драбина в невідомому лазі не видна
+  for (const s of W.shops) if (!s.b.ruined && inX(s.x - 40, s.x + 40)) drawShop(ctx, s, human);
+  for (const d of W.ditches) if (inX(d.a - 20, d.b + 20)) drawDitch(ctx, d, W);
   for (const pk of W.pickups) if (!pk.taken && inX(pk.x - 20, pk.x + 20)) drawPickup(ctx, pk, t, human);
   const npr = human && !human.dead && !human.carry ? nearProp(human) : null;
   for (const pr of W.props) if (inX(pr.x - 20, pr.x + 20)) drawProp(ctx, pr.type, pr.x, pr.y, 0, pr === npr);
@@ -195,13 +197,14 @@ function renderView(ctx, vp, p, t) {
     if (h.vehicle) continue; // малюється разом із технікою нижче
     if (h.hideAnim && !h.dead) drawHideAnim(ctx, h, t); else drawHuman(ctx, h, t, 1);
     if ((h.digging || h.digT > 0) && !h.dead && !h.meleeT) drawShovel(ctx, h, t);
+    if (h.kit && !h.dead) drawKitIcon(ctx, h.kit, h.x, h.y - HUMAN_DIM[h.stance].h - 14);
   }
   for (const m of W.mounts) if (inX(m.x - 40, m.x + 40)) drawMount(ctx, m);
   for (const th of G.throws) if (inX(th.x - 20, th.x + 20)) drawThrow(ctx, th, t);
   if (G.ugvs) for (const u of G.ugvs) if (inX(u.x - 40, u.x + 40)) drawUgv(ctx, u, t);
   for (const v of W.vehicles) {
     if (v.dead || !inX(v.x - 60, v.x + 60)) continue;
-    for (const o of [v.driver, v.gunner]) if (o && (!isDrone || humanVisibleToDrone(o, drone))) drawRider(ctx, v, o);
+    for (const o of [v.driver, v.gunner]) if (o && !(o === v.driver && v.type === 'car') && (!isDrone || humanVisibleToDrone(o, drone))) drawRider(ctx, v, o); // у машині з дахом водія не видно
   }
   for (const ab of G.airBonuses || []) if (ab.active && inX(ab.x - 30, ab.x + 30)) drawAirBonus(ctx, ab, t);
   // дрони
@@ -673,6 +676,16 @@ function drawSolidBody(ctx, s, t) {
       }
       break;
     }
+    case 'bridge': {
+      // переправа: дошки на колодах, поручні
+      ctx.fillStyle = '#7a5532'; ctx.fillRect(s.x, s.y, s.w, s.h);
+      ctx.fillStyle = '#5e4227'; for (let x = s.x + 2; x < s.x + s.w; x += 9) ctx.fillRect(x, s.y, 1.5, s.h);
+      ctx.fillStyle = '#4a3420'; ctx.fillRect(s.x, s.y + s.h - 2, s.w, 2);
+      ctx.strokeStyle = '#5e4227'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s.x + 4, s.y - 14); ctx.lineTo(s.x + s.w - 4, s.y - 14);
+      for (let x = s.x + 6; x < s.x + s.w; x += 30) { ctx.moveTo(x, s.y); ctx.lineTo(x, s.y - 14); }
+      ctx.stroke();
+      break;
+    }
     case 'block':
       ctx.fillStyle = '#9a9890'; ctx.fillRect(s.x, s.y, s.w, s.h);
       ctx.strokeStyle = '#6d6b65'; ctx.lineWidth = 2; ctx.strokeRect(s.x + 1, s.y + 1, s.w - 2, s.h - 2);
@@ -732,6 +745,36 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+// верстат майстерні: стіл, лещата, інструменти; поруч — заготовки мангала й тарана
+function drawShop(ctx, s, human) {
+  const x = s.x, y = s.y;
+  ctx.fillStyle = '#5b4630'; ctx.fillRect(x - 24, y - 22, 48, 5); ctx.fillRect(x - 21, y - 17, 4, 17); ctx.fillRect(x + 17, y - 17, 4, 17);
+  ctx.fillStyle = '#3e3f41'; ctx.fillRect(x - 18, y - 29, 10, 7); ctx.fillRect(x - 15, y - 33, 4, 4);
+  ctx.strokeStyle = '#8a8c8f'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x + 2, y - 23); ctx.lineTo(x + 12, y - 30); ctx.moveTo(x + 8, y - 23); ctx.lineTo(x + 16, y - 26); ctx.stroke();
+  ctx.strokeStyle = '#4a4c4e'; ctx.lineWidth = 1.5; ctx.beginPath();
+  for (let i = 0; i < 4; i++) { ctx.moveTo(x + 28 + i * 5, y); ctx.lineTo(x + 34 + i * 5, y - 26); }
+  ctx.moveTo(x + 29, y - 6); ctx.lineTo(x + 50, y - 6); ctx.moveTo(x + 31, y - 16); ctx.lineTo(x + 52, y - 16); ctx.stroke();
+  ctx.fillStyle = '#3a3b3d'; ctx.fillRect(x - 40, y - 8, 12, 8);
+  if (human && Math.abs(human.x - x) < 70 && Math.abs(human.y - y) < 40) {
+    ctx.fillStyle = '#ffd88a'; ctx.font = FONT(10, '700'); ctx.textAlign = 'center'; ctx.fillText('МАЙСТЕРНЯ', x, y - 40);
+  }
+}
+// протитанковий рів: кілки на дні
+function drawDitch(ctx, d, W) {
+  const yb = d.g + DITCH_D;
+  ctx.fillStyle = 'rgba(20,14,8,0.35)'; ctx.fillRect(d.a + 8, d.g + 10, d.b - d.a - 16, DITCH_D - 10);
+  ctx.fillStyle = '#5a4630'; ctx.strokeStyle = '#2a1f14'; ctx.lineWidth = 1;
+  for (let x = d.a + 16; x < d.b - 12; x += 15) {
+    ctx.beginPath(); ctx.moveTo(x - 4, yb); ctx.lineTo(x + (hash(x) - 0.5) * 4, yb - 16 - hash(x + 1) * 8); ctx.lineTo(x + 4, yb); ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+}
+function drawKitIcon(ctx, kit, x, y) {
+  ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.beginPath(); ctx.arc(x, y, 8, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#d9dadb'; ctx.lineWidth = 1.5; ctx.beginPath();
+  if (kit === 'cage') { ctx.moveTo(x - 5, y + 3); ctx.lineTo(x - 3, y - 4); ctx.lineTo(x + 3, y - 4); ctx.lineTo(x + 5, y + 3); ctx.moveTo(x - 1, y - 4); ctx.lineTo(x - 1, y + 3); ctx.moveTo(x + 2, y - 4); ctx.lineTo(x + 2, y + 3); }
+  else { ctx.moveTo(x + 3, y - 5); ctx.lineTo(x + 3, y + 5); ctx.moveTo(x - 4, y - 2); ctx.lineTo(x + 3, y - 2); ctx.moveTo(x - 4, y + 2); ctx.lineTo(x + 3, y + 2); }
+  ctx.stroke();
 }
 function drawLadder(ctx, l) {
   ctx.strokeStyle = '#b08850'; ctx.lineWidth = 3;
@@ -1037,12 +1080,32 @@ function vehFrame(ctx, v) {
   ctx.translate(v.x, v.y); ctx.rotate(v.ang); ctx.scale(v.dir, 1);
   if (v.tilt) { const px = v.tilt < 0 ? -T.len / 2 + 11 : T.len / 2 - 11; ctx.translate(px, 0); ctx.rotate(v.tilt); ctx.translate(-px, 0); }
 }
+// мангал — металева сітка над технікою; таран — сталева балка спереду
+function drawVehKit(ctx, v, L, H) {
+  if (v.ram) {
+    ctx.fillStyle = '#3a3b3d'; ctx.strokeStyle = '#1c1c1d'; ctx.lineWidth = 1.2;
+    ctx.fillRect(L / 2 - 2, -H * 0.55, 8, H * 0.45); ctx.strokeRect(L / 2 - 2, -H * 0.55, 8, H * 0.45);
+    ctx.fillRect(L / 2 - 8, -H * 0.42, 8, 4); ctx.fillRect(L / 2 - 8, -H * 0.22, 8, 4);
+    ctx.fillStyle = '#8a8c8f'; for (const y of [-H * 0.48, -H * 0.3, -H * 0.15]) { ctx.beginPath(); ctx.arc(L / 2 + 2, y, 1.2, 0, 7); ctx.fill(); }
+  }
+  if (v.cageHp > 0) {
+    const top = -H - 14 + (v.type === 'moto' || v.type === 'quad' ? 6 : 0), x0 = -L / 2 + 2, x1 = L / 2 - 2;
+    ctx.strokeStyle = v.cageHp > 1 ? '#4a4c4e' : '#6b5a4a'; ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(x0, -H * 0.4); ctx.lineTo(x0 + 6, top); ctx.lineTo(x1 - 6, top); ctx.lineTo(x1, -H * 0.4);
+    for (let x = x0 + 6; x <= x1 - 6; x += 9) { ctx.moveTo(x, top); ctx.lineTo(x + 5, top - 7); }
+    ctx.moveTo(x0 + 11, top - 7); ctx.lineTo(x1 - 1, top - 7);
+    for (let x = x0 + 8; x < x1 - 4; x += 12) { ctx.moveTo(x, top); ctx.lineTo(x, -H * 0.4); }
+    ctx.stroke();
+  }
+}
 function drawVehicle(ctx, v, t) {
   const T = VEH[v.type];
   ctx.save();
   vehFrame(ctx, v);
   const L = T.len, H = T.h;
   if (ispRect(ctx, (v.dead ? 'vd_' : 'v_') + v.type, -L / 2 - 4, 1, L + 8, 1)) {
+    if (!v.dead) drawVehKit(ctx, v, L, H);
     if (v.hasMG && !v.dead) {
       // кулемет на турелі; повертається за прицілом кулеметника
       const gp = T.gun || [-L * 0.15, -H - 15], g = v.gunner;
@@ -1278,7 +1341,7 @@ function drawHumanHud(ctx, vp, p, t) {
   let tip = '';
   if (h.vehicle) tip = h.seat === 'driver' ? '[' + c.label('left') + c.label('right') + '] їхати   [' + c.label('aim') + '] гальмо' + (h.vehicle.type === 'moto' ? '   [' + c.label('up') + '] дибки (через перешкоди)   [' + c.label('down') + '] на переднє' : '') + '   [' + c.label('interact') + '] вийти' : '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] кулемет  [' + c.label('interact') + '] вийти';
   else if (h.mount) tip = '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('fire') + '] вогонь (' + h.mount.ammo + ')  [' + c.label('interact') + '] відійти';
-  else if (h.working) tip = (h.working.kind === 'ply' ? 'Забиваєш фанерою… ' : h.working.kind === 'fort' ? 'Облаштовуєш вогневу позицію… ' : 'Ставиш станкову гвинтівку… ') + Math.round(h.working.t / h.working.dur * 100) + '%   [' + c.label('left') + c.label('right') + '] перервати';
+  else if (h.working) tip = ({ ply: 'Забиваєш фанерою… ', fort: 'Облаштовуєш вогневу позицію… ', kit: 'Встановлюєш обладнання… ', ditch: 'Копаєш рів… ', bridge: 'Будуєш переправу… ' }[h.working.kind] || 'Ставиш станкову гвинтівку… ') + Math.round(h.working.t / h.working.dur * 100) + '%   [' + c.label('left') + c.label('right') + '] перервати';
   else if (h.carry && !h.aiming) tip = '[' + c.label('fire') + '] кинути: ' + PROP_TYPES[h.carry].name.toLowerCase() + '  (тримай [' + c.label('aim') + '] — під кутом)   [' + c.label('slot1') + '] покласти';
   else if (h.peek) tip = '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] вогонь ' + (h.hidden.type === 'bunker' ? 'з бійниці' : 'з нори');
   else if (h.digging && h.digging.kind === 'rubble') tip = 'Розкопуєш завал… ' + Math.round((1 - h.digging.br.fill) * 100) + '%   [' + c.label('left') + c.label('right') + '] перервати';
@@ -1304,7 +1367,12 @@ function drawHumanHud(ctx, vp, p, t) {
     else if (ladderAt(h) && !h.onLadder) tip = '[' + c.label(h.y < ladderAt(h).top + 6 ? 'down' : 'up') + '] лізти драбиною';
     else if (pipeAt(G.W, h.x, h.y)) tip = tunnelTip(h, c);
     else if (resumeDig(Object.assign({}, h, { digging: null }))) tip = L('interact') + ' копати далі';
-    else if (h.stance !== 'stand' && canFortHere(h)) tip = L('interact') + ' облаштувати вогневу позицію (окопчик із мішками, бруствер — у бік погляду)';
+    else if (kitVehicle(h)) tip = L('interact') + ' встановити ' + KIT_NAMES[h.kit] + ' на ' + VEH[kitVehicle(h).type].name.toLowerCase();
+    else if (nearShop(h)) tip = L('interact') + (h.kit ? ' замінити на ' + KIT_NAMES[h.kit === 'cage' ? 'ram' : 'cage'] : ' майстерня: взяти ' + KIT_NAMES.cage + ' (ще раз — ' + KIT_NAMES.ram + ')');
+    else if (h.stance === 'prone' && canDitchHere(h)) tip = L('interact') + ' викопати протитанковий рів у бік погляду (' + DITCH_TIME + ' с)';
+    else if (bridgeSpot(h)) tip = L('interact') + ' збудувати переправу через рів (' + BRIDGE_TIME + ' с)';
+    else if (h.kit) tip = 'Несеш ' + KIT_NAMES[h.kit] + ' — підійди до техніки';
+    else if (h.stance === 'crouch' && canFortHere(h)) tip = L('interact') + ' облаштувати вогневу позицію (окопчик із мішками, бруствер — у бік погляду)   лежачи — рів';
     else if (canDigHere(h)) tip = L('interact') + ' копати спуск у тунель (у бік погляду)' + (canFortHere(h) ? '   присівши — вогнева позиція' : '');
   }
   if (tip) {

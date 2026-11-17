@@ -272,6 +272,22 @@ function tickWork(h, c, dt) {
   const D = h.working, W = G.W;
   if (c.axisX || c.pressed('up') || c.pressed('down') || c.pressed('fire')) { h.working = null; tipOnce(h, 'Роботу перервано'); return; }
   D.t += dt; h.anim += dt * 6;
+  if (D.kind === 'kit' || D.kind === 'ditch' || D.kind === 'bridge') {
+    h.digT = D.kind === 'kit' ? 0 : 0.2;
+    if (D.kind !== 'kit') digDirt(h.x + h.facing * 14, h.y);
+    else if (RND() < dt * 8) G.parts.push({ type: 'spark', x: D.v.x + rand(-20, 20), y: D.v.y - 20, vx: rand(-60, 60), vy: rand(-90, -20), life: 0.25, max: 0.25 });
+    if (D.t < D.dur) return;
+    h.working = null;
+    if (D.kind === 'kit') {
+      if (D.v.dead || !h.kit) return;
+      if (D.kit === 'cage') D.v.cageHp = 3; else D.v.ram = true;
+      h.kit = null;
+      feed(h.player.name + ' встановив на ' + VEH[D.v.type].name.toLowerCase() + ': ' + KIT_NAMES[D.kit], '#c9a36a');
+    } else if (D.kind === 'ditch') buildDitch(h, D);
+    else if (!bridgeOk(D.d)) buildBridge(h, D.d);
+    Sfx.click();
+    return;
+  }
   if (D.kind === 'fort') {
     h.digT = 0.2;
     digDirt(h.x + h.facing * 12, h.y);

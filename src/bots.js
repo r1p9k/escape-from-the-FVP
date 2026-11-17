@@ -98,6 +98,7 @@ function thinkHuman(b, s, dt) {
       } else m.aimT = 0;
       if (!v.driver || v.mgAmmo <= 0) b.tap(s, 'interact');
     }
+    if (h.seat === 'driver' && G.W.ditches.some((d) => !bridgeOk(d) && (v.dir > 0 ? d.a - v.x : v.x - d.b) > 0 && (v.dir > 0 ? d.a - v.x : v.x - d.b) < 140)) { b.tap(s, 'interact'); m.noVehT = 8; }
     return;
   }
 
@@ -320,6 +321,8 @@ function thinkHuman(b, s, dt) {
       } else if (!ahead && h.stamina > 0.3) s.sprint = true; // позаду хтось — відірватися
     }
   }
+  // рів без переправи попереду — туди не йти
+  if (!stop && G.W.ditches.some((d) => !bridgeOk(d) && (dir > 0 ? d.a - h.x : h.x - d.b) > -4 && (dir > 0 ? d.a - h.x : h.x - d.b) < 40)) stop = true;
   if (!stop) {
     if (dir > 0) s.right = true; else s.left = true;
     s.sprint = (danger || h.openTime > 1.5) && h.stamina > 0.05;

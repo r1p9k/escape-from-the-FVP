@@ -11,7 +11,7 @@ const MAP_LENGTHS = [
   { id: 'huge', name: 'Дуже довга', width: 28000 },
 ];
 const HIDE_HP = { bunker: 3, burrow: 2 };            // скільки вибухів витримує схованка
-const SOLID_HP = { hay: 2, log: 2, block: 3, sandbag: 2 }; // наземні укриття, що руйнуються
+const SOLID_HP = { hay: 2, log: 2, block: 3, sandbag: 2, bridge: 3 }; // наземні укриття, що руйнуються
 
 const LOCATIONS = [
   { id: 'fields', name: 'Поля' },
@@ -369,6 +369,8 @@ function building(W, x, floors, w) {
     }
   }
   if (RND() < 0.4) W.props.push({ type: 'brick', x: x + 26 + rand(20, 60), y: roofY - 14 });
+  // майстерня на першому поверсі (не в кожній будівлі): верстат, де беруть мангал чи таран для техніки
+  if (RND() < 0.4 && w > 180) W.shops.push({ x: x + w * (RND() < 0.5 ? 0.62 : 0.4), y: g, b: bref });
   // частини будівлі знають, чия вони (для обвалу), і початкова площа конструкції
   for (let i = s0; i < W.solids.length; i++) W.solids[i].bld = bref;
   bref.area0 = W.solids.slice(s0).reduce((a, s) => a + s.w * s.h, 0);
@@ -393,7 +395,7 @@ function makeWorld(loc, seed, lenId, team) {
   const W = {
     loc, width, seed, lenId: ML.id, team: !!team,
     ground: new Float32Array(Math.ceil(width / GS) + 4),
-    solids: [], covers: [], hides: [], ladders: [], pickups: [], vehicles: [], trees: [], bushes: [], backs: [], decor: [], props: [], mounts: [],
+    solids: [], covers: [], hides: [], ladders: [], pickups: [], vehicles: [], trees: [], bushes: [], backs: [], decor: [], props: [], mounts: [], shops: [], ditches: [],
   };
   const themeAt = (x) => (loc !== 'mixed' ? loc : x < width * 0.36 ? 'fields' : x < width * 0.66 ? 'forest' : 'city');
   W.themeAt = themeAt;
