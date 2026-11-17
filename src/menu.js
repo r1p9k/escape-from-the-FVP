@@ -133,8 +133,10 @@ function drawMenuScene(ctx, w, h, rdt) {
   MENU.scroll += MENU_HUMAN.vx * S * dt;
   const sc = MENU.scroll;
   // тряска від вибухів
-  MENU.shake = Math.max(0, MENU.shake - rdt * 2.4);
-  const shx = (Math.random() - 0.5) * MENU.shake * 9, shy = (Math.random() - 0.5) * MENU.shake * 7;
+  MENU.shake = Math.max(0, MENU.shake - rdt * 1.6);
+  MENU.rt = (MENU.rt || 0) + rdt;
+  const sk = MENU.shake * MENU.shake, rt = MENU.rt;
+  const shx = sk * 15 * (Math.sin(rt * 51) * 0.55 + Math.sin(rt * 33 + 1.7) * 0.45), shy = sk * 12 * (Math.sin(rt * 46 + 0.6) * 0.55 + Math.sin(rt * 29 + 2.9) * 0.45);
   ctx.save();
   ctx.translate(shx, shy);
 
@@ -346,7 +348,7 @@ function menuUpdateDrones(L, dt) {
   const S = L.S;
   for (const d of MENU.drones) {
     // ціль прив'язана до екрана: на середньому плані — обабіч бійця, на ближньому — обабіч кадру
-    const tx = d.troop ? d.troop.wx - MENU.scroll * d.z : d.rel != null ? L.hx + d.rel : d.sx;
+    const tx = d.troop ? d.troop.wx - MENU.scroll * d.z + (d.off || 0) : d.rel != null ? L.hx + d.rel : d.sx;
     const dx = tx - d.x, dy = d.ty - d.y, dist = Math.hypot(dx, dy), sp = d.v * dt;
     if (dist <= sp) { d.dead = true; menuBoom(L, tx + MENU.scroll * d.z, d.ty, d.z, false); if (d.troop) MENU.booms[MENU.booms.length - 1].front = true; continue; }
     d.x += (dx / dist) * sp; d.y += (dy / dist) * sp;
@@ -377,7 +379,7 @@ function menuUpdateTroops(L, dt, rdt) {
     if (!T.hunted && T.onT > T.huntAt && X > L.w * 0.08) {
       T.hunted = true;
       const from = T.facing > 0 ? 1 : -1;
-      MENU.drones.push({ z: T.z, troop: T, rel: null, sx: null, x: X + from * mr(0.18, 0.32) * L.w, y: -30 * S - mr(0, 40) * S, ty: gy - 2 * S, v: 300 * S * T.z, ang: 0, hits: 0, need: 1e9 });
+      MENU.drones.push({ z: T.z, troop: T, rel: null, sx: null, x: X + from * mr(0.18, 0.32) * L.w, y: -30 * S - mr(0, 40) * S, ty: gy - 2 * S, v: 300 * S * T.z, ang: 0, hits: 0, need: 1e9, off: (MENU.rnd() < 0.5 ? -1 : 1) * mr(2, 9) * S * T.z });
     }
     // ціль: свій мисливець, інакше будь-який дрон далекого плану, інакше — небо
     const tgt = MENU.drones.find((d) => d.troop === T) || MENU.drones.find((d) => d.z === T.z && d.y < gy - 20 * Sz);
@@ -445,7 +447,7 @@ function menuBoom(L, wx, y, z, air) {
   if (!air) for (const T of MENU.troops) if (!T.dead && T.z === z && Math.abs(T.wx - wx) < 16 * S) {
     // кожна смерть своя: що ближче до вибуху — то далі відкидає; відкидає на спину, перекидає або людина осідає
     const d = Math.abs(T.wx - wx) / (16 * S), r = MENU.rnd();
-    T.dead = true; T.deadT = 0; T.away = T.wx >= wx ? 1 : -1;
+    T.dead = true; T.deadT = 0; T.away = Math.abs(T.wx - wx) < 1.5 * S ? (MENU.rnd() < 0.5 ? -1 : 1) : T.wx > wx ? 1 : -1; // майже точне влучання — у випадковий бік
     T.dk = d < 0.35 && r < 0.4 ? 'flip' : d > 0.6 && r < 0.6 ? 'crumple' : r < 0.25 ? 'crumple' : 'throw';
     T.flyV = (1.35 - d * 0.75) * mr(0.8, 1.15); T.spin = T.dk === 'flip' ? mr(1.6, 2.1) : mr(0.7, 1.3);
     T.fly = T.dk === 'crumple' ? mr(0.6, 0.9) : mr(0.45, 0.8); T.del = mr(0, 0.035); // відлітає майже одразу з вибухом
@@ -453,7 +455,9 @@ function menuBoom(L, wx, y, z, air) {
   }
   MENU.booms.push({ wx, y, z, t: 0, max: MENU_SHEETS.boom.frames && !air ? 2.9 : 0.45, air, flip: MENU.rnd() < 0.5 });
   const near = z === MENU_Z.near, far = z === MENU_Z.far;
-  MENU.shake = Math.min(1, MENU.shake + (far ? 0.04 : near ? 0.9 : 0.55));
+  // наскільки вибух близько до глядача: ближній план — впритул, середній — залежно від відстані до бійця
+  const close = near ? 1 : far ? 0 : Math.max(0, Math.min(1, 1 - Math.abs(X - L.hx) / (280 * L.S)));
+  MENU.shake = Math.min(1.6, MENU.shake + (far ? 0.3 : near ? 1.4 : 0.6 + 0.7 * close));
   MENU.flash = Math.max(MENU.flash, far ? 0.06 : near ? 0.7 : 0.4); // далекі вибухи майже не підсвічують сцену (інакше під час нальоту — блимання) MENU.flashX = X; MENU.flashY = y;
   const P = MENU.parts;
   if (!air) {
@@ -477,7 +481,7 @@ function menuBoom(L, wx, y, z, air) {
   // темний дим після вогню
   for (let i = 0; i < (air ? 3 : 6); i++) MENU.smoke.push({ k: 'smoke', z, wx: wx + mr(-12, 12) * S, y: y - mr(10, 40) * S, vx: mr(-10, 10) * S, vy: -mr(15, 45) * S, r: mr(14, 24) * S, life: mr(3.5, 6), max: 6, rot: mr(0, 6), spin: mr(-0.6, 0.6), v: (MENU.rnd() * 5) | 0 });
   // боєць пригинається від близького вибуху
-  if (menuMusic.on && !far) menuSfxBoom(near ? 1 : 0.7);
+  if (menuMusic.on && !far) menuSfxBoom(near ? 1 : 0.7, close);
   else if (menuMusic.on) menuSfxBoom(0.35);
 }
 function menuUpdateFx(L, dt) {
@@ -747,13 +751,15 @@ function menuNoiseHit(B, t, { f0, f1, fT, at, dec, vol, rate = 1, send = 0.4, or
   if (send > 0) { const sg = ctx.createGain(); sg.gain.value = send; g.connect(sg); sg.connect(B.rev); }
   src.start(t, Math.random() * 3); src.stop(t + dec + 0.05);
 }
-function menuSfxBoom(vol) {
+function menuSfxBoom(vol, close = 0) {
   const B = menuSfxBus(); if (!B) return;
   const t = B.ctx.currentTime;
   // удар: короткий глухий сплеск
   menuNoiseHit(B, t, { f0: 700, f1: 160, fT: 0.12, at: 0.006, dec: 0.35, vol: 0.9 * vol, send: 0.6 });
   // суб: тиск у грудях, шум нижче 90 Гц (без висоти тону)
-  menuNoiseHit(B, t, { f0: 110, f1: 55, fT: 0.5, at: 0.015, dec: 0.9, vol: 1.3 * vol, send: 0.15, order: 3 });
+  menuNoiseHit(B, t, { f0: 110, f1: 55, fT: 0.5, at: 0.015, dec: 0.9, vol: 1.3 * vol * (1 + 0.5 * close), send: 0.15, order: 3 });
+  // близько — глибокий тиск нижче 60 Гц, довший (відчувається тілом)
+  if (close > 0.05) menuNoiseHit(B, t, { f0: 75, f1: 30, fT: 1.1, at: 0.02, dec: 1.8, vol: 2.4 * vol * close, send: 0.08, order: 4 });
   // гуркіт ґрунту, що осідає
   menuNoiseHit(B, t + 0.03, { f0: 300, f1: 80, fT: 2.4, at: 0.12, dec: 3, vol: 0.45 * vol, rate: 0.6, send: 0.5 });
 }
