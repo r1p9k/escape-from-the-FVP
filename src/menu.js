@@ -407,7 +407,7 @@ function menuDrawTroops(ctx, L) {
     // смерть: спершу політ (тіло відкидає від вибуху, воно обертається), потім — лежить
     const FLY = T.fly || 0.6, aw = T.away || 1, tt = T.dead ? Math.max(0, T.deadT - (T.del || 0)) : 0;
     const flying = T.dead && tt < FLY, ft = Math.min(tt, FLY), k = ft / FLY, crumple = T.dk === 'crumple';
-    const hd = crumple ? T.cd : T.dk === 'flip' ? -aw : aw; // куди лягає голова (через голову — на інший бік)
+    const hd = crumple ? T.cd : aw; // куди падає тіло
     let offX = 0, offY = 0, rot = 0, st = T.dead ? 'stand' : T.stance;
     if (T.dead && crumple) { // осідає на коліна й падає без польоту
       st = 'crouch';
@@ -416,12 +416,15 @@ function menuDrawTroops(ctx, L) {
       offX = aw * 140 * Sz * ft * T.flyV; offY = flying ? -4 * 34 * T.flyV * k * (1 - k) * Sz : 0;
       rot = T.dk === 'flip' ? aw * (Math.PI * 1.5) * Math.pow(k, 0.8) : aw * (Math.PI / 2) * Math.pow(k, 0.5 + 0.6 * T.spin); // закінчує рівно лежачи — без стрибка
     }
-    // у польоті — «ганчір'яна лялька»: дивиться на вибух (падає горілиць), руки й ноги бовтаються
-    const rag = flying ? (crumple ? (k > 0.3 ? { w: tt * 9 + (T.seed || 0), f: 0.5 * Math.min(1, (k - 0.3) / 0.3), arch: 0.2, low: true } : null)
-      : { w: tt * 13 + (T.seed || 0), f: Math.min(1, k * 4) * (1 - 0.4 * k), arch: Math.min(1, k * 3) }) : null;
-    const fFace = flying ? (crumple ? T.cd : -aw) : null;
-    const h = Object.assign({}, MENU_HUMAN, { rag, cine: false, vx: 0, anim: 0, facing: T.dead && !flying ? -hd : fFace != null ? fFace : T.facing, stance: rag ? 'stand' : st, aiming: !T.dead, aimA: T.aimA, fireCd: T.fireCd, dead: T.dead && !flying, weapon: T.dead && (flying ? !crumple || k > 0.3 : true) ? null : MENU_HUMAN.weapon });
-    if (flying && rot) { cx.translate(0, -24 + 19 * Math.abs(Math.sin(rot))); cx.rotate(rot); cx.translate(0, 24); } // обертання навколо стегон; лягаючи, стегна опускаються до землі
+    // «ганчір'яна лялька»: у польоті руки й ноги бовтаються; після падіння тіло лишається в тій позі,
+    // у якій упало (горілиць, долілиць, із розкинутими руками чи підібганими ногами) — поза завмирає
+    const rag = T.dead ? (crumple ? (k > 0.3 ? { w: ft * 9 + (T.seed || 0), f: 0.5 * Math.min(1, (k - 0.3) / 0.3), arch: 0.2, low: true } : null)
+      : { w: ft * 13 + (T.seed || 0), f: Math.min(1, k * 4) * (1 - 0.4 * k), arch: Math.min(1, k * 3) }) : null;
+    const h = Object.assign({}, MENU_HUMAN, { rag, cine: false, vx: 0, anim: 0, facing: T.dead ? (crumple ? T.cd : -aw) : T.facing, stance: rag ? 'stand' : st, aiming: !T.dead, aimA: T.aimA, fireCd: T.fireCd, dead: false, weapon: T.dead && (!crumple || k > 0.3) ? null : MENU_HUMAN.weapon });
+    if (T.dead && rot) { // обертання навколо стегон; лягаючи, стегна опускаються до землі
+      const pv = rag && rag.low ? 15 : 24;
+      cx.translate(0, -pv + (pv - 5) * Math.abs(Math.sin(rot))); cx.rotate(rot); cx.translate(0, pv);
+    }
     drawHuman(cx, h, MENU.t, 1);
     cx.setTransform(1, 0, 0, 1, 0, 0);
     cx.globalCompositeOperation = 'source-atop'; cx.fillStyle = '#140810'; cx.fillRect(0, 0, W, Hh);
@@ -445,7 +448,7 @@ function menuBoom(L, wx, y, z, air) {
     T.dead = true; T.deadT = 0; T.away = T.wx >= wx ? 1 : -1;
     T.dk = d < 0.35 && r < 0.4 ? 'flip' : d > 0.6 && r < 0.6 ? 'crumple' : r < 0.25 ? 'crumple' : 'throw';
     T.flyV = (1.35 - d * 0.75) * mr(0.8, 1.15); T.spin = T.dk === 'flip' ? mr(1.6, 2.1) : mr(0.7, 1.3);
-    T.fly = T.dk === 'crumple' ? mr(0.6, 0.9) : mr(0.45, 0.8); T.del = mr(0, 0.18);
+    T.fly = T.dk === 'crumple' ? mr(0.6, 0.9) : mr(0.45, 0.8); T.del = mr(0, 0.035); // відлітає майже одразу з вибухом
     T.cd = MENU.rnd() < 0.5 ? 1 : -1; T.seed = mr(0, 6.28); // куди осідає; власна фаза бовтання
   }
   MENU.booms.push({ wx, y, z, t: 0, max: MENU_SHEETS.boom.frames && !air ? 2.9 : 0.45, air, flip: MENU.rnd() < 0.5 });
