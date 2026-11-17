@@ -375,8 +375,10 @@ function updateHuman(h, dt) {
   // «Позиція» + «Дія»: сітка; у будівлі з сіткою біля вікна — вогнева позиція
   if (c.pressed('interact') && c.held('aim')) { const mt = mountTarget(h); if (mt) startMount(h, mt); else placeNet(h); }
   else if (c.pressed('interact')) {
-    const m = nearMount(h), v = nearVehicle(h);
-    if (m) useMount(h, m);
+    const m = nearMount(h), v = nearVehicle(h), kv = kitVehicle(h), shop = nearShop(h);
+    if (kv) { h.working = { kind: 'kit', t: 0, dur: 3, v: kv, kit: h.kit }; h.vx = 0; } // встановити обладнання на техніку
+    else if (shop) takeKit(h);
+    else if (m) useMount(h, m);
     else if (v) enterVehicle(h, v);
     else {
       const pk = nearPickup(h);
@@ -391,7 +393,9 @@ function updateHuman(h, dt) {
         else if (patchAt(h)) startPatch(h, patchAt(h));
         else if (pipeAt(W, h.x, h.y)) startDigExit(h, pipeAt(W, h.x, h.y));
         else if (resumeDig(h)) { /* докопує почате */ }
-        else if (h.stance !== 'stand' && canFortHere(h)) startFort(h);
+        else if (h.stance === 'prone' && canDitchHere(h)) { const [a, b] = ditchSpan(h); h.working = { kind: 'ditch', t: 0, dur: DITCH_TIME, a, b }; h.vx = 0; }
+        else if (bridgeSpot(h)) { h.working = { kind: 'bridge', t: 0, dur: BRIDGE_TIME, d: bridgeSpot(h) }; h.vx = 0; }
+        else if (h.stance === 'crouch' && canFortHere(h)) startFort(h);
         else if (canDigHere(h)) startDigEntry(h);
       }
     }
@@ -1044,7 +1048,7 @@ function hurt(h, dmg, src) {
 // відновлення: з останньої схованки чи будівлі з маскувальною сіткою, інакше зі старту
 function respawnHuman(h) {
   const W = G.W, sp = h.spawn;
-  Object.assign(h, { gasmask: false, lost: null, gibbed: false, dead: false, hp: 100, stance: 'stand', vx: 0, vy: 0, armor: 0, weapon: null, hidden: null, vehicle: null, seat: null,
+  Object.assign(h, { kit: null, gasmask: false, lost: null, gibbed: false, dead: false, hp: 100, stance: 'stand', vx: 0, vy: 0, armor: 0, weapon: null, hidden: null, vehicle: null, seat: null,
     gasT: 0, smokeT: 0, reveal: 0, openTime: 0, diving: false, climb: null, onLadder: false, aiming: false, hideAnim: null, hurtT: 0, stamina: 1, exhausted: false, protT: 3, tun: null, digging: null, carry: null, mount: null, working: null, grenades: Math.max(1, h.grenades) });
   if (G.mode === 'team') { h.hidden = null; teamRespawn(h); }
   else if (sp && sp.hide && !sp.hide.ruined) { h.x = sp.hide.x; h.y = sp.hide.y; h.hidden = sp.hide; }
@@ -1210,12 +1214,17 @@ function updateVehicles(dt) {
     let ny = gAt(W, nx), blocked = false;
     // на дибках мотоцикл заїжджає на невисокі перешкоди; із перешкоди — з'їжджає
     const climb = v.type === 'moto' && (v.tilt || 0) < -0.3 && Math.abs(v.vx) > 40 ? 52 : 10;
+    const rammed = [];
     for (const s of solidsNear(W, nx - T.len / 2, nx + T.len / 2)) {
-      if (s.thin || s.x >= nx + T.len / 2 || s.x + s.w <= nx - T.len / 2) continue;
+      if (s.thin || s.dead || s.x >= nx + T.len / 2 || s.x + s.w <= nx - T.len / 2) continue;
+      if (s.y >= v.y - 3 && s.y < ny) { ny = s.y; continue; } // опора під колесами (переправа, верх перешкоди)
       if (!(s.y < ny - 12 && s.y + s.h > ny - T.h)) continue; // не на рівні корпусу
       if (ny - s.y <= climb || (v.y <= s.y + 3 && s.y < ny)) { ny = Math.min(ny, s.y); continue; } // заїхати зверху
+      if (RAMMABLE[s.type] && Math.abs(v.vx) > 150) { rammed.push(s); continue; } // на швидкості — проламати
       blocked = true; break;
     }
+    if (rammed.length && !blocked) ramObstacles(v, rammed);
+    if (v.dead) continue;
     if (blocked) {
       if (Math.abs(v.vx) > 250) { for (const o of [v.driver, v.gunner]) if (o) hurt(o, 8); }
       v.vx = 0;
@@ -1225,9 +1234,104 @@ function updateVehicles(dt) {
       else { v.y = ny; v.vy = 0; }
     }
     v.ang = v.y < gAt(W, v.x) - 3 ? 0 : Math.atan2(gAt(W, v.x + T.len / 2) - gAt(W, v.x - T.len / 2), T.len);
-    if (v.hp < T.hp && RND() < dt * 8) G.parts.push({ type: 'smoke', x: v.x, y: v.y - T.h, vx: rand(-10, 10), vy: -40, life: 1.6, max: 1.6, size: 10 });
+    if ((v.hp < T.hp || v.rams) && RND() < dt * 8) G.parts.push({ type: 'smoke', x: v.x, y: v.y - T.h, vx: rand(-10, 10), vy: -40, life: 1.6, max: 1.6, size: 10 });
     if (v.driver && Math.abs(v.vx) > 100 && RND() < dt * 20) G.parts.push({ type: 'dust', x: v.x - v.dir * T.len / 2, y: v.y - 4, vx: -v.dir * 40, vy: -20, life: 0.8, max: 0.8, size: 8 });
   }
+}
+// таран: перешкода руйнується; техніка без тарана — пошкоджена, після другої перешкоди — розбита
+const RAMMABLE = { hay: 1, log: 1, block: 1, sandbag: 1, wreck: 1, rubble: 1, bridge: 0 };
+function ramObstacles(v, list) {
+  const W = G.W, T = VEH[v.type];
+  for (const s of list) {
+    s.dead = true;
+    for (let i = 0; i < 14; i++) G.parts.push({ type: 'debris', x: s.x + rand(0, s.w), y: s.y + rand(0, s.h), vx: v.dir * rand(60, 320), vy: rand(-320, -60), life: rand(0.6, 1.2), max: 1.2, col: s.type === 'hay' ? '#c9a74b' : s.type === 'log' ? '#6b4e2e' : '#7b736a' });
+  }
+  W.solids = W.solids.filter((s) => !s.dead); buildBuckets(W);
+  Sfx.boom(false);
+  v.vx *= 0.55;
+  const occ = [v.driver, v.gunner].filter(Boolean);
+  if (v.ram) { feed(T.name + ' проламав перешкоду тараном', '#c9a36a'); return; }
+  v.rams = (v.rams || 0) + 1;
+  if (v.rams >= 2) { destroyVehicle(v); occ.forEach((o) => hurt(o, 45, 'blast')); feed(T.name + ' розбито об перешкоду', '#f2994a'); }
+  else { v.hp = Math.min(v.hp, Math.max(1, T.hp - 1)); v.crashSmoke = true; occ.forEach((o) => hurt(o, 10, 'fall')); feed(T.name + ' пошкоджено: ще одна перешкода — і кінець', '#f2994a'); }
+}
+// ---------- Протитанковий рів і переправа ----------
+const DITCH_W = 270, DITCH_D = 130, DITCH_TIME = 8, BRIDGE_TIME = 5;
+function ditchAt(x) { return G.W.ditches.find((d) => x > d.a && x < d.b) || null; }
+function bridgeOk(d) { return d.bridge && !d.bridge.dead && G.W.solids.includes(d.bridge); }
+function ditchSpan(h) { const a = h.facing > 0 ? h.x + 18 : h.x - 18 - DITCH_W; return [a, a + DITCH_W]; }
+function canDitchHere(h) {
+  const W = G.W;
+  if (h.vehicle || h.hidden || !h.onGround || h.stance !== 'prone' || Math.abs(h.y - gAt(W, h.x)) > 3) return false;
+  const [a, b] = ditchSpan(h);
+  if (a < 150 || b > W.width - 150) return false;
+  if (maxGround(W, a, b) - minGround(W, a, b) > 24) return false;
+  if (W.pipes.some((sp) => b > sp.x0 - 30 && a < sp.x1 + 30) || rockIn(a - 10, b + 10)) return false;
+  if (W.ditches.some((d) => b > d.a - 60 && a < d.b + 60)) return false;
+  if (W.hides.some((sp) => sp.type !== 'pipe' && sp.x > a - 40 && sp.x < b + 40)) return false;
+  if (W.covers.some((c) => c.type === 'trench' && c.x < b + 30 && c.x + c.w > a - 30)) return false;
+  if (W.vehicles.some((v) => v.x > a - 60 && v.x < b + 60) || W.pads.some((p) => p.x > a - 80 && p.x < b + 80) || (W.shelter && W.shelter.x > a - 200 && W.shelter.x < b + 100)) return false;
+  return !solidsNear(W, a - 20, b + 20).some((s) => s.x < b + 20 && s.x + s.w > a - 20 && s.y < gAt(W, s.x + s.w / 2) + 2);
+}
+function buildDitch(h, D) {
+  const W = G.W, a = D.a, b = D.b, g = minGround(W, a, b);
+  for (let i = Math.max(0, Math.floor(a / GS)); i <= Math.min(W.ground.length - 1, Math.ceil(b / GS)); i++) {
+    const e = Math.min(i * GS - a, b - i * GS);
+    W.ground[i] = Math.max(W.ground[i], g + DITCH_D * clamp(e / 10, 0, 1)); // майже прямовисні стінки
+  }
+  W.ditches.push({ a, b, g, bridge: null });
+  cavDirty(W);
+  for (const pk of W.pickups) if (pk.x > a && pk.x < b) pk.y = surfaceY(W, pk.x);
+  for (const pr of W.props) if (pr.x > a && pr.x < b) pr.y = surfaceY(W, pr.x);
+  for (const mi of G.mines) if (mi.x > a && mi.x < b) mi.y = gAt(W, mi.x);
+  feed(h.player.name + ' викопав протитанковий рів', '#c8a26a');
+}
+// на краю рову — збудувати переправу
+function bridgeSpot(h) {
+  if (h.vehicle || h.hidden || !h.onGround || h.stance === 'prone') return null;
+  for (const d of G.W.ditches) {
+    if (bridgeOk(d)) continue;
+    if ((h.x > d.a - 34 && h.x < d.a + 2) || (h.x < d.b + 34 && h.x > d.b - 2)) if (Math.abs(h.y - d.g) < 8) return d;
+  }
+  return null;
+}
+function buildBridge(h, d) {
+  const W = G.W, s = { type: 'bridge', x: d.a - 14, y: d.g - 3, w: d.b - d.a + 28, h: 9, hp: 3 };
+  W.solids.push(s); buildBuckets(W);
+  d.bridge = s;
+  feed(h.player.name + ' збудував переправу через рів', '#c9a36a');
+}
+// у рів — не вибратися: люди гинуть, техніка розбивається
+function updateDitches() {
+  const W = G.W;
+  if (!W.ditches.length) return;
+  for (const h of G.humans) {
+    if (h.dead || h.saved || h.vehicle || h.hidden) continue;
+    const d = ditchAt(h.x);
+    if (d && h.x > d.a + 4 && h.x < d.b - 4 && h.y > d.g + 45) { hurt(h, 999, 'fall'); feed(h.player.name + ' загинув у рову', '#f2994a'); }
+  }
+  for (const v of W.vehicles) {
+    if (v.dead) continue;
+    const d = ditchAt(v.x);
+    if (d && v.y > d.g + 25) {
+      const occ = [v.driver, v.gunner].filter(Boolean);
+      destroyVehicle(v); occ.forEach((o) => hurt(o, 999, 'fall'));
+      feed(VEH[v.type].name + ' впав у рів', '#f2994a');
+    }
+  }
+}
+// ---------- Майстерня: мангал (захист від скидів) або таран (проламувати перешкоди) ----------
+const KIT_NAMES = { cage: 'мангал (захист від скидів)', ram: 'таран (проламувати перешкоди)' };
+function nearShop(h) {
+  return G.W.shops.find((s) => !s.b.ruined && Math.abs(s.x - h.x) < 30 && Math.abs(s.y - h.y) < 12) || null;
+}
+function kitVehicle(h) {
+  return h.kit ? G.W.vehicles.find((v) => !v.dead && Math.abs(v.x - h.x) < VEH[v.type].len / 2 + 18 && Math.abs(v.y - h.y) < 40) || null : null;
+}
+function takeKit(h) {
+  h.kit = h.kit === 'cage' ? 'ram' : 'cage';
+  feed(h.player.name + ' взяв ' + KIT_NAMES[h.kit] + ' — встановити на техніку', '#c9a36a');
+  Sfx.click();
 }
 function destroyVehicle(v) {
   v.dead = true; v.burn = 14; v.vx = 0;
@@ -1645,6 +1749,13 @@ function explosion(x, y, power, radius, direct) {
   for (const h of G.humans) if (h.vehicle) shielded.add(h);
   for (const v of W.vehicles) {
     if (v.dead) continue;
+    if (rectDist(x, y, vehRect(v)) < radius * 0.6 && v.cageHp > 0) {
+      // мангал (сітка над технікою) приймає вибух на себе
+      v.cageHp--;
+      for (let i = 0; i < 10; i++) G.parts.push({ type: 'spark', x: v.x + rand(-30, 30), y: v.y - VEH[v.type].h - 6, vx: rand(-160, 160), vy: rand(-220, -40), life: 0.4, max: 0.4 });
+      feed(v.cageHp > 0 ? 'Мангал прийняв удар' : 'Мангал зруйновано', '#c9a36a');
+      continue;
+    }
     if (rectDist(x, y, vehRect(v)) < radius * 0.45) {
       v.hp--;
       const occ = [v.driver, v.gunner].filter(Boolean);
@@ -1782,6 +1893,7 @@ function updateGame(dt) {
   G.time += dt;
   for (const h of G.humans) updateHuman(h, dt);
   updateVehicles(dt);
+  updateDitches();
   for (const dp of G.dps) updateDronePlayer(dp, dt);
   for (const d of G.drones.slice()) updateDrone(d, dt);
   for (const d of G.drones) d.inBush = droneInBush(d);
