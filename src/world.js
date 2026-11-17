@@ -236,7 +236,7 @@ const F = {
   },
 
   burrow(W, x) {
-    W.hides.push({ type: 'burrow', x });
+    W.hides.push({ type: 'burrow', x, dir: RND() < 0.5 ? -1 : 1 });
     return 70;
   },
 

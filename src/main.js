@@ -23,7 +23,7 @@ const LOC_INFO = {
   mixed: 'Поля → ліс → місто на одній мапі',
 };
 const ACTION_NAMES = [
-  ['left', 'right', 'up', 'down', 'Рух'], ['sprint', 'Прискорення'], ['interact', 'Дія'],
+  ['left', 'right', 'up', 'down', 'Рух'], ['sprint', 'Прискорення'], ['interact', 'Дія'], ['dig', 'Копати'],
   ['fire', 'Вогонь'], ['special', 'Спец'], ['aim', 'Позиція / огляд'],
 ];
 

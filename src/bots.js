@@ -219,7 +219,7 @@ function thinkHuman(b, s, dt) {
       else if (fd > 230 && h.onGround && !(m.fortCd > 0) && canFortHere(h)) {
         // укриття нема — окопатися обличчям до ворога
         stop = true; s.aim = false; s.fire = false; h.facing = fdir;
-        if (h.stance === 'stand') b.tap(s, 'down'); else { b.tap(s, 'interact'); m.fortCd = 15; }
+        if (h.stance === 'stand') b.tap(s, 'down'); else { b.tap(s, 'dig'); m.fortCd = 15; }
       } else { stop = true; if (h.stance === 'stand' && !s.aim) b.tap(s, 'down'); }
     }
   }

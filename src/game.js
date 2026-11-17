@@ -389,17 +389,12 @@ function updateHuman(h, dt) {
         else if (pr) takeProp(h, pr);
         else if (ft) startPly(h, ft);
         else if (h.carry) dropCarry(h);
-        else if (rubbleAt(h)) startRubble(h, rubbleAt(h));
-        else if (patchAt(h)) startPatch(h, patchAt(h));
-        else if (pipeAt(W, h.x, h.y)) startDigExit(h, pipeAt(W, h.x, h.y));
-        else if (resumeDig(h)) { /* докопує почате */ }
-        else if (h.stance === 'prone' && canDitchHere(h)) { const [a, b] = ditchSpan(h); h.working = { kind: 'ditch', t: 0, dur: DITCH_TIME, a, b }; h.vx = 0; }
-        else if (bridgeSpot(h)) { h.working = { kind: 'bridge', t: 0, dur: BRIDGE_TIME, d: bridgeSpot(h) }; h.vx = 0; }
-        else if (h.stance === 'crouch' && canFortHere(h)) startFort(h);
-        else if (canDigHere(h)) startDigEntry(h);
+        else if (digAction(h, false, true)) tipOnce(h, 'Копати — [' + c.label('dig') + ']');
       }
     }
   }
+  // «Копати» — лопата: завали, перекриття, виходи, спуски, окопчик; із «Бігом» — протитанковий рів
+  if (c.pressed('dig') && !h.working && !h.carry) digAction(h, c.held('sprint'), false);
   // «Альоша»: автонаведення на дрони, стріляти можна й на бігу
   const mt = !h.aiming && c.pressed('fire') && !(h.meleeCd > 0) ? meleeTarget(h) : null;
   if (mt) melee(h, mt); // впритул — рукопашна
@@ -726,7 +721,7 @@ function tunnelDig(h, dir, dt) {
   const d = Math.min(DIG_SPD * dt, Math.abs(lim - end));
   if (d <= 0) return;
   const nx = end + dir * (d + 4);
-  if (rockIn(nx - 2, nx + 2)) { tipOnce(h, 'Камінь — лопатою не прокопати. [' + h.player.ctrl.label('interact') + '] — вихід тут'); return; }
+  if (rockIn(nx - 2, nx + 2)) { tipOnce(h, 'Камінь — лопатою не прокопати. [' + h.player.ctrl.label('dig') + '] — вихід тут'); return; }
   if (dir < 0) sp.a -= d; else sp.b += d;
   h.digT = 0.2; h.anim += dt * 6;
   digDirt(end + dir * 6, tunFloor(W, sp, end));
@@ -742,7 +737,7 @@ function digRubble(h, br, dt) {
   h.digT = 0.2; h.anim += dt * 6;
   digDirt(h.x + h.facing * 10, h.y);
   cavDirty(G.W);
-  if (br.fill <= 0.02) { br.fill = 0; tipOnce(h, 'Завал розкопано — тепер залатати перекриття [' + h.player.ctrl.label('interact') + ']'); }
+  if (br.fill <= 0.02) { br.fill = 0; tipOnce(h, 'Завал розкопано — тепер залатати перекриття [' + h.player.ctrl.label('dig') + ']'); }
 }
 // прокопав до іншої порожнини (тунель, колектор, спуск) — з'єднати
 function joinCavities(sp, dir) {
@@ -820,6 +815,24 @@ function startDigExit(h, sp) {
   e.prog = 0; e.up = 'below'; sp.exits.push(e); cavDirty(W);
   h.digging = { kind: 'exit', sp, e, t: 0, dur: e.len / DIG_SPD };
   h.vx = 0;
+}
+// що зробить лопата тут (dry — лише перевірити)
+function digAction(h, ditch, dry) {
+  const W = G.W, pa = pipeAt(W, h.x, h.y);
+  if (h.vehicle || h.hidden || h.mount || h.onLadder) return false;
+  if (ditch) {
+    if (!canDitchHere(h)) { if (!dry) tipOnce(h, 'Рову тут не викопати: потрібне рівне вільне місце'); return false; }
+    if (!dry) { const [a, b] = ditchSpan(h); h.working = { kind: 'ditch', t: 0, dur: DITCH_TIME, a, b }; h.vx = 0; }
+    return true;
+  }
+  if (rubbleAt(h)) { if (!dry) startRubble(h, rubbleAt(h)); return true; }
+  if (patchAt(h)) { if (!dry) startPatch(h, patchAt(h)); return true; }
+  if (pa) { if (!dry) startDigExit(h, pa); return true; }
+  if (resumeDig(Object.assign({}, h, { digging: null }))) { if (!dry) resumeDig(h); return true; }
+  if (bridgeSpot(h)) { if (!dry) { h.working = { kind: 'bridge', t: 0, dur: BRIDGE_TIME, d: bridgeSpot(h) }; h.vx = 0; } return true; }
+  if (h.stance !== 'stand' && canFortHere(h)) { if (!dry) startFort(h); return true; }
+  if (h.stance === 'stand' && canDigHere(h)) { if (!dry) startDigEntry(h); return true; }
+  return false;
 }
 // новий спуск із поверхні в бік погляду: якщо внизу вже є тунель чи колектор — до нього
 function startDigEntry(h) {
@@ -967,7 +980,7 @@ function humanInVehicle(h, c, dt) {
   if (h.seat === 'driver') {
     v.input = c.axisX; h.facing = v.dir;
     v.brake = c.held('aim'); // пробіл — гальмо
-    v.lean = v.type === 'moto' ? (c.held('up') ? -0.55 : c.held('down') ? 0.3 : 0) : 0;
+    v.lean = v.type === 'moto' ? (c.held('up') ? -1 : c.held('down') ? 1 : 0) : 0; // ↑ — на заднє колесо / у повітрі носом угору
   }
   else {
     // кулеметник: ←/→ — бік, ↑/↓ — кут
@@ -1202,13 +1215,15 @@ function updateVehicles(dt) {
     const T = VEH[v.type];
     const inp = v.driver && v.fuel > 0 && !v.immob && !v.brake ? v.input : 0;
     if (!v.driver) { v.brake = false; v.lean = 0; }
-    if (v.type === 'moto') v.tilt = approach(v.tilt || 0, Math.abs(v.vx) > 20 || v.lean > 0 ? v.lean || 0 : 0, 2.6 * dt);
+    if (v.type === 'moto') motoTilt(v, T, inp, dt);
     if (v.immob && RND() < dt * 4) G.parts.push({ type: 'smoke', x: v.x + rand(-20, 20), y: v.y - 10, vx: rand(-10, 10), vy: -30, life: 1.4, max: 1.4, size: 8 });
-    if (inp) {
+    if (v.air) { /* у повітрі газ і гальмо не діють */ }
+    else if (inp) {
       v.vx = approach(v.vx, inp * T.max, T.acc * dt); v.dir = inp;
       v.fuel -= dt;
       if (v.fuel <= 0) { v.fuel = 0; feed(T.name + ': пальне скінчилося', '#f2994a'); }
     } else v.vx = approach(v.vx, 0, (v.brake ? 950 : v.driver ? 300 : 260) * dt);
+    if (v.type === 'moto' && !v.air) v.vx += GRAV * Math.sin(v.ang || 0) * 0.55 * dt; // схил: униз розганяє, угору гальмує
     if (v.brake && Math.abs(v.vx) > 120 && RND() < dt * 30) G.parts.push({ type: 'dust', x: v.x - v.dir * T.len * 0.35, y: v.y - 3, vx: v.dir * 30, vy: -15, life: 0.6, max: 0.6, size: 7 });
     const nx = clamp(v.x + v.vx * dt, 30, W.width - 30);
     let ny = gAt(W, nx), blocked = false;
@@ -1230,12 +1245,79 @@ function updateVehicles(dt) {
       v.vx = 0;
     } else {
       v.x = nx;
-      if (ny > v.y + 2) { v.vy = (v.vy || 0) + GRAV * dt; v.y = Math.min(ny, v.y + v.vy * dt); } // з'їхав з перешкоди — падає
+      if (v.type === 'moto') motoVertical(v, T, ny, dt);
+      else if (ny > v.y + 2) { v.vy = (v.vy || 0) + GRAV * dt; v.y = Math.min(ny, v.y + v.vy * dt); } // з'їхав з перешкоди — падає
       else { v.y = ny; v.vy = 0; }
     }
-    v.ang = v.y < gAt(W, v.x) - 3 ? 0 : Math.atan2(gAt(W, v.x + T.len / 2) - gAt(W, v.x - T.len / 2), T.len);
+    if (v.dead) continue;
+    if (!v.air) v.ang = v.y < gAt(W, v.x) - 3 && v.type !== 'moto' ? 0 : motoGroundAng(v, T);
+    if (v.susp) v.susp = Math.max(0, v.susp - dt * 30);
     if ((v.hp < T.hp || v.rams) && RND() < dt * 8) G.parts.push({ type: 'smoke', x: v.x, y: v.y - T.h, vx: rand(-10, 10), vy: -40, life: 1.6, max: 1.6, size: 10 });
     if (v.driver && Math.abs(v.vx) > 100 && RND() < dt * 20) G.parts.push({ type: 'dust', x: v.x - v.dir * T.len / 2, y: v.y - 4, vx: -v.dir * 40, vy: -20, life: 0.8, max: 0.8, size: 8 });
+  }
+}
+// кут опори під колесами (земля, переправа, верх перешкоди)
+function vehSupportY(W, x, y) {
+  let g = gAt(W, x);
+  for (const s of solidsNear(W, x - 2, x + 2)) if (!s.thin && !s.dead && s.x <= x && s.x + s.w >= x && s.y >= y - 14 && s.y < g) g = s.y;
+  return g;
+}
+function motoGroundAng(v, T) {
+  const W = G.W, a = vehSupportY(W, v.x - T.len / 2, v.y), b = vehSupportY(W, v.x + T.len / 2, v.y);
+  return Math.atan2(b - a, T.len);
+}
+// мотоцикл: нахил — пружина з інерцією. Газ із місця підкидає перед, гальмо на швидкості — на переднє колесо;
+// ↑/↓ — переносити вагу. У повітрі ↑/↓ обертають мотоцикл, без керування він сам вирівнюється до горизонту
+function motoTilt(v, T, inp, dt) {
+  const lean = v.driver ? v.lean || 0 : 0;
+  let tq;
+  if (v.air) {
+    tq = lean * 7 + (lean ? 0 : -(v.ang + v.dir * (v.tilt || 0)) * v.dir * 2.5);
+    v.tiltV = ((v.tiltV || 0) + tq * dt) * Math.pow(0.35, dt);
+    v.tilt = clamp((v.tilt || 0) + v.tiltV * dt, -2.6, 2.6);
+    return;
+  }
+  const spd = Math.abs(v.vx);
+  tq = -(v.tilt || 0) * 26 - (v.tiltV || 0) * 7;                              // гравітація повертає на обидва колеса
+  if (lean < 0 && (spd > 25 || inp)) tq += -9 * Math.min(1, (spd + 60) / 160);  // дибки
+  if (lean > 0 && spd > 40) tq += 6;                                         // на переднє колесо
+  if (inp && Math.sign(inp) === Math.sign(v.vx || inp) && spd < T.max * 0.45) tq -= 5; // різкий газ — передок угору
+  if (v.brake && spd > 120) tq += 5;                                         // різке гальмо — клює носом
+  v.tiltV = (v.tiltV || 0) + tq * dt;
+  v.tilt = (v.tilt || 0) + v.tiltV * dt;
+  if (v.tilt < -0.8) { v.tilt = -0.8; v.tiltV = Math.max(0, v.tiltV); }
+  if (v.tilt > 0.42) { v.tilt = 0.42; v.tiltV = Math.min(0, v.tiltV); }
+}
+// мотоцикл по вертикалі: справжня інерція — з горба на швидкості злітає, падає за параболою
+function motoVertical(v, T, ny, dt) {
+  const vy0 = v.vy || 0;
+  if (!v.air) {
+    // на землі: вертикальна швидкість — та, з якою колеса йдуть рельєфом (угору — обмежено, щоб сходинка не катапультувала)
+    if (ny <= v.y + vy0 * dt + GRAV * dt * dt + 0.5) { v.vy = Math.max((ny - v.y) / dt, -Math.abs(v.vx) * 0.75, -520); v.y = ny; return; }
+    v.air = v.y < ny - 4 || vy0 < -60; // рельєф іде вниз швидше, ніж падає мотоцикл — відрив
+    if (!v.air) { v.vy = (ny - v.y) / dt; v.y = ny; return; }
+    v.tiltV = 0;
+    v.ang = clamp(Math.atan2(vy0 * v.dir, Math.abs(v.vx) + 1), -0.7, 0.7); // у повітря — під кутом траєкторії
+  }
+  v.vy = vy0 + GRAV * dt;
+  v.y += v.vy * dt;
+  if (v.y < ny) return;
+  // приземлення: наскільки кут мотоцикла не збігся з рельєфом і наскільки сильно вдарився
+  v.y = ny; v.air = false;
+  const ga = motoGroundAng(v, T), world = v.ang + v.dir * (v.tilt || 0), diff = world - ga, hit = v.vy;
+  v.ang = ga; v.tilt = clamp(diff * v.dir, -0.8, 0.42); v.tiltV = 0; v.vy = 0;
+  v.susp = Math.min(9, hit / 90);
+  if (hit > 300) for (let i = 0; i < 6; i++) G.parts.push({ type: 'dust', x: v.x + rand(-T.len / 2, T.len / 2), y: v.y - 3, vx: rand(-90, 90), vy: rand(-60, -20), life: 0.7, max: 0.7, size: 8 });
+  const rider = v.driver;
+  if (Math.abs(diff) > 1.0 || hit > 1250) {
+    // упав: вершник летить, мотоцикл пошкоджено
+    v.vx *= 0.25; v.tilt = 0;
+    if (rider) { exitVehicle(rider, true); hurt(rider, 22 + Math.max(0, hit - 900) / 25, 'fall'); feed(rider.player.name + ' не втримався на мотоциклі', '#f2994a'); }
+    if (hit > 1250 || Math.abs(diff) > 1.5) { v.crashSmoke = true; v.rams = Math.max(v.rams || 0, 1); }
+    Sfx.boom(false);
+  } else {
+    if (Math.abs(diff) > 0.55) v.vx *= 0.7;            // криво приземлився — загубив швидкість
+    if (rider && hit > 850) hurt(rider, (hit - 850) / 30, 'fall');
   }
 }
 // таран: перешкода руйнується; техніка без тарана — пошкоджена, після другої перешкоди — розбита
@@ -1262,7 +1344,7 @@ function bridgeOk(d) { return d.bridge && !d.bridge.dead && G.W.solids.includes(
 function ditchSpan(h) { const a = h.facing > 0 ? h.x + 18 : h.x - 18 - DITCH_W; return [a, a + DITCH_W]; }
 function canDitchHere(h) {
   const W = G.W;
-  if (h.vehicle || h.hidden || !h.onGround || h.stance !== 'prone' || Math.abs(h.y - gAt(W, h.x)) > 3) return false;
+  if (h.vehicle || h.hidden || !h.onGround || Math.abs(h.y - gAt(W, h.x)) > 3) return false;
   const [a, b] = ditchSpan(h);
   if (a < 150 || b > W.width - 150) return false;
   if (maxGround(W, a, b) - minGround(W, a, b) > 24) return false;
