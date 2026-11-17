@@ -83,7 +83,9 @@ function menuGridPrep(sh, img) {
   for (let i = 0; i < sh.n; i++) {
     const d = x.getImageData((i % C) * fw, Math.floor(i / C) * fh, fw, fh), o = d.data;
     for (let p = 0; p < o.length; p += 4) {
-      const l = Math.min(o[p], o[p + 1], o[p + 2]), al = Math.max(0, Math.min(1, (250 - l) / 230));
+      // низ кадру (там у відео була земля) плавно згасає — без рівної смуги на техніці й ґрунті
+      const row = (p / 4 / fw) | 0, fade = row > fh * 0.86 ? Math.max(0, (fh - row) / (fh * 0.14)) ** 1.5 : 1;
+      const l = Math.min(o[p], o[p + 1], o[p + 2]), al = Math.max(0, Math.min(1, (250 - l) / 230)) * fade;
       o[p] = sh.col[0]; o[p + 1] = sh.col[1]; o[p + 2] = sh.col[2]; o[p + 3] = Math.round(al * 255);
     }
     const f = document.createElement('canvas'); f.width = fw; f.height = fh; f.getContext('2d').putImageData(d, 0, 0);
@@ -533,7 +535,7 @@ function menuDrawBoom(ctx, b, X, S) {
     const n = BS.frames.length, u = b.t / b.max, ph = Math.min(n - 1.001, Math.pow(u, BS.pow || 0.75) * (n - 1)), i0 = Math.floor(ph), q = ph - i0;
     const hh = 125 * S / (BS.vid || 1), k2 = hh / BS.fh, a0 = ctx.globalAlpha * Math.min(1, (1 - u) * 6); // висота відео ≈ 125 px, продовжені краї — понад це
     ctx.save();
-    ctx.translate(X, b.y + 4 * S); if (b.flip) ctx.scale(-1, 1);
+    ctx.translate(X, b.y + 14 * S); if (b.flip) ctx.scale(-1, 1); // трохи нижче лінії ґрунту
     for (const [fr, al] of [[BS.frames[i0], 1], [BS.frames[i0 + 1], q]]) {
       if (!fr || al <= 0.01) continue;
       ctx.globalAlpha = a0 * al; ctx.drawImage(fr, -fr.ax * k2, -hh, fr.width * k2, hh);
