@@ -270,8 +270,13 @@ function startMount(h, t) {
 }
 function tickWork(h, c, dt) {
   const D = h.working, W = G.W;
-  if (c.axisX || c.pressed('up') || c.pressed('down') || c.pressed('fire')) { h.working = null; tipOnce(h, 'Роботу перервано'); return; }
+  if (c.axisX || c.pressed('up') || (c.pressed('down') && D.kind !== 'down') || c.pressed('fire')) { h.working = null; tipOnce(h, 'Роботу перервано'); return; }
   D.t += dt; h.anim += dt * 6;
+  if (D.kind === 'down') {
+    h.digT = 0.2; digDirt(h.x + D.dir * 12, h.y);
+    if (D.t >= D.dur) { h.working = null; buildDigDown(h, D); Sfx.click(); }
+    return;
+  }
   if (D.kind === 'kit' || D.kind === 'ditch' || D.kind === 'bridge') {
     h.digT = D.kind === 'kit' ? 0 : 0.2;
     if (D.kind !== 'kit') digDirt(h.x + h.facing * 14, h.y);
