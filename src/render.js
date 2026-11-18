@@ -137,7 +137,7 @@ function renderView(ctx, vp, p, t) {
   const s = Math.min(vp.h / visH, vp.w / 700);
   const viewW = vp.w / s, viewH = vp.h / s;
   const cx = clamp(p.cam.x - viewW / 2, 0, Math.max(0, W.width - viewW));
-  const cy = clamp(p.cam.y - viewH / 2, -80, BASE_G + 140 - viewH);
+  const cy = clamp(p.cam.y - viewH / 2, -80, Math.max(BASE_G + 140, p.cam.y + viewH * 0.5 + 60) - viewH); // глибокі поверхи й вирви теж видно
   const theme = THEME[W.themeAt(cx + viewW / 2)];
   const viewer = { isDrone, drone, human };
 
@@ -152,8 +152,17 @@ function renderView(ctx, vp, p, t) {
     drawFar(ctx, vp, cx, cy, s, theme, W);
   }
 
+  let shk = 0;
+  for (const q of G.parts) {
+    if (q.type !== 'shake') continue;
+    const prox = Math.max(0, 1 - Math.hypot(q.x - p.cam.x, q.y - p.cam.y) / 900);
+    if (prox > 0) shk += Math.max(0, q.amp * (0.35 + prox) - (q.max - q.life) * 0.7);
+  }
+  shk = Math.min(1.6, shk);
+  const sk = shk * shk, nt = performance.now() / 1000;
+  const shx = sk * 15 * (Math.sin(nt * 51) * 0.55 + Math.sin(nt * 33 + 1.7) * 0.45), shy = sk * 12 * (Math.sin(nt * 46 + 0.6) * 0.55 + Math.sin(nt * 29 + 2.9) * 0.45);
   ctx.save();
-  ctx.translate(vp.x - cx * s, vp.y - cy * s);
+  ctx.translate(vp.x - cx * s + shx, vp.y - cy * s + shy);
   ctx.scale(s, s);
   const x0 = cx - 120, x1 = cx + viewW + 120;
   const inX = (a, b) => b >= x0 && a <= x1;
@@ -1245,6 +1254,25 @@ function drawDrone(ctx, d, t) {
   ctx.restore();
 }
 
+// вибух на землі — ті самі кадри відео, що й у заставці (стовп ґрунту, хмара), з плавним змішуванням кадрів
+const GBOOM = { c: null };
+function drawGameBoom(ctx, p) {
+  const BS = typeof MENU_SHEETS !== 'undefined' ? MENU_SHEETS.boom : null;
+  if (!BS || !BS.frames) return;
+  const u = 1 - p.life / p.max, n = BS.frames.length, ph = Math.min(n - 1.001, Math.pow(Math.max(0, u), BS.pow || 0.77) * (n - 1)), i0 = Math.floor(ph), q = ph - i0;
+  const hh = (110 * p.size) / (BS.vid || 1), k2 = hh / BS.fh, f0 = BS.frames[i0], f1 = BS.frames[i0 + 1] || f0;
+  const RS = 2, dw = Math.max(1, Math.ceil(f0.width * k2)), dh = Math.max(1, Math.ceil(hh));
+  if (!GBOOM.c) GBOOM.c = document.createElement('canvas');
+  const oc = GBOOM.c; if (oc.width < dw * RS || oc.height < dh * RS) { oc.width = Math.max(oc.width, dw * RS); oc.height = Math.max(oc.height, dh * RS); }
+  const ox = oc.getContext('2d'); ox.setTransform(1, 0, 0, 1, 0, 0); ox.globalCompositeOperation = 'source-over'; ox.globalAlpha = 1; ox.clearRect(0, 0, dw * RS + 2, dh * RS + 2);
+  ox.imageSmoothingQuality = 'high'; ox.globalCompositeOperation = 'lighter';
+  ox.globalAlpha = 1 - q; ox.drawImage(f0, 0, 0, dw * RS, dh * RS);
+  if (q > 0.002) { ox.globalAlpha = q; ox.drawImage(f1, 0, 0, dw * RS, dh * RS); }
+  const v = Math.min(1, (1 - u) / 0.4), fade = v * v * (3 - 2 * v); // хмара тане плавно
+  ctx.save(); ctx.globalAlpha *= fade; ctx.translate(p.x, p.y + 12 * p.size); if (p.flip) ctx.scale(-1, 1);
+  ctx.drawImage(oc, 0, 0, dw * RS, dh * RS, -f0.ax * k2, -hh, dw, dh);
+  ctx.restore();
+}
 function drawParticles(ctx, x0, x1) {
   for (const p of G.parts) {
     if (p.x < x0 || p.x > x1) continue;
@@ -1256,6 +1284,9 @@ function drawParticles(ctx, x0, x1) {
       case 'debris': ctx.fillStyle = p.col || '#3a3026'; ctx.fillRect(p.x - 2, p.y - 2, 4, 4); break;
       case 'spark': ctx.fillStyle = '#ffd25a'; ctx.fillRect(p.x - 1, p.y - 1, 2, 2); break;
       case 'flash': ctx.fillStyle = 'rgba(255,230,120,0.9)'; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, 7); ctx.fill(); break;
+      case 'boom': drawGameBoom(ctx, p); break;
+      case 'gflash': { const a = Math.pow(k, 1.5) * 0.45, r = p.size * (1.3 - k * 0.6), g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r); g.addColorStop(0, 'rgba(255,240,205,' + a + ')'); g.addColorStop(0.5, 'rgba(255,170,80,' + a * 0.6 + ')'); g.addColorStop(1, 'rgba(255,120,50,0)'); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill(); break; }
+      case 'aflash': { const a = Math.pow(k, 1.6), r = p.size * (0.2 + (1 - k) * 1.1), g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r); g.addColorStop(0, 'rgba(255,245,210,' + a + ')'); g.addColorStop(0.5, 'rgba(255,170,70,' + a * 0.7 + ')'); g.addColorStop(1, 'rgba(255,110,40,0)'); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill(); break; }
       case 'ring': ctx.strokeStyle = 'rgba(255,220,150,' + k + ')'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (1 - k * 0.7), 0, 7); ctx.stroke(); break;
       case 'tracer': ctx.strokeStyle = 'rgba(255,225,120,' + k + ')'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x2, p.y2); ctx.stroke(); break;
       case 'leaf': ctx.fillStyle = 'rgba(70,100,40,' + Math.min(1, k * 2) + ')'; ctx.fillRect(p.x - 2, p.y - 1.5, 4, 3); break;
@@ -1582,7 +1613,7 @@ function drawControlsBar(ctx, vw, items, left, right) {
 function tunnelTip(h, c) {
   const L = (a) => '[' + c.label(a) + ']', sp = pipeAt(G.W, h.x, h.y);
   const edge = (h.facing < 0 && h.x <= sp.a + 14) || (h.facing > 0 && h.x >= sp.b - 14);
-  return L('dig') + (edge ? ' пологий вихід' : ' лаз із драбиною') + '   у стіну ' + L('left') + L('right') + ' — копати далі   ' + L('aim') + ' вогонь   ' + L('slot3') + ' граната';
+  return L('dig') + (edge ? ' пологий вихід' : ' лаз із драбиною') + '   ' + L('down') + '+' + L('dig') + ' углиб   у стіну ' + L('left') + L('right') + ' — копати далі   ' + L('aim') + ' вогонь   ' + L('slot3') + ' граната';
 }
 function humanControls(h, c) {
   const L = (a) => c.label(a);

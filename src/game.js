@@ -389,7 +389,7 @@ function updateHuman(h, dt) {
         else if (pr) takeProp(h, pr);
         else if (ft) startPly(h, ft);
         else if (h.carry) dropCarry(h);
-        else if (digAction(h, false, true)) tipOnce(h, 'Копати — [' + c.label('dig') + ']');
+        else if (digAction(h, false, true)) tipOnce(h, 'Копати — [' + c.label('dig') + ']' + (pipeAt(G.W, h.x, h.y) ? '; углиб — [' + c.label('down') + '] + [' + c.label('dig') + ']' : ''));
       }
     }
   }
@@ -711,7 +711,7 @@ function tunnelDig(h, dir, dt) {
   if (!h.onGround || !(h.wallT > 0)) return;
   const rb = rubbleAt(h, dir);
   if (rb) { digRubble(h, rb.br, dt); return; }
-  const sp = pipeAt(W, h.x, h.y);
+  const sp = pipeHere(W, h.x, h.y);
   if (!sp || Math.abs(h.y - tunFloor(W, sp, h.x)) > 5) return;
   const hw = HUMAN_DIM[h.stance].w / 2;
   if (dir > 0 ? h.x + hw < sp.b - 6 : h.x - hw > sp.a + 6) return; // ще не в кінці
@@ -816,9 +816,49 @@ function startDigExit(h, sp) {
   h.digging = { kind: 'exit', sp, e, t: 0, dur: e.len / DIG_SPD };
   h.vx = 0;
 }
+// ---------- Копання вглиб: із галереї — похилий спуск на поверх нижче (кілька поверхів) ----------
+const LEVEL_D = 72, LEVEL_SLOPE = 0.8, MAX_LEVELS = 4;
+// тунель, на підлозі якого стоїть людина (на спуску між поверхами — той, до чиєї підлоги ближче)
+function pipeHere(W, x, y) {
+  let best = null, bd = 7;
+  for (const sp of W.pipes) {
+    if (x < sp.a - 6 || x > sp.b + 6) continue;
+    const d = Math.abs(tunFloor(W, sp, x) - y);
+    if (d < bd) { bd = d; best = sp; }
+  }
+  return best || pipeAt(W, x, y);
+}
+function startDigDown(h, sp) {
+  const W = G.W;
+  if (Math.abs(h.y - tunFloor(W, sp, h.x)) > 6) { tipOnce(h, 'Копати вглиб — стоячи в галереї'); return; }
+  const nd = sp.depth + LEVEL_D;
+  if (nd > TUN_DEPTH + LEVEL_D * (MAX_LEVELS - 1) + 30) { tipOnce(h, 'Глибше не прокопати — ґрунтові води'); return; }
+  const dir = h.facing, dx = LEVEL_D / LEVEL_SLOPE, bx = clamp(h.x + dir * dx, 30, W.width - 30);
+  if (rockIn(Math.min(h.x, bx) - 6, Math.max(h.x, bx) + 6)) { tipOnce(h, 'Там камінь — не прокопати'); return; }
+  if ((sp.links || []).some((l) => Math.min(l.y1, l.y2) > tunFloor(W, sp, h.x) - 2 && Math.abs((l.x1 + l.x2) / 2 - (h.x + bx) / 2) < 70)) { tipOnce(h, 'Поруч уже є спуск углиб'); return; }
+  h.working = { kind: 'down', t: 0, dur: Math.hypot(dx, LEVEL_D) / DIG_SPD, sp, bx, nd, x0: h.x, dir };
+  h.vx = 0;
+}
+function buildDigDown(h, D) {
+  const W = G.W, sp = D.sp;
+  if (!W.hides.includes(sp)) return;
+  const f1 = tunFloor(W, sp, D.x0);
+  // нижче вже є хід на цій глибині — спуститися до нього, інакше — новий
+  let o = W.pipes.find((p) => p !== sp && Math.abs(p.depth - D.nd) < 8 && D.bx >= p.a - 40 && D.bx <= p.b + 40);
+  // унизу — невелика камера, щоб зійти зі спуску на підлогу (далі галерею копають як звичайно)
+  const ca = D.dir > 0 ? D.bx - 8 : D.bx - 40, cb = D.dir > 0 ? D.bx + 40 : D.bx + 8;
+  if (o) { o.a = Math.min(o.a, ca); o.b = Math.max(o.b, cb); }
+  else { o = { type: 'pipe', style: 'dug', a: ca, b: cb, depth: D.nd, exits: [], dug: true, level: Math.round((D.nd - TUN_DEPTH) / LEVEL_D) }; W.hides.push(o); }
+  cavDirty(W);
+  const f2 = tunFloor(W, o, D.bx), H = Math.max(tunH(sp), tunH(o)) + 16;
+  const l = D.dir > 0 ? { x1: D.x0 - 4, x2: D.bx + 4, y1: f1, y2: f2, h: H } : { x1: D.bx - 4, x2: D.x0 + 4, y1: f2, y2: f1, h: H };
+  (sp.links || (sp.links = [])).push(l);
+  cavDirty(W);
+  feed(h.player.name + ' прокопав спуск на поверх нижче — далі можна копати галерею', '#c8a26a');
+}
 // що зробить лопата тут (dry — лише перевірити)
 function digAction(h, ditch, dry) {
-  const W = G.W, pa = pipeAt(W, h.x, h.y);
+  const W = G.W, pa = pipeHere(W, h.x, h.y);
   if (h.vehicle || h.hidden || h.mount || h.onLadder) return false;
   if (ditch) {
     if (!canDitchHere(h)) { if (!dry) tipOnce(h, 'Рову тут не викопати: потрібне рівне вільне місце'); return false; }
@@ -827,6 +867,7 @@ function digAction(h, ditch, dry) {
   }
   if (rubbleAt(h)) { if (!dry) startRubble(h, rubbleAt(h)); return true; }
   if (patchAt(h)) { if (!dry) startPatch(h, patchAt(h)); return true; }
+  if (pa && h.player.ctrl && h.player.ctrl.held('down') && Math.abs(h.y - tunFloor(W, pa, h.x)) <= 6) { if (!dry) startDigDown(h, pa); return true; } // униз + лопата — спуск на поверх нижче
   if (pa) { if (!dry) startDigExit(h, pa); return true; }
   if (resumeDig(Object.assign({}, h, { digging: null }))) { if (!dry) resumeDig(h); return true; }
   if (bridgeSpot(h)) { if (!dry) { h.working = { kind: 'bridge', t: 0, dur: BRIDGE_TIME, d: bridgeSpot(h) }; h.vx = 0; } return true; }
@@ -1813,13 +1854,25 @@ function updateDrone(d, dt) {
 }
 
 function explosionFx(x, y, power, radius) {
-  for (let i = 0; i < (power > 60 ? 26 : 10); i++) {
-    const a = rand(0, Math.PI * 2), s = rand(40, power > 60 ? 360 : 160);
-    G.parts.push({ type: 'fire', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(0.25, 0.6), max: 0.6, size: rand(6, 14) });
+  const W = G.W, g = gAt(W, x), big = power > 60;
+  const ground = y > g - 40 && y < g + 24 && !pipeAt(W, x, y + 2);
+  // трясіння камери: невидима частинка, рендер кожного вікна рахує його за відстанню (працює й у гравців по мережі)
+  G.parts.push({ type: 'shake', x, y, life: 3, max: 3, amp: big ? 1.25 : 0.55 });
+  if (ground) {
+    G.parts.push({ type: 'boom', x, y: g, life: big ? 3.2 : 2.2, max: big ? 3.2 : 2.2, size: big ? 1 : 0.55, flip: RND() < 0.5 ? 1 : 0 });
+    G.parts.push({ type: 'gflash', x, y: g - 6, life: 0.14, max: 0.14, size: big ? 46 : 26 });
+    for (let i = 0; i < (big ? 26 : 10); i++) {
+      const a = rand(-Math.PI * 0.92, -Math.PI * 0.08), s = rand(120, big ? 520 : 300);
+      G.parts.push({ type: 'debris', x: x + rand(-6, 6), y: g - 2, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(0.8, 1.6), max: 1.6, col: RND() < 0.5 ? '#3a2618' : '#4e3422' });
+    }
+    for (let i = 0; i < (big ? 4 : 2); i++) G.parts.push({ type: 'smoke', x: x + rand(-14, 14), y: g - rand(10, 40), vx: rand(-20, 20), vy: rand(-40, -10), life: rand(2.5, 4), max: 4, size: rand(14, 22) });
+  } else {
+    G.parts.push({ type: 'aflash', x, y, life: 0.16, max: 0.16, size: big ? 60 : 36 });
+    const n = big ? 22 : 14;
+    for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2 + rand(-0.15, 0.15), s = rand(90, 320); G.parts.push({ type: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(0.25, 0.6), max: 0.6 }); }
+    for (let i = 0; i < 6; i++) G.parts.push({ type: 'debris', x, y, vx: rand(-160, 160), vy: rand(-200, 40), life: rand(0.6, 1.1), max: 1.1, col: '#1c1418' });
+    for (let i = 0; i < (big ? 4 : 2); i++) G.parts.push({ type: 'smoke', x: x + rand(-10, 10), y: y + rand(-10, 10), vx: rand(-20, 20), vy: rand(-30, -5), life: rand(1.5, 3), max: 3, size: rand(10, 18) });
   }
-  for (let i = 0; i < (power > 60 ? 14 : 5); i++) G.parts.push({ type: 'smoke', x: x + rand(-15, 15), y: y + rand(-15, 15), vx: rand(-30, 30), vy: rand(-60, -10), life: rand(1.5, 3), max: 3, size: rand(12, 24) });
-  for (let i = 0; i < (power > 60 ? 14 : 4); i++) G.parts.push({ type: 'debris', x, y, vx: rand(-260, 260), vy: rand(-380, -60), life: rand(0.6, 1.2), max: 1.2 });
-  G.parts.push({ type: 'ring', x, y, life: 0.3, max: 0.3, size: radius });
 }
 function explosion(x, y, power, radius, direct) {
   const W = G.W;
@@ -1866,6 +1919,33 @@ function explosion(x, y, power, radius, direct) {
   blastUgvs(x, y, power, radius);
   if (power >= 25) { damageCovers(x, y, power); damageFort(x, y, power); damageTunnels(x, y, power); }
   if (power >= 60) breachSolids(x, y, radius);
+  if (power >= 25) craterAt(x, y, power, radius);
+}
+// ---------- Вирви: вибух біля поверхні вириває ґрунт; повторні вибухи поглиблюють її без меж ----------
+// Чим глибша яма, тим ширша (як справжня воронка) — схили лишаються прохідними, людина вибирається.
+function craterAt(x, y, power, radius) {
+  const W = G.W, g = gAt(W, x), big = power > 60;
+  if (y < g - radius * 0.45 || y > g + 24) return; // високо в повітрі або під землею (тунель)
+  let r = big ? 46 : 26;
+  if (x < r * 2 + 20 || x > W.width - r * 2 - 20) return;
+  if (W.pipes.some((sp) => x + r > sp.x0 - 16 && x - r < sp.x1 + 16)) return; // над тунелем — його перекриття обвалюється окремо
+  if (W.hides.some((o) => o.type !== 'pipe' && Math.abs(o.x - x) < r + 40)) return; // бліндажі, нори
+  if (W.ditches.some((d) => x + r > d.a - 10 && x - r < d.b + 10)) return;
+  if ((W.forts || []).some((f) => Math.abs(f.x - x) < r + 40)) return;
+  // будівлі, стіни, укриття, що стоять на землі, — не підкопувати
+  if (solidsNear(W, x - r - 8, x + r + 8).some((s) => !s.dead && s.x < x + r + 8 && s.x + s.w > x - r - 8 && s.y + s.h > gAt(W, clamp(x, s.x, s.x + s.w)) - 30)) return;
+  const k = clamp(1 - Math.max(0, g - y) / (radius * 0.45), 0.35, 1), depth = (big ? 14 : 6) * k;
+  const pit = Math.max(0, g - (gAt(W, x - 140) + gAt(W, x + 140)) / 2); // уже наявна глибина ями
+  r = Math.max(r, (pit + depth) * 1.7);
+  for (let i = Math.max(0, Math.floor((x - r * 1.4) / GS)); i <= Math.min(W.ground.length - 1, Math.ceil((x + r * 1.4) / GS)); i++) {
+    const t = (i * GS - x) / r, a = Math.abs(t);
+    let d = 0;
+    if (a < 1) d = depth * Math.pow(1 - t * t, 1.2);                       // чаша
+    else if (a < 1.4) d = -depth * 0.22 * Math.sin(((a - 1) / 0.4) * Math.PI); // викинутий ґрунт — невеликий вал
+    W.ground[i] = Math.min(BASE_G + 900, W.ground[i] + d);
+  }
+  for (const t of W.trees) if (Math.abs(t.x - x) < r * 1.5) t.y = gAt(W, t.x);
+  cavDirty(W);
 }
 // пролом у стінах, перекриттях і даху: вибиває шматок, трохи менший за радіус вибуху
 const BREACHABLE = { wall: 1, floor: 1, roof: 1 };
