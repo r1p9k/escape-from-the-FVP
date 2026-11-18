@@ -30,7 +30,7 @@ const WEAPONS = {
 const STANCE_SPREAD = { stand: 2.6, crouch: 1.4, prone: 0.75, mount: 1.3, burrow: 1.0, bunker: 0.8 };
 const STANCE_ACC = { stand: 'стоячи — розкид', crouch: 'сидячи — точніше', prone: 'лежачи — точно', burrow: 'з нори — точно', bunker: 'з бійниці — точно' };
 // сектори вогню (кут відносно погляду, від'ємний — угору)
-const AIM_SECTOR = { burrow: [-1.45, 0.15], bunker: [-0.6, 0.05], trench: [-1.45, -0.12] };
+const AIM_SECTOR = { burrow: [-0.75, 0.12], bunker: [-0.6, 0.05], trench: [-1.45, -0.12] };
 const PACK_CAP = 4;      // місць у рюкзаку: аптечки, заряди РЕБ, детектор
 const DETECT_R = 650;    // радіус детектора дронів
 const PICKUP_NAMES = { rifle: 'Автомат', shotgun: 'Дробовик', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого', shovel: 'Лопата', grenade: 'Гранати', ammo: 'Набої', gasmask: 'Протигаз' };
@@ -427,6 +427,7 @@ function humanShoot(h, m, stance) {
 // звідки стріляє людина, що визирає з нори чи з бійниці бліндажа
 function burrowMuzzle(h) {
   const sp = h.hidden, a = aimWorld(h);
+  if (sp.type === 'burrow') return { x: sp.x - burrowDir(sp) * 6 + Math.cos(a) * 16, y: sp.y - 4 + Math.sin(a) * 16 }; // дуло — біля отвору, лежачи
   return { x: sp.x + Math.cos(a) * 14, y: sp.y - (sp.type === 'bunker' ? 16 : 7) + Math.sin(a) * 14 };
 }
 // з якої схованки можна стріляти
@@ -663,6 +664,7 @@ function humanHidden(h, c, dt) {
       const v = (c.held('down') ? 1 : 0) - (c.held('up') ? 1 : 0);
       h.aimA += v * 1.5 * dt;
     }
+    if (sp.type === 'burrow') h.facing = -burrowDir(sp); // з лежачого ходу — лише назовні, не за спину
     const S = AIM_SECTOR[sp.type];
     h.aimA = clamp(h.aimA, S[0], S[1]); // з ями вниз не постріляєш, з бійниці — вузький сектор
     if (c.held('fire') && h.weapon && h.fireCd <= 0 && h.reloadT <= 0 && h.weapon.mag > 0) humanShoot(h, burrowMuzzle(h), sp.type);
@@ -1940,13 +1942,20 @@ function craterAt(x, y, power, radius) {
   for (let i = Math.max(0, Math.floor((x - r * 1.4) / GS)); i <= Math.min(W.ground.length - 1, Math.ceil((x + r * 1.4) / GS)); i++) {
     const t = (i * GS - x) / r, a = Math.abs(t);
     let d = 0;
-    if (a < 1) d = depth * Math.pow(1 - t * t, 1.2);                       // чаша
-    else if (a < 1.4) d = -depth * 0.22 * Math.sin(((a - 1) / 0.4) * Math.PI); // викинутий ґрунт — невеликий вал
+    // вирвано, а не прогнуто: плаский низ, круті стінки, нерівний край
+    const jag = 0.85 + 0.3 * hash01(i * 7.13 + x);
+    if (a < 1) d = depth * Math.pow(1 - Math.pow(a, 3.2), 0.7) * jag;
+    else if (a < 1.25) d = -depth * 0.18 * Math.sin(((a - 1) / 0.25) * Math.PI) * jag; // викинутий ґрунт — вузький вал
     W.ground[i] = Math.min(BASE_G + 900, W.ground[i] + d);
   }
   for (const t of W.trees) if (Math.abs(t.x - x) < r * 1.5) t.y = gAt(W, t.x);
+  // зона голого ґрунту (трава зірвана) — для малювання; сусідні зони зливаються
+  const z = { a: x - r * 1.1, b: x + r * 1.1 };
+  W.craters = (W.craters || []).filter((q) => { if (q.b < z.a || q.a > z.b) return true; z.a = Math.min(z.a, q.a); z.b = Math.max(z.b, q.b); return false; });
+  W.craters.push(z);
   cavDirty(W);
 }
+function hash01(n) { const v = Math.sin(n * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); }
 // пролом у стінах, перекриттях і даху: вибиває шматок, трохи менший за радіус вибуху
 const BREACHABLE = { wall: 1, floor: 1, roof: 1 };
 function breachSolids(x, y, radius) {

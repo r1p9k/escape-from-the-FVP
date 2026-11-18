@@ -59,6 +59,48 @@ function drawArtBackground(ctx, vp, cx, cy, s) {
     ctx.fillStyle = gr; ctx.fillRect(vp.x, nb, vp.w, vp.y + vp.h - nb);
   }
 }
+// дальня стінка вирви: свіжий темний ґрунт від рівня країв донизу (інакше крізь яму видно тло)
+function drawCraterBack(ctx, W, q) {
+  const ya = gAt(W, q.a), yb = gAt(W, q.b);
+  let low = -1e9; for (let x = q.a; x <= q.b; x += 8) low = Math.max(low, gAt(W, x));
+  const gr = ctx.createLinearGradient(0, Math.min(ya, yb), 0, low + 4);
+  gr.addColorStop(0, '#5a4130'); gr.addColorStop(0.35, '#47321f'); gr.addColorStop(1, '#2b1d12');
+  ctx.fillStyle = gr; ctx.beginPath(); ctx.moveTo(q.a, ya);
+  for (let x = q.a; x <= q.b; x += 7) { const t = (x - q.a) / ((q.b - q.a) || 1); ctx.lineTo(x, ya + (yb - ya) * t + 2 + hash(x * 0.37) * 5 * Math.sin(t * Math.PI)); }
+  ctx.lineTo(q.b, yb);
+  for (let x = q.b; x >= q.a; x -= 8) ctx.lineTo(x, gAt(W, x) + 3);
+  ctx.closePath(); ctx.fill();
+  // шари ґрунту на зрізі
+  ctx.strokeStyle = 'rgba(30,20,12,0.35)'; ctx.lineWidth = 1.2;
+  for (let k = 1; k <= 3; k++) { ctx.beginPath(); let on = false; for (let x = q.a + 6; x <= q.b - 6; x += 8) { const y = ya + (yb - ya) * ((x - q.a) / ((q.b - q.a) || 1)) + k * 9 + hash(x + k) * 3; if (y > gAt(W, x) - 2) { on = false; continue; } if (on) ctx.lineTo(x, y); else { ctx.moveTo(x, y); on = true; } } ctx.stroke(); }
+}
+// зона вирви (трава зірвана)
+function craterAt01(CR, x) { for (const q of CR) if (x >= q.a && x <= q.b) return true; return false; }
+// рваний край дерну по обидва боки вирви й темніший свіжий ґрунт біля поверхні
+function drawCraterEdges(ctx, W, q) {
+  ctx.fillStyle = 'rgba(40,26,16,0.35)';
+  ctx.beginPath(); ctx.moveTo(q.a, gAt(W, q.a));
+  for (let x = q.a; x <= q.b; x += 6) ctx.lineTo(x, gAt(W, x) - 1);
+  for (let x = q.b; x >= q.a; x -= 6) ctx.lineTo(x, gAt(W, x) + 9 + hash(x * 0.7) * 6);
+  ctx.closePath(); ctx.fill();
+  for (const [ex, dir] of [[q.a, 1], [q.b, -1]]) {
+    const g = gAt(W, ex);
+    // відірваний шматок дерну: нерівний обрив, що звисає над ямою
+    ctx.fillStyle = '#3b2a1a';
+    ctx.beginPath(); ctx.moveTo(ex - dir * 3, g - 2);
+    for (let i = 0; i <= 6; i++) { const t = i / 6; ctx.lineTo(ex + dir * (t * 11), g + 2 + Math.sin(t * Math.PI) * 6 + hash(ex + i) * 4); }
+    ctx.lineTo(ex + dir * 11, g + 1); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#6f7a3a'; ctx.lineWidth = 1.3; ctx.beginPath(); // обірвані травинки на краю
+    for (let i = 0; i < 4; i++) { const bx = ex - dir * (1 + i * 2.2); ctx.moveTo(bx, g); ctx.lineTo(bx + dir * (2 + hash(ex * 3 + i) * 3), g - 4 - hash(ex + i * 5) * 4); }
+    ctx.stroke();
+  }
+  // грудки викинутої землі на краях
+  ctx.fillStyle = '#4a3322';
+  for (let i = 0; i < 10; i++) {
+    const side = i % 2 ? 1 : -1, ex = side > 0 ? q.b + 2 + hash(q.a + i) * 26 : q.a - 2 - hash(q.b + i) * 26, g = gAt(W, ex);
+    ctx.beginPath(); ctx.ellipse(ex, g - 1, 2.2 + hash(i + q.a) * 2.5, 1.6 + hash(i * 3 + q.b) * 1.5, 0, 0, 7); ctx.fill();
+  }
+}
 // ґрунт: текстура смугами, що йдуть за рельєфом (трава завжди на поверхні)
 function drawArtGround(ctx, W, x0, x1, bottom, theme) {
   const img = ART.ground, G0 = ART_GROUND, k = G0.k, step = G0.step;
@@ -71,14 +113,17 @@ function drawArtGround(ctx, W, x0, x1, bottom, theme) {
   ctx.fillStyle = '#2e2a21'; ctx.fill();
   const top = G0.surf * k, hgt = img.height * k;
   // кожна смуга нахилена під схил — край землі суцільний навіть в окопах
-  const m = ctx.getTransform(), S = m.a;
+  const m = ctx.getTransform(), S = m.a, CR = W.craters || [];
+  const BARE = 250; // рядок текстури, з якого починається бурий ґрунт (нижче трави й дерну)
   for (let x = x0; x <= x1; x += step) {
     const ya = gAt(W, x), yb = gAt(W, x + step), slope = (yb - ya) / step;
     const u = (((x % tw) + tw) % tw) / k;
     ctx.setTransform(S, S * slope, 0, S, m.e + S * x, m.f + S * ya);
-    ctx.drawImage(img, u, 0, Math.min(sw, img.width - u), img.height, 0, -top, step + 0.6, hgt);
+    if (CR.length && craterAt01(CR, x + step / 2)) ctx.drawImage(img, u, BARE, Math.min(sw, img.width - u), img.height - BARE, 0, 0, step + 0.6, (img.height - BARE) * k); // вирвано: свіжий ґрунт на поверхні
+    else ctx.drawImage(img, u, 0, Math.min(sw, img.width - u), img.height, 0, -top, step + 0.6, hgt);
   }
   ctx.setTransform(m);
+  for (const q of CR) if (q.b > x0 && q.a < x1) drawCraterEdges(ctx, W, q);
   if (W.themeAt(x0) === 'city') {
     // місто: сіріший, витоптаний ґрунт
     ctx.beginPath(); ctx.moveTo(x0, bottom);
@@ -160,7 +205,7 @@ function renderView(ctx, vp, p, t) {
   }
   shk = Math.min(1.6, shk);
   const sk = shk * shk, nt = performance.now() / 1000;
-  const shx = sk * 15 * (Math.sin(nt * 51) * 0.55 + Math.sin(nt * 33 + 1.7) * 0.45), shy = sk * 12 * (Math.sin(nt * 46 + 0.6) * 0.55 + Math.sin(nt * 29 + 2.9) * 0.45);
+  const shx = sk * 7.5 * (Math.sin(nt * 51) * 0.55 + Math.sin(nt * 33 + 1.7) * 0.45), shy = sk * 6 * (Math.sin(nt * 46 + 0.6) * 0.55 + Math.sin(nt * 29 + 2.9) * 0.45);
   ctx.save();
   ctx.translate(vp.x - cx * s + shx, vp.y - cy * s + shy);
   ctx.scale(s, s);
@@ -332,12 +377,14 @@ function drawGrassTufts(ctx, W, x0, x1) {
     const hx = hash(x * 0.37 + 11);
     if (hx < 0.25) continue;
     const gx = x + (hash(x + 3) - 0.5) * 14, g = gAt(W, gx);
+    if (W.craters && W.craters.length && craterAt01(W.craters, gx)) continue; // у вирві трави немає
     if (!dirtAt(W, gx, g + 4) || !dirtAt(W, gx - 5, g + 4) || !dirtAt(W, gx + 5, g + 4)) continue;
     const s = 9 + hash(x + 7) * 9;
     ctx.save(); ctx.translate(gx, g + 3); ispRect(ctx, 'grass' + (1 + Math.floor(hash(x + 19) * 6)), -s / 2, -1, s, 1, false, hash(x + 5) < 0.5 ? -1 : 1); ctx.restore();
   }
 }
 function drawGround(ctx, W, x0, x1, bottom, theme) {
+  for (const q of W.craters || []) if (q.b > x0 && q.a < x1) drawCraterBack(ctx, W, q);
   if (ART.ground) { drawArtGround(ctx, W, x0, x1, bottom, theme); return; }
   x0 = Math.max(0, Math.floor(x0 / GS) * GS); x1 = Math.min(W.width, x1);
   ctx.beginPath(); ctx.moveTo(x0, bottom);
@@ -346,12 +393,15 @@ function drawGround(ctx, W, x0, x1, bottom, theme) {
   const gr = ctx.createLinearGradient(0, BASE_G - 60, 0, BASE_G + 200);
   gr.addColorStop(0, theme.dirt); gr.addColorStop(1, theme.deep);
   ctx.fillStyle = gr; ctx.fill();
+  const CR = W.craters || [];
   ctx.beginPath();
-  for (let x = x0; x <= x1 + GS; x += GS) ctx.lineTo(x, gAt(W, x) + 2);
+  let pen = false;
+  for (let x = x0; x <= x1 + GS; x += GS) { if (CR.length && craterAt01(CR, x)) { pen = false; continue; } if (pen) ctx.lineTo(x, gAt(W, x) + 2); else { ctx.moveTo(x, gAt(W, x) + 2); pen = true; } }
   ctx.strokeStyle = theme.grass; ctx.lineWidth = 7; ctx.stroke();
   // травинки
   ctx.strokeStyle = theme.grass; ctx.lineWidth = 1.5; ctx.beginPath();
   for (let x = x0; x <= x1; x += 9) {
+    if (CR.length && craterAt01(CR, x)) continue;
     const hh = 3 + hash(x) * 7, y = gAt(W, x);
     ctx.moveTo(x, y); ctx.lineTo(x + hash(x + 1) * 4 - 2, y - hh);
   }
@@ -943,6 +993,7 @@ function drawHiddenMark(ctx, h, t) {
 // визирає з нори: голова й ствол над отвором
 function drawPeek(ctx, h, label) {
   const sp = h.hidden, bunker = sp.type === 'bunker', x = sp.x, y = sp.y - (bunker ? 16 : 7);
+  if (sp.type === 'burrow') { drawBurrowPeek(ctx, h, label); return; }
   if (h.weapon) {
     ctx.save(); ctx.translate(x, y); ctx.rotate(aimWorld(h));
     ctx.fillStyle = '#222'; ctx.fillRect(2, -1.5, h.weapon.type === 'shotgun' ? 20 : 24, 3.5);
@@ -953,6 +1004,20 @@ function drawPeek(ctx, h, label) {
   if (bunker) { ctx.fillStyle = '#6e5233'; ctx.fillRect(sp.x - 20, sp.y - 30, 40, 6); } // перекриття над бійницею
   else { ctx.fillStyle = '#140f0a'; ctx.beginPath(); ctx.ellipse(x, sp.y - 1, 16, 5, 0, 0, Math.PI); ctx.fill(); }
   if (label) { ctx.fillStyle = h.player.color; ctx.font = FONT(10); ctx.textAlign = 'center'; ctx.fillText(h.player.name, x, y - 16); }
+}
+// у норі (лежачий хід) цілиться лежачи на похилому вході: голова й зброя біля отвору, тіло — углиб, над землю не вилазить
+function drawBurrowPeek(ctx, h, label) {
+  const sp = h.hidden, d = burrowDir(sp);
+  const mx = sp.x - d * 6, my = sp.y - 2, bx = sp.x + d * BUR.slope, by = sp.y + BUR.floor - 8;
+  const L = Math.hypot(bx - mx, by - my), ux = (bx - mx) / L, uy = (by - my) / L; // углиб
+  const px = mx + ux * 22, py = my + uy * 22;
+  const trav = Math.atan2(-uy, -ux), fwd = Math.cos(trav) >= 0 ? 1 : -1, rot = fwd > 0 ? trav : trav - Math.PI; // обличчям назовні
+  const aw = aimWorld(h), lx = Math.cos(aw - rot) * fwd, ly = Math.sin(aw - rot);
+  const fake = Object.assign({}, h, { player: Object.assign({}, h.player, { name: '' }), hidden: null, dead: false, alT: 0, x: 0, y: 0, facing: 1, stance: 'prone', vx: 0, aiming: !!h.weapon, aimA: Math.atan2(ly, lx) });
+  ctx.save(); ctx.translate(px, py + 8); ctx.rotate(rot); ctx.scale(fwd, 1);
+  drawHuman(ctx, fake, 0, 1);
+  ctx.restore();
+  if (label) { ctx.fillStyle = h.player.color; ctx.font = FONT(10); ctx.textAlign = 'center'; ctx.fillText(h.player.name, mx, my - 14); }
 }
 // предмет побуту; (x, y) — середина низу
 function drawProp(ctx, type, x, y, rot, label) {
