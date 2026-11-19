@@ -252,6 +252,7 @@ function renderView(ctx, vp, p, t) {
       if (hp && (!knowP(hp) || !G.humans.some((o) => !o.dead && allyP(o.player, p) && (pipeAt(W, o.x, o.y) === hp || lineOfSight(W, o.x, o.y - 40, h.x, h.y - 20))))) continue;
     }
     if (h.vehicle) continue; // малюється разом із технікою нижче
+    if (!h.dead && !h.hideAnim && !h.digging && !(h.digT > 0) && !h.meleeT && h.stance !== 'prone' && !h.carry) drawShovelBack(ctx, h); // лопата за спиною (видно, що вона є)
     if (h.hideAnim && !h.dead) drawHideAnim(ctx, h, t); else drawHuman(ctx, h, t, 1);
     if ((h.digging || h.digT > 0) && !h.dead && !h.meleeT) drawShovel(ctx, h, t);
     if (h.kit && !h.dead) drawKitIcon(ctx, h.kit, h.x, h.y - HUMAN_DIM[h.stance].h - 14);
@@ -1158,6 +1159,17 @@ function drawUgv(ctx, u, t) {
   ctx.fillStyle = col; ctx.font = FONT(10); ctx.textAlign = 'center'; ctx.fillText('НРК ' + TEAMS[u.team].short, u.x, u.y - 42);
   if (u.hp < UGV_HP) { ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(u.x - 16, u.y - 52, 32, 4); ctx.fillStyle = '#6fcf97'; ctx.fillRect(u.x - 16, u.y - 52, 32 * Math.max(0, u.hp) / UGV_HP, 4); }
 }
+// лопата за спиною: держак над плечем, полотно біля пояса
+function drawShovelBack(ctx, h) {
+  const crouch = h.stance === 'crouch', y = h.y - (crouch ? 20 : 30);
+  ctx.save(); ctx.translate(h.x - h.facing * 7, y); ctx.scale(h.facing, 1); ctx.rotate(-1.95);
+  ctx.translate(-14, 0);
+  if (!ispAlong(ctx, 'shovelS', 30)) {
+    ctx.strokeStyle = '#8a6a42'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(20, 0); ctx.stroke();
+    ctx.fillStyle = '#7d8388'; ctx.beginPath(); ctx.moveTo(20, -4); ctx.lineTo(28, -2.5); ctx.lineTo(28, 2.5); ctx.lineTo(20, 4); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
 // лопата в руках, коли людина копає
 function drawShovel(ctx, h, t) {
   const a = 0.9 + Math.sin(t * 12) * 0.45;
@@ -1389,7 +1401,7 @@ function drawHumanHud(ctx, vp, p, t) {
   else { ctx.fillStyle = '#aaa'; ctx.fillText('Дрони збито/пережито: ' + Math.min(h.beaten, ALIOSHA_NEED) + ' / ' + ALIOSHA_NEED, 16, 145); }
   ctx.fillStyle = '#fff';
   ctx.fillStyle = packUsed(h) >= PACK_CAP ? '#f2994a' : '#ccc';
-  ctx.fillText('Рюкзак: ' + packUsed(h) + '/' + PACK_CAP, 16, 181);
+  ctx.fillText('Рюкзак: ' + packUsed(h) + '/' + PACK_CAP + (h.cans > 0 ? '  ⛽×' + h.cans : '') + '   [' + c.label('drop') + '] викласти', 16, 181);
   if (h.detector) { ctx.fillStyle = '#5ad1c4'; ctx.fillText('ДЕТЕКТОР', 110, 181); }
   if (h.gasmask) { ctx.fillStyle = '#9fd3c7'; ctx.fillText('ПРОТИГАЗ', 16, 199); }
   ctx.fillStyle = '#fff';
@@ -1486,7 +1498,7 @@ function drawHumanHud(ctx, vp, p, t) {
   }
   // підказки
   let tip = '';
-  if (h.vehicle) tip = h.seat === 'driver' ? '[' + c.label('left') + c.label('right') + '] їхати   [' + c.label('aim') + '] гальмо' + (h.vehicle.type === 'moto' ? '   [' + c.label('up') + '] дибки (через перешкоди)   [' + c.label('down') + '] на переднє   у повітрі ' + c.label('up') + c.label('down') + ' — обертати' : '') + '   [' + c.label('interact') + '] вийти' : '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] кулемет  [' + c.label('interact') + '] вийти';
+  if (h.vehicle) tip = h.seat === 'driver' ? '[' + c.label('left') + c.label('right') + '] їхати   [' + c.label('aim') + '] гальмо' + (h.vehicle.type === 'moto' ? '   [' + c.label('up') + '] дибки (через перешкоди)   [' + c.label('down') + '] на переднє   у повітрі ' + c.label('up') + c.label('down') + ' — обертати' : '') + (h.vehicle.hasMG && !h.vehicle.gunner ? '   [' + c.label('slot1') + '] до кулемета' : '') + '   [' + c.label('interact') + '] вийти' : '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] кулемет' + (!h.vehicle.driver ? '  [' + c.label('slot1') + '] за кермо' : '') + '  [' + c.label('interact') + '] вийти';
   else if (h.mount) tip = '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('fire') + '] вогонь (' + h.mount.ammo + ')  [' + c.label('interact') + '] відійти';
   else if (h.working) tip = ({ ply: 'Забиваєш фанерою… ', fort: 'Облаштовуєш вогневу позицію… ', kit: 'Встановлюєш обладнання… ', ditch: 'Копаєш рів… ', bridge: 'Будуєш переправу… ' }[h.working.kind] || 'Ставиш станкову гвинтівку… ') + Math.round(h.working.t / h.working.dur * 100) + '%   [' + c.label('left') + c.label('right') + '] перервати';
   else if (h.carry && !h.aiming) tip = '[' + c.label('fire') + '] кинути: ' + PROP_TYPES[h.carry].name.toLowerCase() + '  (тримай [' + c.label('aim') + '] — під кутом)   [' + c.label('slot1') + '] покласти';
@@ -1500,8 +1512,8 @@ function drawHumanHud(ctx, vp, p, t) {
     const pr = !h.carry && !h.canister ? nearProp(h) : null, ft = fortTarget(h), mt = mountTarget(h);
     const L = (a) => '[' + c.label(a) + ']';
     if (mo) tip = L('interact') + ' стати за станкову гвинтівку (' + mo.ammo + ' набоїв)';
-    else if (v) tip = '[' + c.label('interact') + '] ' + (v.hasMG && !v.gunner && (v.driver || wantsGun(h, v)) ? 'стати за кулемет' : 'сісти: ' + VEH[v.type].name + ' (пальне ' + Math.round(v.fuel / VEH[v.type].tank * 100) + '%' + (h.canister ? ', заправити' : '') + ')' + (v.hasMG && !v.gunner ? '   ззаду — за кулемет' : ''));
-    else if (pk && !canTake(h, pk)) tip = pk.type === 'pack' ? 'Рюкзак загиблого: нічого не влізе' : PICKUP_NAMES[pk.type] + ': не влізе в рюкзак (' + packUsed(h) + '/' + PACK_CAP + ')';
+    else if (v) tip = '[' + c.label('interact') + '] ' + (v.hasMG && !v.gunner && (v.driver || wantsGun(h, v)) ? 'стати за кулемет' : 'сісти: ' + VEH[v.type].name + ' (пальне ' + Math.round(v.fuel / VEH[v.type].tank * 100) + '%' + (h.cans > 0 && v.fuel <= 0.5 ? ', заправить каністрою' : '') + ')' + (v.hasMG && !v.gunner ? '   ззаду — за кулемет' : ''));
+    else if (pk && !canTake(h, pk)) tip = pk.type === 'pack' ? 'Рюкзак загиблого: нічого не влізе' : PICKUP_NAMES[pk.type] + ': не влізе — [' + c.label('interact') + '] замінити (старе викладеться)';
     else if (pk) tip = '[' + c.label('interact') + '] підібрати: ' + PICKUP_NAMES[pk.type] + (pk.type === 'fuel' && h.weapon ? ' (зброю не можна буде використати)' : '');
     else if (sp) tip = '[' + c.label('interact') + '] сховатися: ' + { bunker: 'бліндаж', burrow: 'нора', pipe: sp.style === 'sewer' ? 'каналізація' : 'тунель' }[sp.type];
     else if (meleeTarget(h)) tip = L('fire') + ' удар' + (meleeTarget(h).kind === 'd' ? ' по дрону' : '');

@@ -217,7 +217,7 @@ function nearGap(h, b, mount) {
   for (const gp of bldGaps(b)) {
     let d = 1e9;
     if (gp.kind === 'side') {
-      if (gp.door && !mount) continue;
+      // дверний отвір першого поверху — фанерні двері (людина пройде, дрон ні)
       // вікно з вогневою позицією не забиваємо — гвинтівка стріляє крізь нього
       if (!mount && G.W.mounts.some((m) => Math.abs(m.x - (gp.x + BT / 2)) < 30 && m.y > gp.y && m.y - 40 < gp.y + gp.h)) continue;
       const dx = Math.abs(h.x - (gp.x + BT / 2));
@@ -293,6 +293,11 @@ function tickWork(h, c, dt) {
     Sfx.click();
     return;
   }
+  if (D.kind === 'tdoor') {
+    if (RND() < dt * 6) Sfx.tone(520, 0.03, 0.06);
+    if (D.t >= D.dur) { h.working = null; buildTunnelDoor(h, D); Sfx.click(); }
+    return;
+  }
   if (D.kind === 'fort') {
     h.digT = 0.2;
     digDirt(h.x + h.facing * 12, h.y);
@@ -307,9 +312,9 @@ function tickWork(h, c, dt) {
     // отвір міг змінитися (вибух) — перевіряємо, що він ще є
     if (!bldGaps(D.b).some((x) => x.kind === gp.kind && Math.abs(x.x - gp.x) < 3 && Math.abs(x.y - gp.y) < 3)) return;
     const sg = D.seg || gp;
-    addSolid(W, { type: 'plywood', x: sg.x, y: sg.y, w: sg.w, h: sg.h, hp: 1, thin: gp.kind === 'floor', bld: D.b });
+    addSolid(W, { type: 'plywood', x: sg.x, y: sg.y, w: sg.w, h: sg.h, hp: gp.door ? 2 : 1, thin: gp.kind === 'floor', door: !!gp.door, bld: D.b });
     buildBuckets(W);
-    feed(h.player.name + ' залатав ' + (gp.kind === 'side' ? 'вікно' : 'пролом') + ' фанерою', '#c9a36a');
+    feed(h.player.name + (gp.door ? ' поставив фанерні двері — людина пройде, дрон ні' : ' залатав ' + (gp.kind === 'side' ? 'вікно' : 'пролом') + ' фанерою'), '#c9a36a');
   } else {
     W.mounts.push({ x: D.x, y: D.y, dir: gp.side, ammo: MOUNT_AMMO, b: D.b, user: null });
     D.b.mounts = (D.b.mounts || 0) + 1;

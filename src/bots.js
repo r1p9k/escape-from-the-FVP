@@ -267,7 +267,7 @@ function thinkHuman(b, s, dt) {
   if (pk && botWants(h, pk)) b.tap(s, 'interact');
   else if (!isTeam() && m.noVehT <= 0 && nearVehicle(h)) {
     const v = nearVehicle(h);
-    if (v.driver || v.fuel > 1.5 || h.canister) b.tap(s, 'interact');
+    if (v.driver || v.fuel > 1.5 || h.cans > 0) b.tap(s, 'interact');
   }
 
   // довго в диму — вибиратися, не зупинятися
@@ -374,7 +374,7 @@ const BOT_SPREAD = 125; // скид рве на ~90 — тримаємося д�
 function botWants(h, pk) {
   if (pk.type === 'shovel') return false; // боти не копають
   if (pk.type === 'armor') return h.armor <= 0;
-  if (pk.type === 'fuel') return !h.canister && !h.weapon;
+  if (pk.type === 'fuel') return !(h.cans > 0) && packUsed(h) < PACK_CAP;
   if (WEAPONS[pk.type]) return !h.weapon;
   return canTake(h, pk);
 }

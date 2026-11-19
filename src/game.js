@@ -370,8 +370,9 @@ function updateHuman(h, dt) {
   if (ax && !h.aiming && !h.onLadder) tunnelDig(h, ax, dt); // уперся в кінець тунелю чи завал — копає далі
   backpackInput(h, c);
   tickHeal(h, c, dt, ax !== 0 || h.aiming || !h.onGround);
-  // порожні руки — зброя підбирається сама
-  if (!h.weapon && !h.canister) { const pk = nearPickup(h); if (pk && WEAPONS[pk.type]) takePickup(h, pk); }
+  // є місце — предмети підбираються самі (крім щойно викладених цією ж людиною)
+  for (const pk of G.W.pickups) if (!pk.taken && Math.abs(pk.x - h.x) < 30 && Math.abs(pk.y - h.y) < 40 && autoTake(h, pk)) { takePickup(h, pk); break; }
+  if (c.pressed('drop')) dropItem(h);
   // «Позиція» + «Дія»: сітка; у будівлі з сіткою біля вікна — вогнева позиція
   if (c.pressed('interact') && c.held('aim')) { const mt = mountTarget(h); if (mt) startMount(h, mt); else placeNet(h); }
   else if (c.pressed('interact')) {
@@ -382,12 +383,13 @@ function updateHuman(h, dt) {
     else if (v) enterVehicle(h, v);
     else {
       const pk = nearPickup(h);
-      if (pk) takePickup(h, pk);
+      if (pk) takeOrSwap(h, pk);
       else {
         const sp = nearHide(h), pr = !h.carry && !h.canister ? nearProp(h) : null, ft = fortTarget(h);
         if (sp) enterHide(h, sp);
         else if (pr) takeProp(h, pr);
         else if (ft) startPly(h, ft);
+        else if (tunnelDoorSpot(h)) startTunnelDoor(h);
         else if (h.carry) dropCarry(h);
         else if (digAction(h, false, true)) tipOnce(h, 'Копати — [' + c.label('dig') + ']' + (pipeAt(G.W, h.x, h.y) ? '; углиб — [' + c.label('down') + '] + [' + c.label('dig') + ']' : ''));
       }
@@ -511,14 +513,16 @@ function moveHuman(h, dt) {
   const W = G.W;
   let d = HUMAN_DIM[h.stance], hw = d.w / 2;
   const ox = h.x;
-  h.x = clamp(h.x + h.vx * dt, 10, W.width - 10);
+  // двері з фанери: людина проходить, але сповільнюється
+  const inDoor = solidsNear(W, h.x - 20, h.x + 20).some((s) => s.door && h.x + hw > s.x - 2 && h.x - hw < s.x + s.w + 2 && h.y > s.y && h.y - d.h < s.y + s.h);
+  h.x = clamp(h.x + h.vx * dt * (inDoor ? 0.3 : 1), 10, W.width - 10);
   // земляні стіни й стеля тунелю: у низький хід — пригнутися самому
   if (h.x !== ox && !earthFits(h.x, h.y, d)) {
     if (h.stance === 'stand' && earthFits(h.x, h.y, HUMAN_DIM.crouch)) { h.stance = 'crouch'; h.autoCrouch = true; d = HUMAN_DIM.crouch; hw = d.w / 2; }
     else { h.x = ox; h.wallT = 0.1; h.vx = 0; }
   }
   for (const s of solidsNear(W, h.x - 60, h.x + 60)) {
-    if (s.thin) continue;
+    if (s.thin || s.door) continue; // крізь двері — можна, повільно (нижче)
     if (h.y > s.y + 0.5 && h.y - d.h < s.y + s.h && h.x + hw > s.x && h.x - hw < s.x + s.w) {
       if (h.onGround && h.y - s.y <= 15 && freeAt(h.x, s.y, d)) { h.y = s.y; continue; }
       if (h.x < s.x + s.w / 2) h.x = s.x - hw; else h.x = s.x + s.w + hw;
@@ -537,7 +541,7 @@ function moveHuman(h, dt) {
   }
   if (sp.top > -1e8 && h.vy < 0 && h.y - d.h < sp.top) { h.y = sp.top + d.h; h.vy = 0; } // стеля тунелю
   for (const s of solidsNear(W, h.x - 30, h.x + 30)) {
-    if (h.x + hw <= s.x || h.x - hw >= s.x + s.w) continue;
+    if (h.x + hw <= s.x || h.x - hw >= s.x + s.w || s.door) continue;
     if (h.vy >= 0 && prevY <= s.y + 1 && h.y >= s.y) {
       if (s.thin && h.dropT > 0) continue;
       if (h.vy > 950) hurt(h, (h.vy - 950) * 0.08, 'fall');
@@ -572,7 +576,7 @@ function nearHide(h) {
   return null;
 }
 // ---------- Рюкзак: 4 місця (аптечки, заряди РЕБ, детектор) ----------
-function packUsed(h) { return h.medkits + h.reb + (h.detector ? 1 : 0); }
+function packUsed(h) { return h.medkits + h.reb + (h.detector ? 1 : 0) + (h.cans || 0); }
 function canTake(h, p) {
   if (p.type === 'gasmask') return !h.gasmask;
   if (p.type === 'grenade') return h.grenades < GRENADES_MAX;
@@ -580,6 +584,7 @@ function canTake(h, p) {
   if (p.type === 'medkit') return h.medkits < MEDKIT_MAX && packUsed(h) < PACK_CAP;
   if (p.type === 'reb') return packUsed(h) < PACK_CAP;
   if (p.type === 'detector') return !h.detector && packUsed(h) < PACK_CAP;
+  if (p.type === 'fuel') return packUsed(h) < PACK_CAP;
   if (p.type === 'pack') return packGain(h, p.pack);
   return true;
 }
@@ -598,13 +603,72 @@ function takePickup(h, p) {
   if (p.type === 'reb') h.reb++;
   else if (p.type === 'medkit') h.medkits++;
   else if (p.type === 'detector') { h.detector = true; feed(h.player.name + ' знайшов детектор дронів — видно дрони крізь стіни й у кущах', '#5ad1c4'); }
-  else if (p.type === 'fuel') { if (h.carry) dropCarry(h); h.canister = true; h.aiming = false; } // каністра займає руки
+  else if (p.type === 'fuel') { h.cans = (h.cans || 0) + 1; feed(h.player.name + ': каністра в рюкзаку — заправить техніку, коли скінчиться пальне', '#f2c94c'); }
   else if (p.type === 'ammo') { h.weapon.ammo += WEAPONS[h.weapon.type].ammo; feed(h.player.name + ': поповнив набої', '#ddd'); }
   else if (p.type === 'grenade') { h.grenades = Math.min(GRENADES_MAX, h.grenades + 2); feed(h.player.name + ': гранат ' + h.grenades, '#c9a227'); }
   else if (p.type === 'gasmask') { h.gasmask = true; feed(h.player.name + ' вдягнув протигаз — дим більше не шкодить', '#9fd3c7'); }
   else if (p.type === 'armor') h.armor = 100;
-  else { h.weapon = makeWeapon(p.type); h.reloadT = 0; }
+  else { h.weapon = makeWeapon(p.type); if (p.ammo != null) { h.weapon.ammo = p.ammo; h.weapon.mag = Math.min(p.mag, p.ammo); } h.reloadT = 0; }
   Sfx.click();
+}
+// підібрати само, якщо є місце
+function autoTake(h, p) {
+  if (p.byName === h.player.name && G.time - (p.byT || 0) < 4) return false; // щойно виклав — не підбирати назад
+  if (WEAPONS[p.type]) return !h.weapon && !h.mount && !h.vehicle;
+  if (p.type === 'armor') return (h.armor || 0) < 100;
+  if (p.type === 'pack') return packGain(h, p.pack);
+  return canTake(h, p);
+}
+// «Дія» біля предмета: місця немає — старе викладається, нове береться
+function takeOrSwap(h, p) {
+  if (WEAPONS[p.type] && h.weapon) dropOne(h, 'weapon');
+  else if (['medkit', 'reb', 'detector', 'fuel'].includes(p.type) && !canTake(h, p)) {
+    const other = ['cans', 'reb', 'medkits', 'detector'].find((k) => k !== { medkit: 'medkits', reb: 'reb', detector: 'detector', fuel: 'cans' }[p.type] && (k === 'detector' ? h.detector : h[k] > 0));
+    if (other) dropOne(h, other);
+  }
+  takePickup(h, p);
+}
+// викласти одну річ на землю (поруч, у бік погляду)
+const DROP_TYPE = { medkits: 'medkit', reb: 'reb', detector: 'detector', cans: 'fuel' };
+function dropOne(h, what) {
+  const W = G.W, x = clamp(h.x + h.facing * 16, 20, W.width - 20);
+  const p = { x, y: h.y, byName: h.player.name, byT: G.time };
+  if (what === 'weapon') { if (!h.weapon) return false; p.type = h.weapon.type; p.ammo = h.weapon.ammo; p.mag = h.weapon.mag; h.weapon = null; h.reloadT = 0; h.aiming = false; }
+  else if (what === 'detector') { if (!h.detector) return false; h.detector = false; p.type = 'detector'; }
+  else { if (!(h[what] > 0)) return false; h[what]--; p.type = DROP_TYPE[what]; }
+  W.pickups.push(p);
+  feed(h.player.name + ' виклав: ' + (PICKUP_NAMES[p.type] || p.type).toLowerCase(), '#ccc');
+  Sfx.click();
+  return true;
+}
+// «Викласти»: спершу те, що в руках, далі — з рюкзака
+function dropItem(h) {
+  if (h.vehicle || h.hidden || h.dead) return;
+  if (h.carry) { dropCarry(h); return; }
+  if (h.canister) { dropCanister(h); return; }
+  for (const w of ['weapon', 'cans', 'detector', 'reb', 'medkits']) if (dropOne(h, w)) return;
+  tipOnce(h, 'Нічого викласти');
+}
+// двері з фанери в тунелі — будь-де в галереї
+function tunnelDoorSpot(h) {
+  const W = G.W, sp = pipeHere(W, h.x, h.y);
+  if (!sp || Math.abs(h.y - tunFloor(W, sp, h.x)) > 6 || h.carry) return null;
+  const x = h.x + h.facing * 14;
+  if (x < sp.a + 4 || x > sp.b - 4) return null;
+  if (solidsNear(W, x - 30, x + 30).some((s) => s.door && Math.abs(s.x + s.w / 2 - x) < 30)) return null;
+  return { sp, x };
+}
+function startTunnelDoor(h) {
+  const t = tunnelDoorSpot(h);
+  if (!t) return;
+  h.working = { kind: 'tdoor', t: 0, dur: PLY_TIME, sp: t.sp, x: t.x };
+  h.vx = 0;
+}
+function buildTunnelDoor(h, D) {
+  const W = G.W, f = tunFloor(W, D.sp, D.x), H = tunH(D.sp);
+  addSolid(W, { type: 'plywood', door: true, x: D.x - 3, y: f - H, w: 6, h: H, hp: 2 });
+  buildBuckets(W);
+  feed(h.player.name + ' поставив двері з фанери — людина пройде, дрон ні', '#c9a36a');
 }
 function takePack(h, p) {
   const k = p.pack, got = [];
@@ -623,6 +687,7 @@ function dropPack(h) {
   if (h.mount) leaveMount(h);
   h.working = null; h.grenades = 0;
   if (h.canister) { h.canister = false; W.pickups.push({ type: 'fuel', x, y: surfaceY(W, x) }); }
+  for (; h.cans > 0; h.cans--) W.pickups.push({ type: 'fuel', x: clamp(x + rand(-20, 20), 20, W.width - 20), y: h.y });
   const k = { weapon: h.weapon, medkits: h.medkits, reb: h.reb, detector: h.detector };
   h.weapon = null; h.medkits = 0; h.reb = 0; h.detector = false; h.digging = null; h.reloadT = 0; h.healT = 0;
   if (!k.weapon && !k.medkits && !k.reb && !k.detector) return;
@@ -990,13 +1055,17 @@ function enterVehicle(h, v) {
   if (v.hasMG && !v.gunner && (v.driver || wantsGun(h, v))) { v.gunner = h; h.seat = 'gunner'; }
   else { v.driver = h; h.seat = 'driver'; }
   h.vehicle = v; h.stance = 'stand'; h.onLadder = false; h.aiming = false;
-  // каністра — заправити техніку
-  const tank = VEH[v.type].tank;
-  if (h.canister && v.fuel < tank * 0.95) {
-    v.fuel = Math.min(tank, v.fuel + tank * 0.6); h.canister = false;
-    feed(h.player.name + ' заправив ' + VEH[v.type].name, '#f2c94c');
-  }
+  // сів за кермо порожньої техніки — заправити з рюкзака
+  if (h.seat === 'driver' && v.fuel <= 0.5) useCan(h, v);
   Sfx.click();
+}
+// каністра з рюкзака — у бак
+function useCan(h, v) {
+  if (!h || !(h.cans > 0)) return false;
+  const tank = VEH[v.type].tank;
+  v.fuel = Math.min(tank, v.fuel + tank * 0.6); h.cans--;
+  feed(h.player.name + ' заправив ' + VEH[v.type].name + ' з каністри', '#f2c94c');
+  return true;
 }
 // підійшов ззаду до техніки з кулеметом — стати за кулемет (а не за кермо)
 function wantsGun(h, v) { return v.hasMG && (h.x - v.x) * v.dir < -4; }
@@ -1019,6 +1088,11 @@ function exitVehicle(h, fling) {
 function humanInVehicle(h, c, dt) {
   const v = h.vehicle;
   if (c.pressed('interact')) { exitVehicle(h); return; }
+  // [1] — пересісти: за кермом → до кулемета (або [Вогонь]), біля кулемета → за кермо
+  if (h.seat === 'driver' && v.hasMG && !v.gunner && (c.pressed('slot1') || c.pressed('fire'))) {
+    v.driver = null; v.gunner = h; h.seat = 'gunner'; v.input = 0; v.brake = false; h.aimA = -0.35; h.facing = v.dir; h.fireCd = 0.25; Sfx.click(); return;
+  }
+  if (h.seat === 'gunner' && !v.driver && c.pressed('slot1')) { v.gunner = null; v.driver = h; h.seat = 'driver'; h.aiming = false; Sfx.click(); return; }
   const T = VEH[v.type];
   if (h.seat === 'driver') {
     v.input = c.axisX; h.facing = v.dir;
@@ -1264,7 +1338,7 @@ function updateVehicles(dt) {
     else if (inp) {
       v.vx = approach(v.vx, inp * T.max, T.acc * dt); v.dir = inp;
       v.fuel -= dt;
-      if (v.fuel <= 0) { v.fuel = 0; feed(T.name + ': пальне скінчилося', '#f2994a'); }
+      if (v.fuel <= 0) { v.fuel = 0; if (!useCan(v.driver, v) && !useCan(v.gunner, v)) feed(T.name + ': пальне скінчилося', '#f2994a'); }
     } else v.vx = approach(v.vx, 0, (v.brake ? 950 : v.driver ? 300 : 260) * dt);
     if (v.type === 'moto' && !v.air) v.vx += GRAV * Math.sin(v.ang || 0) * 0.55 * dt; // схил: униз розганяє, угору гальмує
     if (v.brake && Math.abs(v.vx) > 120 && RND() < dt * 30) G.parts.push({ type: 'dust', x: v.x - v.dir * T.len * 0.35, y: v.y - 3, vx: v.dir * 30, vy: -15, life: 0.6, max: 0.6, size: 7 });
