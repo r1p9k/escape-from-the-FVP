@@ -57,7 +57,11 @@ function humanCols(h) {
 // ---- зброя: початок — приклад, уздовж +x ----
 const GUN_GRIP = 9, GUN_FORE = 19;
 function drawGunShape(ctx, type) {
-  if (ispAlong(ctx, type === 'shotgun' ? 'shotgun' : type === 'mg' ? 'pkm' : 'rifle', type === 'mg' ? 36 : 31)) return; // спрайт із Gemini
+  const len = { mg: 36, smg: 23, sniper: 40 }[type] || 31;
+  if (ispAlong(ctx, type === 'shotgun' ? 'shotgun' : type === 'mg' ? 'pkm' : 'rifle', len)) { // спрайт із Gemini
+    if (type === 'sniper') { ctx.fillStyle = '#1d1f1b'; ctx.fillRect(12, -7, 11, 3.2); ctx.fillRect(16, -4.5, 2, 2); } // оптичний приціл
+    return;
+  }
   ctx.fillStyle = HCOL.line;
   if (type === 'shotgun') {
     ctx.fillRect(-0.8, -2.8, 31, 6.6);
