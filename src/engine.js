@@ -33,17 +33,17 @@ function rectDist(px, py, r) {
 
 // ===== Керування =====
 const Keys = {};
-const ACTIONS = ['left', 'right', 'up', 'down', 'sprint', 'interact', 'dig', 'fire', 'special', 'aim', 'slot1', 'slot2', 'slot3'];
+const ACTIONS = ['left', 'right', 'up', 'down', 'sprint', 'interact', 'dig', 'fire', 'special', 'aim', 'slot1', 'slot2', 'slot3', 'drop'];
 // Одна клавіатура = один гравець. Ліва рука на WASD, великий палець на пробілі.
 // Стрілки дублюють WASD (рух і кут прицілу).
 const KB_SCHEMES = {
   kb: { name: 'Клавіатура', short: 'WASD', keys: {
     left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'], up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'],
     sprint: ['ShiftLeft', 'ShiftRight'], interact: ['KeyE'], dig: ['KeyR'], fire: ['KeyF', 'KeyJ'], special: ['KeyQ'], aim: ['Space'],
-    slot1: ['Digit1', 'Numpad1'], slot2: ['Digit2', 'Numpad2'], slot3: ['Digit3', 'Numpad3'],
+    slot1: ['Digit1', 'Numpad1'], slot2: ['Digit2', 'Numpad2'], slot3: ['Digit3', 'Numpad3'], drop: ['KeyG'],
   } },
 };
-const GP_LABELS = { left: '←', right: '→', up: '↑/A', down: '↓/B', sprint: 'LB', interact: 'X', dig: 'Start', fire: 'RB', special: 'Y', aim: 'LT', slot1: 'Back', slot2: 'L3', slot3: 'R3' };
+const GP_LABELS = { left: '←', right: '→', up: '↑/A', down: '↓/B', sprint: 'LB', interact: 'X', dig: 'Start', fire: 'RB', special: 'Y', aim: 'LT', slot1: 'Back', slot2: 'L3', slot3: 'R3', drop: '—' };
 const LOBBY_CODES = ['Escape', 'Enter'];
 const USED_CODES = new Set(LOBBY_CODES);
 for (const s of Object.values(KB_SCHEMES)) for (const cs of Object.values(s.keys)) for (const c of cs) USED_CODES.add(c);

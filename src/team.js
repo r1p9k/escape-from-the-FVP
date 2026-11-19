@@ -318,7 +318,16 @@ function deliverUgv(u) {
     const x = basePickupX(t);
     W.pickups.push({ type: weighted({ rifle: 0.7, shotgun: 0.5, ammo: 1.5, grenade: 1, medkit: 1 }), x, y: gAt(W, x) });
   }
-  feed('НРК ' + TEAMS[t].gen + ' доставив ' + got + ' дрони й зброю на базу', TEAMS[t].col);
+  // і в кожному захопленому будинку та бліндажі (тунелі) — по одиниці зброї чи припасів
+  for (const o of G.objs) {
+    if (o.owner !== t || (o.kind !== 'bld' && o.kind !== 'tunnel') || !o.ref) continue;
+    let x, y;
+    if (o.kind === 'bld') { const b = o.ref; if (b.ruined) continue; x = b.x + b.w * rand(0.25, 0.75); y = b.y + b.h; }
+    else { const sp = o.ref; if (sp.b - sp.a < 40) continue; x = rand(sp.a + 20, sp.b - 20); y = tunFloor(W, sp, x); }
+    if (W.pickups.filter((p) => !p.taken && Math.abs(p.x - x) < 120 && Math.abs(p.y - y) < 60).length >= 2) continue;
+    W.pickups.push({ type: weighted({ rifle: 1, shotgun: 0.7, mg: 0.3, grenade: 0.4, ammo: 0.3 }), x, y });
+  }
+  feed('НРК ' + TEAMS[t].gen + ' доставив ' + got + ' дрони, зброю — на базу, у будинки й бліндажі', TEAMS[t].col);
   Sfx.tone(520, 0.12, 0.08);
 }
 function hurtUgv(u, dmg, by) {
