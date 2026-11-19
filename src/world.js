@@ -75,7 +75,18 @@ const BREAK_HITS = 3;   // скільки вибухів в одному міс�
 // плавно пірнає глибше з пологим схилом, щоб людина могла пройти, а над стелею лишався ґрунт
 // ухил ≤ 0,2: галерея лише трохи вища за людину, тож на крутішому ухилі голова впирається в стелю з нижчого боку
 const TUN_SLOPE = 0.2, TUN_REACH = 264;
+// тунель, виритий під кутом: підлога — ламана [[x, y], …] (x зростає), незалежна від рельєфу
+function pathY(P, x) {
+  if (x <= P[0][0]) return P[0][1];
+  for (let i = 1; i < P.length; i++) if (x <= P[i][0]) { const a = P[i - 1], b = P[i]; return a[1] + (b[1] - a[1]) * ((x - a[0]) / ((b[0] - a[0]) || 1)); }
+  return P[P.length - 1][1];
+}
+function pathSlope(P, x) {
+  for (let i = 1; i < P.length; i++) if (x <= P[i][0] || i === P.length - 1) { const a = P[i - 1], b = P[i]; return (b[1] - a[1]) / ((b[0] - a[0]) || 1); }
+  return 0;
+}
 function tunFloor(W, sp, x) {
+  if (sp.path) return pathY(sp.path, x);
   const k = Math.round(x);
   if (!sp._fm || sp._fv !== W.cavMap) { sp._fm = new Map(); sp._fv = W.cavMap; } // кеш скидається разом із кешем порожнин
   let f = W.cavMap ? sp._fm.get(k) : undefined;
@@ -97,11 +108,11 @@ function pipeSpans(W, sp, x, out, human) {
     const f = tunFloor(W, sp, x);
     const br = sp.breaks && sp.breaks.find((q) => x >= q.a && x <= q.b);
     if (br) out.push([-1e9, f - br.fill * H]); // перекриття обвалилося: яма, засипана на fill
-    else out.push([f - H, f]);
+    else out.push([f - H - (sp.path ? Math.abs(pathSlope(sp.path, x)) * 16 : 0), f]); // на схилі — запас над головою
   }
   for (const e of sp.exits) {
     if (e.prog != null) { exitPartial(e, x, H, out); continue; } // ще копається
-    if (e.kind === 'shaft') { if (Math.abs(x - e.tx) <= SHAFT_W / 2) out.push([human ? g + 3 : -1e9, e.by]); }
+    if (e.kind === 'shaft') { if (Math.abs(x - e.tx) <= SHAFT_W / 2) out.push(e.inner ? [human ? e.ty + 3 : e.ty - 4, e.by] : [human ? g + 3 : -1e9, e.by]); } // inner — лаз між поверхами
     else {
       // спуск — відкрита траншея; унизу рівний майданчик углиб галереї, щоб зійти на її підлогу
       const fx = e.bx - e.dir * 16;
