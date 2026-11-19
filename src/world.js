@@ -104,7 +104,7 @@ function tunFloor(W, sp, x) {
 function pipeSpans(W, sp, x, out, human) {
   const H = tunH(sp), g = gAt(W, x);
   // галерея; крайній спуск сам веде вниз — під ним галерея не тягнеться (інакше «кишеня» внизу)
-  if (x >= sp.a && x <= sp.b && sp.b > sp.a && !sp.exits.some((e) => e.kind === 'ramp' && (e.dir > 0 ? x > e.bx + 1 && e.bx > sp.b - 14 : x < e.bx - 1 && e.bx < sp.a + 14))) {
+  if (x >= sp.a && x <= sp.b && sp.b > sp.a + 0.5 && !sp.exits.some((e) => e.kind === 'ramp' && (e.dir > 0 ? x > e.bx + 1 && e.bx > sp.b - 14 : x < e.bx - 1 && e.bx < sp.a + 14))) {
     const f = tunFloor(W, sp, x);
     const br = sp.breaks && sp.breaks.find((q) => x >= q.a && x <= q.b);
     if (br) out.push([-1e9, f - br.fill * H]); // перекриття обвалилося: яма, засипана на fill
@@ -330,7 +330,8 @@ const F = {
   },
 };
 
-function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25, grenade: 0.6, gasmask: 0.4 }); }
+function weaponType() { return weighted({ rifle: 1, shotgun: 0.7, smg: 0.8, sniper: 0.35, mg: 0.25 }); }
+function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, smg: 0.6, sniper: 0.25, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25, grenade: 0.6, gasmask: 0.4 }); }
 // предмети побуту в будівлях (їх можна кидати)
 const PROP_KINDS = { jar: 3, chair: 2, stool: 1.5, pot: 1.5, brick: 1.2, tv: 0.8, iron: 1 };
 
@@ -341,14 +342,15 @@ function building(W, x, floors, w) {
   const bref = { x, y: roofY, w, h: g - roofY, seed: RND(), floors };
   W.backs.push(bref);
   const s0 = W.solids.length;
+  const lintel = rand(18, 44), sill = clamp(rand(16, 48), 12, FLOOR_H - lintel - 34); // вікна кожної будівлі — свої
   for (const wx of [x, x + w - T]) {
     for (let k = 0; k < floors; k++) {
       const yb = g - k * FLOOR_H, top = yb - FLOOR_H;
       if (k === 0) {
         addSolid(W, { type: 'wall', x: wx, y: top, w: T, h: FLOOR_H - 68 });
       } else {
-        if (RND() < 0.85) addSolid(W, { type: 'wall', x: wx, y: top, w: T, h: FLOOR_H - 80 });
-        if (RND() < 0.85) addSolid(W, { type: 'wall', x: wx, y: yb - 30, w: T, h: 30 });
+        if (RND() < 0.85) addSolid(W, { type: 'wall', x: wx, y: top, w: T, h: lintel });
+        if (RND() < 0.85) addSolid(W, { type: 'wall', x: wx, y: yb - sill, w: T, h: sill });
       }
     }
   }
@@ -381,10 +383,8 @@ function building(W, x, floors, w) {
   W.ladders.push({ x: x + 26, top: roofY - 14, bottom: g - (floors - 1) * FLOOR_H, roof: true });
   W.covers.push({ type: 'ruin', x: x + T, w: w - 2 * T, y: roofY, h: g - roofY + 6 });
   // знахідки на поверхах
-  if (RND() < 0.65) {
-    const k = randi(0, floors - 1);
-    W.pickups.push({ type: pickupType(), x: x + rand(40, w - 40), y: g - k * FLOOR_H });
-  }
+  for (let i = 0, n = randi(1, 2); i < n; i++) { const k = randi(0, floors - 1); W.pickups.push({ type: weaponType(), x: x + rand(40, w - 40), y: g - k * FLOOR_H }); }
+  if (RND() < 0.6) { const k = randi(0, floors - 1); W.pickups.push({ type: pickupType(), x: x + rand(40, w - 40), y: g - k * FLOOR_H }); }
   // побут: на кожному поверсі 1–3 речі, на даху інколи цегла
   for (let k = 0; k < floors; k++) {
     for (let i = randi(1, 3); i > 0; i--) {
@@ -484,6 +484,8 @@ function makeWorld(loc, seed, lenId, team) {
     else { h.y = gAt(W, h.x); h.hp = HIDE_HP[h.type]; }
   }
   cavDirty(W);
+  // бліндажі й тунелі — зі зброєю (у галереї, на підлозі)
+  for (const sp of W.pipes) if (sp.b - sp.a > 60) for (let i = 0, n = sp.b - sp.a > 300 ? 2 : 1; i < n; i++) { const px = rand(sp.a + 25, sp.b - 25); W.pickups.push({ type: weaponType(), x: px, y: tunFloor(W, sp, px) }); }
   for (const so of W.solids) if (SOLID_HP[so.type]) so.hp = SOLID_HP[so.type];
   // на дуже довгій мапі в одній зі схованок посередині захований бонус «Альоша»
   if (ML.id === 'huge') {

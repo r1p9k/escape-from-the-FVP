@@ -154,7 +154,7 @@ function renderGame(ctx, w, h, t) {
   let real = NET.role === 'client' ? G.players.filter((p) => p.cid === NET.cid) : G.players.filter((p) => !p.bot && !p.remote);
   if (!real.length) real = G.players.filter((p) => !p.bot).slice(0, 1); // за хостом ніхто не грає — дивиться за першим гравцем
   const views = layoutViews(real.length, w, h);
-  real.forEach((p, i) => renderView(ctx, views[i], p, t));
+  real.forEach((p, i) => { G._noise = 0; renderView(ctx, views[i], p, t); drawSignalNoise(ctx, views[i], G._noise); }); // дрон під землею — перешкоди в картинці
   ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
   for (const v of views) ctx.strokeRect(v.x, v.y, v.w, v.h);
   // стрічка подій
@@ -173,6 +173,20 @@ function renderGame(ctx, w, h, t) {
   drawNetInfo(ctx, w, h);
 }
 
+// перешкоди в картинці дрона: чим гірший зв'язок, тим більше снігу й смуг
+function drawSignalNoise(ctx, vp, k) {
+  if (k <= 0.02) return;
+  ctx.save();
+  ctx.globalAlpha = Math.min(0.85, k * 0.9);
+  const n = Math.floor(400 * k);
+  for (let i = 0; i < n; i++) { const g = (Math.random() * 255) | 0; ctx.fillStyle = 'rgb(' + g + ',' + g + ',' + g + ')'; ctx.fillRect(vp.x + Math.random() * vp.w, vp.y + Math.random() * vp.h, 2 + Math.random() * 3, 1 + Math.random() * 2); }
+  ctx.globalAlpha = Math.min(0.6, k * 0.7);
+  for (let i = 0; i < 3 + k * 6; i++) { const y = vp.y + Math.random() * vp.h; ctx.fillStyle = 'rgba(200,200,200,' + (0.2 + Math.random() * 0.3) + ')'; ctx.fillRect(vp.x, y, vp.w, 1 + Math.random() * 4 * k); }
+  if (k > 0.6) { ctx.globalAlpha = (k - 0.6) * 1.5; ctx.fillStyle = '#111'; ctx.fillRect(vp.x, vp.y, vp.w, vp.h); }
+  ctx.restore();
+  ctx.fillStyle = '#ffdddd'; ctx.font = FONT(14); ctx.textAlign = 'center';
+  ctx.fillText(k > 0.85 ? 'ЗВ\'ЯЗОК ВТРАЧЕНО' : 'Слабкий сигнал ' + Math.round((1 - k) * 100) + '%', vp.x + vp.w / 2, vp.y + vp.h - 40);
+}
 function renderView(ctx, vp, p, t) {
   const W = G.W;
   const isDrone = p.role === 'drone';
@@ -228,6 +242,7 @@ function renderView(ctx, vp, p, t) {
   if (G.mode === 'team') for (const o of G.objs) if (inX(o.x - 220, o.x + 220)) drawObjFlag(ctx, o, t);
   for (const sd of solidsNear(W, x0, x1)) drawSolid(ctx, sd, t);
   for (const l of W.ladders) if (inX(l.x - 15, l.x + 15) && !(l.sp && !knowP(l.sp))) drawLadder(ctx, l); // драбина в невідомому лазі не видна
+  for (const s of W.shops) if (!s.b.ruined && inX(s.b.x - 20, s.b.x + s.b.w + 20)) drawGarage(ctx, s);
   for (const s of W.shops) if (!s.b.ruined && inX(s.x - 40, s.x + 40)) drawShop(ctx, s, human);
   for (const d of W.ditches) if (inX(d.a - 20, d.b + 20)) drawDitch(ctx, d, W);
   for (const pk of W.pickups) if (!pk.taken && inX(pk.x - 20, pk.x + 20)) drawPickup(ctx, pk, t, human);
@@ -252,10 +267,16 @@ function renderView(ctx, vp, p, t) {
       if (hp && (!knowP(hp) || !G.humans.some((o) => !o.dead && allyP(o.player, p) && (pipeAt(W, o.x, o.y) === hp || lineOfSight(W, o.x, o.y - 40, h.x, h.y - 20))))) continue;
     }
     if (h.vehicle) continue; // малюється разом із технікою нижче
-    if (!h.dead && !h.hideAnim && !h.digging && !(h.digT > 0) && !h.meleeT && h.stance !== 'prone' && !h.carry) drawShovelBack(ctx, h); // лопата за спиною (видно, що вона є)
-    if (h.hideAnim && !h.dead) drawHideAnim(ctx, h, t); else drawHuman(ctx, h, t, 1);
+    if (!h.dead && !h.hideAnim && !h.digging && !(h.digT > 0) && !h.meleeT && h.stance !== 'prone' && !h.carry && !(h.rollT > 0) && !(h.flipT > 0)) drawShovelBack(ctx, h); // лопата за спиною (видно, що вона є)
+    if (h.hideAnim && !h.dead) drawHideAnim(ctx, h, t);
+    else if (!h.dead && (h.rollT > 0 || h.flipT > 0)) { // кувирок / сальто: повний оберт навколо центру тіла
+      const roll = h.rollT > 0, k = roll ? 1 - h.rollT / ROLL_T : 1 - h.flipT / FLIP_T, cy = h.y - (roll ? 13 : 28);
+      ctx.save(); ctx.translate(h.x, cy); ctx.rotate((roll ? h.rollDir : h.flipDir) * k * Math.PI * 2); ctx.translate(-h.x, -cy);
+      drawHuman(ctx, Object.assign({}, h, { stance: roll ? 'crouch' : 'crouch', aiming: false, vx: 0 }), t, 1);
+      ctx.restore();
+    } else drawHuman(ctx, h, t, 1);
     if ((h.digging || h.digT > 0) && !h.dead && !h.meleeT) drawShovel(ctx, h, t);
-    if (!h.dead && h === human && (h.digAngT > 0 || (h.digT > 0 && atDigFace(h)))) drawDigAngle(ctx, h); // куди піде тунель
+    if (!h.dead && h.digMode && h === human) drawDigAngle(ctx, h); // лопата: куди піде смуга
     if (h.kit && !h.dead) drawKitIcon(ctx, h.kit, h.x, h.y - HUMAN_DIM[h.stance].h - 14);
   }
   for (const m of W.mounts) if (inX(m.x - 40, m.x + 40)) drawMount(ctx, m);
@@ -276,6 +297,7 @@ function renderView(ctx, vp, p, t) {
     drawDrone(ctx, d, t);
   }
   if (!isDrone && human && !human.dead && !human.saved) drawSoundDirs(ctx, human, t);
+  if (isDrone && drone && drone.sig != null && drone.sig < 0.97) G._noise = 1 - drone.sig; else G._noise = 0;
   // кулі
   ctx.strokeStyle = '#ffe9a0'; ctx.lineWidth = 2;
   ctx.beginPath();
@@ -627,7 +649,7 @@ function drawTunnel(ctx, sp, W, x0, x1, known) {
   // стеля й підлога галереї
   ctx.strokeStyle = sewer ? '#7a7c7d' : '#120d08'; ctx.lineWidth = sewer ? 4 : 3;
   ctx.beginPath();
-  for (let x = ga; x <= gb; x += 6) { if (br(x)) { ctx.moveTo(x + 6, fl(x + 6) - H); continue; } ctx.lineTo(x, fl(x) - H); }
+  for (let x = ga; x <= gb; x += 6) { if (br(x) || fl(x) - H < gAt(W, x) + 2) { ctx.moveTo(x + 6, fl(x + 6) - H); continue; } ctx.lineTo(x, fl(x) - H); } // відкрита частина (біля поверхні) — без стелі
   ctx.stroke();
   ctx.strokeStyle = sewer ? '#3d4a46' : '#4a3825'; ctx.lineWidth = sewer ? 6 : 4;
   ctx.beginPath(); for (let x = ga; x <= gb; x += 6) ctx.lineTo(x, fl(x) + 1); ctx.stroke();
@@ -878,7 +900,7 @@ function drawLadder(ctx, l) {
   for (let y = l.bottom - 10; y > l.top - 4; y -= 14) { ctx.moveTo(l.x - 9, y); ctx.lineTo(l.x + 9, y); }
   ctx.stroke();
 }
-const PICKUP_STYLE = { rifle: ['#3b4a2f', 'АК'], shotgun: ['#5a3d24', 'ДР'], reb: ['#5b3b8a', 'РЕБ'], medkit: ['#e8e8e8', '+'], fuel: ['#a8322d', 'ПАЛ'], armor: ['#4a5568', 'БР'], detector: ['#22625c', 'ДЕТ'], pack: ['#6b5a3a', 'РЮК'], shovel: ['#7a5a32', 'ЛОП'], grenade: ['#4d5a2a', 'ГРН'], gasmask: ['#3f5552', 'ПРГ'], ammo: ['#6b5d2a', 'НАБ'] };
+const PICKUP_STYLE = { rifle: ['#3b4a2f', 'АК'], shotgun: ['#5a3d24', 'ДР'], smg: ['#3b4a2f', 'ПП'], sniper: ['#36402c', 'СН'], mg: ['#3b4a2f', 'КЛ'], reb: ['#5b3b8a', 'РЕБ'], medkit: ['#e8e8e8', '+'], fuel: ['#a8322d', 'ПАЛ'], armor: ['#4a5568', 'БР'], detector: ['#22625c', 'ДЕТ'], pack: ['#6b5a3a', 'РЮК'], shovel: ['#7a5a32', 'ЛОП'], grenade: ['#4d5a2a', 'ГРН'], gasmask: ['#3f5552', 'ПРГ'], ammo: ['#6b5d2a', 'НАБ'] };
 // маскувальна сітка: зелено-коричнева сітка з «листям»
 function drawNet(ctx, x, y, w, h, seed, light) {
   ctx.save();
@@ -1162,14 +1184,15 @@ function drawUgv(ctx, u, t) {
 }
 // напрямок риття біля вибою: пунктирна стрілка й кут у градусах
 function drawDigAngle(ctx, h) {
-  const a = h.digAng || 0, f = h.facing, x0 = h.x + f * 12, y0 = h.y - 10, L = 46;
-  const dx = Math.cos(a) * f, dy = Math.sin(a);
+  let a = h.digA || 0; const vert = Math.abs(a) > DIG_MAX + 0.01, f = h.facing, x0 = h.x + f * (vert ? 6 : 12), y0 = h.y - (vert ? (a > 0 ? 2 : 30) : 10), L = vert ? 40 : 46;
+  if (vert) a = a > 0 ? Math.PI / 2 : -Math.PI / 2;
+  const dx = vert ? 0 : Math.cos(a) * f, dy = Math.sin(a);
   ctx.save(); ctx.strokeStyle = 'rgba(255,214,120,0.9)'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
   ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + dx * L, y0 + dy * L); ctx.stroke(); ctx.setLineDash([]);
   const ex = x0 + dx * L, ey = y0 + dy * L, ang = Math.atan2(dy, dx);
   ctx.fillStyle = 'rgba(255,214,120,0.95)'; ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex - Math.cos(ang - 0.4) * 9, ey - Math.sin(ang - 0.4) * 9); ctx.lineTo(ex - Math.cos(ang + 0.4) * 9, ey - Math.sin(ang + 0.4) * 9); ctx.closePath(); ctx.fill();
   const deg = Math.round(-a * 180 / Math.PI);
-  ctx.font = FONT(10); ctx.textAlign = 'center'; ctx.fillText((deg > 0 ? '+' : '') + deg + '°', ex + f * 10, ey - 6);
+  ctx.font = FONT(10); ctx.textAlign = 'center'; ctx.fillText(vert ? (a > 0 ? 'лаз униз' : 'лаз угору') : (deg > 0 ? '+' : '') + deg + '°', ex + f * 14, ey - 6);
   ctx.restore();
 }
 // лопата за спиною: держак над плечем, полотно біля пояса
@@ -1192,12 +1215,21 @@ function drawShovel(ctx, h, t) {
   ctx.fillStyle = '#9aa0a6'; ctx.beginPath(); ctx.moveTo(18, -5); ctx.lineTo(28, -3); ctx.lineTo(28, 3); ctx.lineTo(18, 5); ctx.closePath(); ctx.fill();
   ctx.restore();
 }
+// бокс для обладнання техніки: смугаста розмітка на підлозі першого поверху
+function drawGarage(ctx, s) {
+  const b = s.b, y = b.y + b.h, x0 = b.x + 16, x1 = b.x + b.w - 16;
+  ctx.save();
+  for (let x = x0; x < x1; x += 12) { ctx.fillStyle = ((x - x0) / 12) % 2 < 1 ? '#d9b23a' : '#222'; ctx.fillRect(x, y - 3, Math.min(12, x1 - x), 3); }
+  ctx.fillStyle = 'rgba(217,178,58,0.85)'; ctx.fillRect(x0, y - 60, 2, 57); ctx.fillRect(x1 - 2, y - 60, 2, 57);
+  ctx.font = FONT(10); ctx.textAlign = 'center'; ctx.fillStyle = '#d9b23a'; ctx.fillText('БОКС', (x0 + x1) / 2, y - 72);
+  ctx.restore();
+}
 function drawPickup(ctx, pk, t, human) {
   if (pk.life != null && pk.life < 8 && (t * 5 | 0) % 2) return; // скоро зникне — блимає
   const [col, txt] = PICKUP_STYLE[pk.type];
   const y = pk.y - 14 + Math.sin(t * 3 + pk.x) * 2;
   ctx.fillStyle = 'rgba(255,240,150,0.25)'; ctx.beginPath(); ctx.arc(pk.x, y, 18, 0, 7); ctx.fill();
-  const icon = { rifle: ['rifle', 30], shotgun: ['shotgun', 30], grenade: ['grenade', 9] }[pk.type];
+  const icon = { rifle: ['rifle', 30], shotgun: ['shotgun', 30], grenade: ['grenade', 9], smg: ['rifle', 23], sniper: ['rifle', 38], mg: ['pkm', 34] }[pk.type];
   const PK_SPR = { medkit: 15, reb: 22, fuel: 13, armor: 15, detector: 12, pack: 16, gasmask: 15, ammo: 15 };
   if (!icon && PK_SPR[pk.type] && ISP.parts[pk.type]) {
     ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(30,30,24,0.45)'; ctx.beginPath(); ctx.ellipse(pk.x, y + 7, 13, 3.5, 0, 0, 7); ctx.fill();
@@ -1511,7 +1543,8 @@ function drawHumanHud(ctx, vp, p, t) {
   }
   // підказки
   let tip = '';
-  if (h.vehicle) tip = h.seat === 'driver' ? '[' + c.label('left') + c.label('right') + '] їхати   [' + c.label('aim') + '] гальмо' + (h.vehicle.type === 'moto' ? '   [' + c.label('up') + '] дибки (через перешкоди)   [' + c.label('down') + '] на переднє   у повітрі ' + c.label('up') + c.label('down') + ' — обертати' : '') + (h.vehicle.hasMG && !h.vehicle.gunner ? '   [' + c.label('slot1') + '] до кулемета' : '') + '   [' + c.label('interact') + '] вийти' : '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] кулемет' + (!h.vehicle.driver ? '  [' + c.label('slot1') + '] за кермо' : '') + '  [' + c.label('interact') + '] вийти';
+  if (h.digMode) tip = 'Лопата: ' + c.label('up') + c.label('down') + ' — напрямок (круто — лаз із драбиною)   ' + c.label('left') + c.label('right') + ' — бік   тримати ' + c.label('fire') + ' — копати   ' + c.label('dig') + ' — сховати';
+  else if (h.vehicle) tip = h.seat === 'driver' ? '[' + c.label('left') + c.label('right') + '] їхати   [' + c.label('aim') + '] гальмо' + (h.vehicle.type === 'moto' ? '   [' + c.label('up') + '] дибки (через перешкоди)   [' + c.label('down') + '] на переднє   у повітрі ' + c.label('up') + c.label('down') + ' — обертати' : '') + (h.vehicle.hasMG && !h.vehicle.gunner ? '   [' + c.label('slot1') + '] до кулемета' : '') + '   [' + c.label('interact') + '] вийти' : '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] кулемет' + (!h.vehicle.driver ? '  [' + c.label('slot1') + '] за кермо' : '') + '  [' + c.label('interact') + '] вийти';
   else if (h.mount) tip = '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('fire') + '] вогонь (' + h.mount.ammo + ')  [' + c.label('interact') + '] відійти';
   else if (h.working) tip = ({ ply: 'Забиваєш фанерою… ', fort: 'Облаштовуєш вогневу позицію… ', kit: 'Встановлюєш обладнання… ', ditch: 'Копаєш рів… ', bridge: 'Будуєш переправу… ' }[h.working.kind] || 'Ставиш станкову гвинтівку… ') + Math.round(h.working.t / h.working.dur * 100) + '%   [' + c.label('left') + c.label('right') + '] перервати';
   else if (h.carry && !h.aiming) tip = '[' + c.label('fire') + '] кинути: ' + PROP_TYPES[h.carry].name.toLowerCase() + '  (тримай [' + c.label('aim') + '] — під кутом)   [' + c.label('slot1') + '] покласти';
@@ -1542,9 +1575,9 @@ function drawHumanHud(ctx, vp, p, t) {
     else if (kitVehicle(h)) tip = L('interact') + ' встановити ' + KIT_NAMES[h.kit] + ' на ' + VEH[kitVehicle(h).type].name.toLowerCase();
     else if (nearShop(h)) tip = L('interact') + (h.kit ? ' замінити на ' + KIT_NAMES[h.kit === 'cage' ? 'ram' : 'cage'] : ' майстерня: взяти ' + KIT_NAMES.cage + ' (ще раз — ' + KIT_NAMES.ram + ')');
     else if (bridgeSpot(h)) tip = L('dig') + ' збудувати переправу через рів (' + BRIDGE_TIME + ' с)';
-    else if (h.kit) tip = 'Несеш ' + KIT_NAMES[h.kit] + ' — підійди до техніки';
+    else if (h.kit) tip = 'Несеш ' + KIT_NAMES[h.kit] + ' — техніка має заїхати в бокс (перший поверх будинку з майстернею)';
     else if (h.stance !== 'stand' && canFortHere(h)) tip = L('dig') + ' облаштувати вогневу позицію (окопчик із мішками, бруствер — у бік погляду)' + (canDitchHere(h) ? '   ' + L('sprint') + '+' + L('dig') + ' рів' : '');
-    else if (canDigHere(h)) tip = L('dig') + ' копати спуск у тунель (у бік погляду)' + (canFortHere(h) ? '   присівши — вогнева позиція' : '') + (canDitchHere(h) ? '   ' + L('sprint') + '+' + L('dig') + ' протитанковий рів' : '');
+    else if (canDigHere(h)) tip = L('dig') + ' лопата: копати в будь-якому напрямку' + (canFortHere(h) ? '   присівши — вогнева позиція' : '') + (canDitchHere(h) ? '   ' + L('sprint') + '+' + L('dig') + ' протитанковий рів' : '');
   }
   if (tip) {
     ctx.font = FONT(14); ctx.textAlign = 'center';
@@ -1712,7 +1745,7 @@ function humanControls(h, c) {
     : [L('up') + L('down') + ' кут', L('left') + L('right') + ' бік', L('fire') + ' кулемет', L('interact') + ' вийти'];
   if (h.hidden) return h.hidden.type === 'pipe' ? [L('left') + L('right') + ' іти', L('up') + L('down') + ' вихід', L('interact') + ' вилізти нагорі'].concat(h.shovel > 0 ? [L('up') + ' новий вихід', L('down') + '+' + L('left') + L('right') + ' копати далі'] : []) : [L('interact') + '/' + L('up') + ' вилізти', L('special') + ' РЕБ'].concat(canPeek(h.hidden) && h.weapon ? [L('aim') + '+' + L('fire') + (h.hidden.type === 'bunker' ? ' стріляти з бійниці' : ' стріляти з нори')] : []).concat(h.nets > 0 && !h.hidden.net ? [L('aim') + '+' + L('interact') + ' натягнути сітку'] : []);
   const it = [L('left') + L('right') + ' рух', L('up') + ' стрибок', L('down') + ' присісти / лягти (на бігу — кидок)', L('sprint') + ' біг',
-    L('aim') + ' позиція', L('fire') + ' вогонь', L('interact') + ' дія', L('dig') + ' копати', L('sprint') + '+' + L('dig') + ' рів', L('special') + ' РЕБ'];
+    L('aim') + ' позиція', L('fire') + ' вогонь', L('interact') + ' дія', L('dig') + ' копати', L('sprint') + '+' + L('dig') + ' рів', L('special') + ' РЕБ', L('roll') + ' кувирок', L('build') + ' двері'];
   if (h.alCharges > 0 && h.alT <= 0) it.push(L('aim') + '+' + L('special') + ' Альоша');
   if (h.nets > 0) it.push(L('aim') + '+' + L('interact') + ' сітка');
   if (h.canister) it.push(L('slot1') + ' викинути каністру');
