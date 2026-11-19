@@ -262,6 +262,7 @@ function updateHuman(h, dt) {
   const c = h.player.ctrl, W = G.W;
   h.fireCd -= dt; h.reveal -= dt; h.hurtT -= dt;
   if (h.digT > 0) h.digT -= dt;
+  if (h.digAngT > 0) h.digAngT -= dt;
   h.bloom = Math.max(0, h.bloom - dt * 1.6);
   if (h.reloadT > 0 && !h.dead && (h.reloadT -= dt) <= 0) finishReload(h);
   if (h.hideAnim && (h.hideAnim.t += dt) >= h.hideAnim.dur) h.hideAnim = null;
@@ -318,13 +319,15 @@ function updateHuman(h, dt) {
     h.vx = approach(h.vx, 0, 2200 * dt);
     moveHuman(h, dt);
   } else {
-    if (c.pressed('up') && !h.onLadder) {
+    const face = !h.onLadder && atDigFace(h);
+    if (face) { const v = (c.held('down') ? 1 : 0) - (c.held('up') ? 1 : 0); if (v) { h.digAng = clamp((h.digAng || 0) + v * 0.9 * dt, -DIG_MAX, DIG_MAX); h.digAngT = 1.5; } }
+    if (c.pressed('up') && !h.onLadder && !face) {
       if (lad && h.stance !== 'prone' && h.y > lad.top + 4) { h.onLadder = true; h.stance = 'stand'; h.x = lad.x; }
       else if (h.stance === 'prone') tryStance(h, 'crouch');
       else if (h.stance === 'crouch') tryStance(h, 'stand');
       else if (h.onGround && !tryMantle(h)) { h.vy = -JUMP; h.onGround = false; }
     }
-    if (c.pressed('down') && !h.onLadder) {
+    if (c.pressed('down') && !h.onLadder && !face) {
       if (lad && h.onGround && h.stance === 'stand' && Math.abs(h.y - lad.top) < 5) { h.onLadder = true; h.x = lad.x; h.y += 6; }
       else if (h.stance === 'stand' && h.onGround && Math.abs(h.vx) > 140 && h.diveCd <= 0 && freeAt(h.x + h.facing * 20, h.y, HUMAN_DIM.prone)) {
         // різкий кидок на землю вперед
@@ -782,22 +785,52 @@ function tunnelDig(h, dir, dt) {
   if (!sp || Math.abs(h.y - tunFloor(W, sp, h.x)) > 5) return;
   const hw = HUMAN_DIM[h.stance].w / 2;
   if (dir > 0 ? h.x + hw < sp.b - 6 : h.x - hw > sp.a + 6) return; // ще не в кінці
-  if (dir > 0 && sp.b < h.x) sp.b = h.x; else if (dir < 0 && sp.a > h.x) sp.a = h.x; // стоїть на майданчику під спуском
+  if (!sp.path) toPath(W, sp); // далі тунель — ламана: риється під кутом, незалежно від рельєфу
+  if (dir > 0 && sp.b < h.x) { sp.path.push([h.x, h.y]); sp.b = h.x; } else if (dir < 0 && sp.a > h.x) { sp.path.unshift([h.x, h.y]); sp.a = h.x; } // стоїть на майданчику під спуском
   const end = dir > 0 ? sp.b : sp.a;
   const lim = dir < 0 ? 20 : W.width - 20;
   const d = Math.min(DIG_SPD * dt, Math.abs(lim - end));
   if (d <= 0) return;
   const nx = end + dir * (d + 4);
   if (rockIn(nx - 2, nx + 2)) { tipOnce(h, 'Камінь — лопатою не прокопати. [' + h.player.ctrl.label('dig') + '] — вихід тут'); return; }
-  if (dir < 0) sp.a -= d; else sp.b += d;
+  // новий кінець: униз чи вгору під кутом h.digAng (додатний — униз)
+  const P = sp.path, k = Math.tan(clamp(h.digAng || 0, -DIG_MAX, DIG_MAX)), last = dir > 0 ? P[P.length - 1] : P[0], prev = dir > 0 ? P[P.length - 2] : P[1];
+  const ny = last[1] + k * d, nxe = last[0] + dir * d, ks = dir > 0 ? k : -k;
+  if (prev && Math.abs((last[1] - prev[1]) / ((last[0] - prev[0]) || 1) - ks) < 0.02 && Math.abs(last[0] - prev[0]) < 64) { last[0] = nxe; last[1] = ny; } // той самий нахил — подовжити відрізок
+  else if (dir > 0) P.push([nxe, ny]); else P.unshift([nxe, ny]);
+  if (dir < 0) sp.a = nxe; else sp.b = nxe;
   h.digT = 0.2; h.anim += dt * 6;
   digDirt(end + dir * 6, tunFloor(W, sp, end));
   cavDirty(W);
+  // над стелею лишилось надто мало ґрунту — стеля провалюється
+  if (ny - tunH(sp) - gAt(W, nxe) < MIN_COVER) caveIn(sp, nxe, h);
   // людина йде за вибоєм рівно, без смикання (і по схилу — за підлогою галереї)
   const fx = (dir > 0 ? sp.b : sp.a) - dir * (hw + 0.5);
   if ((fx - h.x) * dir > 0) { h.x = fx; h.y = tunFloor(W, sp, h.x); }
   h.vx = 0;
   joinCavities(sp, dir);
+}
+// тунель переходить у ламану (з того, як підлога йшла під рельєфом)
+function toPath(W, sp) {
+  const pts = [];
+  if (sp.b - sp.a < 2) { const f = tunFloor(W, sp, sp.a); pts.push([sp.a, f], [sp.a + 2, f]); sp.b = sp.a + 2; }
+  else { for (let x = sp.a; x < sp.b; x += 24) pts.push([x, tunFloor(W, sp, x)]); pts.push([sp.b, tunFloor(W, sp, sp.b)]); }
+  sp.path = pts;
+  cavDirty(W);
+}
+// обвал стелі біля поверхні: відкрита яма, засипана наполовину
+function caveIn(sp, x, h) {
+  const W = G.W;
+  if ((sp.breaks || []).some((q) => x > q.a - 30 && x < q.b + 30)) return;
+  const br = { a: x - 24, b: x + 24, fill: 0.45 };
+  (sp.breaks || (sp.breaks = [])).push(br);
+  (sp.caved || (sp.caved = [])).push({ a: br.a, b: br.b });
+  cavDirty(W);
+  const f = tunFloor(W, sp, x);
+  for (let i = 0; i < 16; i++) G.parts.push({ type: 'debris', x: rand(br.a, br.b), y: f - tunH(sp) + rand(0, 10), vx: rand(-90, 90), vy: rand(-200, -20), life: rand(0.6, 1.1), max: 1.1, col: '#5a4630' });
+  for (let i = 0; i < 5; i++) G.parts.push({ type: 'dust', x: rand(br.a, br.b), y: f - 20, vx: rand(-20, 20), vy: rand(-40, -10), life: rand(1, 1.8), max: 1.8, size: rand(10, 16) });
+  if (h && !h.dead) hurt(h, 10, 'blast');
+  feed('Стеля обвалилася — надто близько до поверхні', '#f2994a');
 }
 function digRubble(h, br, dt) {
   br.fill = Math.max(0, br.fill - dt * 0.28);
@@ -818,7 +851,7 @@ function joinCavities(sp, dir) {
     if (!hit) continue;
     // та сама глибина (у тому числі вліз у їхній спуск) — один тунель
     const ins = end + dir * 3;
-    if (o.depth === sp.depth && ins >= o.a - 60 && ins <= o.b + 60) { if (dir > 0) sp.b = Math.max(sp.b, o.a); else sp.a = Math.min(sp.a, o.b); mergeTunnels(sp, o); return true; }
+    if (!sp.path && !o.path && o.depth === sp.depth && ins >= o.a - 60 && ins <= o.b + 60) { if (dir > 0) sp.b = Math.max(sp.b, o.a); else sp.a = Math.min(sp.a, o.b); mergeTunnels(sp, o); return true; }
     // інша глибина — похилий перехід від нашої підлоги до їхньої
     const fo = Math.min(hit[1], f + 200), dx = Math.max(12, Math.abs(fo - f) / 0.8);
     const l = dir > 0 ? { x1: end - 4, x2: end + dx, y1: f, y2: fo } : { x1: end - dx, x2: end + 4, y1: fo, y2: f };
@@ -885,6 +918,7 @@ function startDigExit(h, sp) {
 }
 // ---------- Копання вглиб: із галереї — похилий спуск на поверх нижче (кілька поверхів) ----------
 const LEVEL_D = 72, LEVEL_SLOPE = 0.8, MAX_LEVELS = 4;
+const DIG_MAX = Math.atan(0.45), MIN_COVER = 7; // найкрутіше риття, яким ще ходять; менше ґрунту над стелею — обвал
 // тунель, на підлозі якого стоїть людина (на спуску між поверхами — той, до чиєї підлоги ближче)
 function pipeHere(W, x, y) {
   let best = null, bd = 7;
@@ -895,33 +929,36 @@ function pipeHere(W, x, y) {
   }
   return best || pipeAt(W, x, y);
 }
+// людина біля кінця галереї лицем до ґрунту (там риють далі) — тунель або null
+function atDigFace(h) {
+  if (!h.onGround || h.vehicle || h.hidden) return null;
+  const W = G.W, sp = pipeHere(W, h.x, h.y);
+  if (!sp || Math.abs(h.y - tunFloor(W, sp, h.x)) > 6) return null;
+  const hw = HUMAN_DIM[h.stance].w / 2;
+  return (h.facing > 0 ? h.x + hw >= sp.b - 8 : h.x - hw <= sp.a + 8) ? sp : null;
+}
 function startDigDown(h, sp) {
   const W = G.W;
   if (Math.abs(h.y - tunFloor(W, sp, h.x)) > 6) { tipOnce(h, 'Копати вглиб — стоячи в галереї'); return; }
-  const nd = sp.depth + LEVEL_D;
-  if (nd > TUN_DEPTH + LEVEL_D * (MAX_LEVELS - 1) + 30) { tipOnce(h, 'Глибше не прокопати — ґрунтові води'); return; }
-  const dir = h.facing, dx = LEVEL_D / LEVEL_SLOPE, bx = clamp(h.x + dir * dx, 30, W.width - 30);
-  if (rockIn(Math.min(h.x, bx) - 6, Math.max(h.x, bx) + 6)) { tipOnce(h, 'Там камінь — не прокопати'); return; }
-  if ((sp.links || []).some((l) => Math.min(l.y1, l.y2) > tunFloor(W, sp, h.x) - 2 && Math.abs((l.x1 + l.x2) / 2 - (h.x + bx) / 2) < 70)) { tipOnce(h, 'Поруч уже є спуск углиб'); return; }
-  h.working = { kind: 'down', t: 0, dur: Math.hypot(dx, LEVEL_D) / DIG_SPD, sp, bx, nd, x0: h.x, dir };
+  const f = tunFloor(W, sp, h.x);
+  if (f + LEVEL_D - gAt(W, h.x) > TUN_DEPTH + LEVEL_D * (MAX_LEVELS - 1) + 40) { tipOnce(h, 'Глибше не прокопати — ґрунтові води'); return; }
+  if (rockIn(h.x - 16, h.x + 16)) { tipOnce(h, 'Там камінь — не прокопати'); return; }
+  if (W.ladders.some((l) => Math.abs(l.x - h.x) < 40 && l.top < f + 6 && l.bottom > f + 10)) { tipOnce(h, 'Поруч уже є лаз униз'); return; }
+  h.working = { kind: 'down', t: 0, dur: (LEVEL_D / DIG_SPD) * 1.4, sp, x0: h.x, f, dir: h.facing };
   h.vx = 0;
 }
 function buildDigDown(h, D) {
   const W = G.W, sp = D.sp;
   if (!W.hides.includes(sp)) return;
-  const f1 = tunFloor(W, sp, D.x0);
-  // нижче вже є хід на цій глибині — спуститися до нього, інакше — новий
-  let o = W.pipes.find((p) => p !== sp && Math.abs(p.depth - D.nd) < 8 && D.bx >= p.a - 40 && D.bx <= p.b + 40);
-  // унизу — невелика камера, щоб зійти зі спуску на підлогу (далі галерею копають як звичайно)
-  const ca = D.dir > 0 ? D.bx - 8 : D.bx - 40, cb = D.dir > 0 ? D.bx + 40 : D.bx + 8;
-  if (o) { o.a = Math.min(o.a, ca); o.b = Math.max(o.b, cb); }
-  else { o = { type: 'pipe', style: 'dug', a: ca, b: cb, depth: D.nd, exits: [], dug: true, level: Math.round((D.nd - TUN_DEPTH) / LEVEL_D) }; W.hides.push(o); }
+  const x = D.x0, fLow = D.f + LEVEL_D;
+  // нижче вже є хід на цій глибині — лаз до нього, інакше — нова камера (далі її риють у боки під кутом)
+  let o = W.pipes.find((p) => p !== sp && x >= p.a - 20 && x <= p.b + 20 && Math.abs(tunFloor(W, p, clamp(x, p.a, p.b)) - fLow) < 16);
+  if (!o) { o = { type: 'pipe', style: 'dug', a: x - 26, b: x + 26, depth: fLow - gAt(W, x), exits: [], dug: true, path: [[x - 26, fLow], [x + 26, fLow]] }; W.hides.push(o); }
+  else if (x < o.a || x > o.b) { if (!o.path) toPath(W, o); if (x < o.a) { o.path.unshift([x - 10, tunFloor(W, o, o.a)]); o.a = x - 10; } else { o.path.push([x + 10, tunFloor(W, o, o.b)]); o.b = x + 10; } }
+  const fl = tunFloor(W, o, x);
+  o.exits.push({ kind: 'shaft', inner: true, x, tx: x, ty: D.f, bx: x, by: fl, dir: 1, len: fl - D.f });
   cavDirty(W);
-  const f2 = tunFloor(W, o, D.bx), H = Math.max(tunH(sp), tunH(o)) + 16;
-  const l = D.dir > 0 ? { x1: D.x0 - 4, x2: D.bx + 4, y1: f1, y2: f2, h: H } : { x1: D.bx - 4, x2: D.x0 + 4, y1: f2, y2: f1, h: H };
-  (sp.links || (sp.links = [])).push(l);
-  cavDirty(W);
-  feed(h.player.name + ' прокопав спуск на поверх нижче — далі можна копати галерею', '#c8a26a');
+  feed(h.player.name + ' прокопав лаз із драбиною на поверх нижче', '#c8a26a');
 }
 // що зробить лопата тут (dry — лише перевірити)
 function digAction(h, ditch, dry) {

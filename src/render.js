@@ -255,6 +255,7 @@ function renderView(ctx, vp, p, t) {
     if (!h.dead && !h.hideAnim && !h.digging && !(h.digT > 0) && !h.meleeT && h.stance !== 'prone' && !h.carry) drawShovelBack(ctx, h); // лопата за спиною (видно, що вона є)
     if (h.hideAnim && !h.dead) drawHideAnim(ctx, h, t); else drawHuman(ctx, h, t, 1);
     if ((h.digging || h.digT > 0) && !h.dead && !h.meleeT) drawShovel(ctx, h, t);
+    if (!h.dead && h === human && (h.digAngT > 0 || (h.digT > 0 && atDigFace(h)))) drawDigAngle(ctx, h); // куди піде тунель
     if (h.kit && !h.dead) drawKitIcon(ctx, h.kit, h.x, h.y - HUMAN_DIM[h.stance].h - 14);
   }
   for (const m of W.mounts) if (inX(m.x - 40, m.x + 40)) drawMount(ctx, m);
@@ -1159,6 +1160,18 @@ function drawUgv(ctx, u, t) {
   ctx.fillStyle = col; ctx.font = FONT(10); ctx.textAlign = 'center'; ctx.fillText('НРК ' + TEAMS[u.team].short, u.x, u.y - 42);
   if (u.hp < UGV_HP) { ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(u.x - 16, u.y - 52, 32, 4); ctx.fillStyle = '#6fcf97'; ctx.fillRect(u.x - 16, u.y - 52, 32 * Math.max(0, u.hp) / UGV_HP, 4); }
 }
+// напрямок риття біля вибою: пунктирна стрілка й кут у градусах
+function drawDigAngle(ctx, h) {
+  const a = h.digAng || 0, f = h.facing, x0 = h.x + f * 12, y0 = h.y - 10, L = 46;
+  const dx = Math.cos(a) * f, dy = Math.sin(a);
+  ctx.save(); ctx.strokeStyle = 'rgba(255,214,120,0.9)'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + dx * L, y0 + dy * L); ctx.stroke(); ctx.setLineDash([]);
+  const ex = x0 + dx * L, ey = y0 + dy * L, ang = Math.atan2(dy, dx);
+  ctx.fillStyle = 'rgba(255,214,120,0.95)'; ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex - Math.cos(ang - 0.4) * 9, ey - Math.sin(ang - 0.4) * 9); ctx.lineTo(ex - Math.cos(ang + 0.4) * 9, ey - Math.sin(ang + 0.4) * 9); ctx.closePath(); ctx.fill();
+  const deg = Math.round(-a * 180 / Math.PI);
+  ctx.font = FONT(10); ctx.textAlign = 'center'; ctx.fillText((deg > 0 ? '+' : '') + deg + '°', ex + f * 10, ey - 6);
+  ctx.restore();
+}
 // лопата за спиною: держак над плечем, полотно біля пояса
 function drawShovelBack(ctx, h) {
   const crouch = h.stance === 'crouch', y = h.y - (crouch ? 20 : 30);
@@ -1690,7 +1703,7 @@ function drawControlsBar(ctx, vw, items, left, right) {
 function tunnelTip(h, c) {
   const L = (a) => '[' + c.label(a) + ']', sp = pipeAt(G.W, h.x, h.y);
   const edge = (h.facing < 0 && h.x <= sp.a + 14) || (h.facing > 0 && h.x >= sp.b - 14);
-  return L('dig') + (edge ? ' пологий вихід' : ' лаз із драбиною') + '   ' + L('down') + '+' + L('dig') + ' углиб   у стіну ' + L('left') + L('right') + ' — копати далі   ' + L('aim') + ' вогонь   ' + L('slot3') + ' граната';
+  return L('dig') + (edge ? ' пологий вихід' : ' лаз із драбиною') + '   ' + L('down') + '+' + L('dig') + ' лаз униз   у стіну ' + L('left') + L('right') + ' — копати далі, ' + L('up') + L('down') + ' — кут   ' + L('aim') + ' вогонь   ' + L('slot3') + ' граната';
 }
 function humanControls(h, c) {
   const L = (a) => c.label(a);
