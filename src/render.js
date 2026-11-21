@@ -653,6 +653,10 @@ function drawTunnel(ctx, sp, W, x0, x1, known) {
   ctx.stroke();
   ctx.strokeStyle = sewer ? '#3d4a46' : '#4a3825'; ctx.lineWidth = sewer ? 6 : 4;
   ctx.beginPath(); for (let x = ga; x <= gb; x += 6) ctx.lineTo(x, fl(x) + 1); ctx.stroke();
+  if (sp.path) { // круті ділянки — вирізані сходинки
+    ctx.fillStyle = '#5a4630';
+    for (let x = Math.ceil(ga / 8) * 8; x < gb - 8; x += 8) { const a = fl(x), b2 = fl(x + 8); if (Math.abs(b2 - a) > 3.5) ctx.fillRect(x, Math.min(a, b2) - 1, 8, 3); }
+  }
   if (!sewer) {
     // дерев'яне кріплення: стояк і балка під стелею
     for (let x = Math.ceil((sp.a + 18) / 58) * 58; x < sp.b - 10; x += 58) {
@@ -1092,15 +1096,15 @@ function drawThrow(ctx, th, t) {
   ctx.restore(); }
   if (th.fuse < 0.8 && (t * 12 | 0) % 2) { ctx.fillStyle = '#ff5a5a'; ctx.beginPath(); ctx.arc(th.x, th.y - 9, 2, 0, 7); ctx.fill(); }
 }
-// станкова гвинтівка на тринозі біля вікна
+// станковий кулемет на тринозі біля вікна чи виходу
 function drawMount(ctx, m) {
-  const px = m.x, py = m.y - 38, a = m.user ? aimWorld(m.user) : m.dir > 0 ? 0.05 : Math.PI - 0.05;
+  const px = m.x, py = m.y - (m.gy || 38), a = m.user ? aimWorld(m.user) : m.dir > 0 ? 0.05 : Math.PI - 0.05;
   ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(px, py + 4); ctx.lineTo(px - 9, m.y); ctx.moveTo(px, py + 4); ctx.lineTo(px + 9, m.y); ctx.moveTo(px, py + 4); ctx.lineTo(px + m.dir * 3, m.y); ctx.stroke();
   ctx.save(); ctx.translate(px, py); ctx.rotate(a);
   if (Math.cos(a) < 0) ctx.scale(1, -1); // ліворуч — не догори дриґом
   ctx.translate(-16, 0);
-  if (!ispAlong(ctx, 'sniper', 46)) {
+  if (!ispAlong(ctx, 'pkm', 44)) {
     ctx.translate(16, 0);
     ctx.fillStyle = '#5a3d24'; ctx.fillRect(-14, -2, 12, 5);
     ctx.fillStyle = '#1e1e1e'; ctx.fillRect(-3, -2, 30, 3.5); ctx.fillRect(4, -6, 9, 3);
@@ -1465,7 +1469,7 @@ function drawHumanHud(ctx, vp, p, t) {
   }
   if (h.canister) { ctx.fillStyle = '#f2994a'; wtxt = 'У руках каністра — [' + c.label('slot1') + '] викинути'; }
   if (h.carry) { ctx.fillStyle = '#c9a36a'; wtxt = 'У руках: ' + PROP_TYPES[h.carry].name.toLowerCase() + ' — [' + c.label('fire') + '] кинути'; }
-  if (h.mount) { ctx.fillStyle = '#fff'; wtxt = 'Станкова гвинтівка: ' + h.mount.ammo; }
+  if (h.mount) { ctx.fillStyle = '#fff'; wtxt = 'Кулемет: ' + h.mount.ammo; }
   ctx.fillText(wtxt, 16, 72);
   ctx.fillStyle = h.reb > 0 && h.rebCd <= 0 ? '#bb86fc' : '#777';
   ctx.fillText('РЕБ: ' + h.reb + (h.rebCd > 0 ? ' (' + Math.ceil(h.rebCd) + ' с)' : '') + ' [' + c.label('special') + ']', 16, 90);
@@ -1565,7 +1569,7 @@ function drawHumanHud(ctx, vp, p, t) {
     else if (meleeTarget(h)) tip = L('fire') + ' удар' + (meleeTarget(h).kind === 'd' ? ' по дрону' : '');
     else if (pr) tip = L('interact') + ' взяти: ' + PROP_TYPES[pr.type].name.toLowerCase() + ' — можна кинути в дрон';
     else if (ft) tip = L('interact') + ' залатати фанерою' + (mt && !mt.bad ? '   ' + L('aim') + '+' + L('interact') + ' вогнева позиція' : '');
-    else if (mt && !mt.bad) tip = L('aim') + '+' + L('interact') + ' облаштувати вогневу позицію (станкова гвинтівка)';
+    else if (mt && !mt.bad) tip = L('aim') + '+' + L('interact') + ' поставити станковий кулемет';
     else if (pilotSpot(h)) tip = L('slot1') + ' взяти дрон (запас команди: ' + G.stock[h.player.team] + ')';
     else if (rubbleAt(h)) tip = L('dig') + ' розкопати завал (або впертися в нього)';
     else if (patchAt(h)) tip = L('dig') + ' залатати перекриття тунелю';

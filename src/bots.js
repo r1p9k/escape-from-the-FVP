@@ -61,6 +61,21 @@ function botShootTarget(h, drone, td, L) {
   }
   return best ? { x: best.x, y: best.y - HUMAN_DIM[best.stance].h * 0.55, vx: best.vx, vy: best.vy } : null;
 }
+// стати на драбину вгору чи вниз (лише одна кнопка в кадрі, без кроку вбік)
+function botLadderTap(b, s, go) { s.left = s.right = s.aim = s.fire = false; s.up = s.down = false; b.tap(s, go < 0 ? 'up' : 'down'); }
+function botMountTarget(h, mt, drone) {
+  const ox = mt.x, oy = mt.y - (mt.gy || 38), R = WEAPONS.mrifle.range;
+  const ok = (x, y) => (x - ox) * mt.dir > 20 && dist(ox, oy, x, y) < R && Math.abs(Math.atan2(y - oy, Math.abs(x - ox))) < 1.1;
+  if (drone && ok(drone.x, drone.y)) return drone;
+  if (!isTeam()) return null;
+  let best = null, bd = R;
+  for (const o of G.humans) {
+    if (o.dead || o.saved || covered(o) || o.vehicle || allyP(o.player, h.player)) continue;
+    const ty = o.y - HUMAN_DIM[o.stance].h * 0.55, dd = dist(ox, oy, o.x, ty);
+    if (dd < bd && ok(o.x, ty) && lineOfSight(G.W, ox + mt.dir * 14, oy, o.x, ty)) { bd = dd; best = o; }
+  }
+  return best ? { x: best.x, y: best.y - HUMAN_DIM[best.stance].h * 0.55, vx: best.vx, vy: best.vy } : null;
+}
 function thinkHuman(b, s, dt) {
   const h = b.p.ent, m = b.m, L = b.L, W = G.W;
   let shootT = null;
@@ -102,7 +117,24 @@ function thinkHuman(b, s, dt) {
     return;
   }
 
-  if (h.working && h.working.kind === 'fort') return; // облаштовує позицію — не смикати
+  if (h.mount) {
+    const mt = h.mount, ox = mt.x, oy = mt.y - (mt.gy || 38);
+    const t = botMountTarget(h, mt, visibleThreat ? threat : null);
+    if (t && mt.ammo > 0) {
+      s.aimAngle = botAim(b, ox, oy, t, WEAPONS.mrifle.speed);
+      m.aimT += dt; m.mCalm = 0;
+      if (m.aimT > 0.3 - 0.12 * L.react) s.fire = true;
+    } else {
+      m.aimT = 0; m.mCalm = (m.mCalm || 0) + dt;
+      const sideThreat = threat && (threat.x - mt.x) * mt.dir < 0 && td < 300; // дрон зайшов зі спини — тікати від кулемета
+      if (mt.ammo <= 0 || sideThreat || h.gasT > 2 || (!h.guard && m.mCalm > 5) || (h.guard && m.mCalm > 40)) { b.tap(s, 'interact'); m.mountCd = 6; m.mCalm = 0; }
+    }
+    return;
+  }
+  if (h.working) { // працює (окоп, фанера, кулемет): загроза зблизька — кинути роботу
+    if (h.working.kind !== 'fort' && h.working.kind !== 'mount' && ((visibleThreat && td < 300) || visibleFoe(h, 400))) b.tap(s, 'fire');
+    return;
+  }
   if (h.hidden) {
     const sp = h.hidden;
     // натягнути маскувальну сітку на свою схованку (і зберегти точку відновлення)
@@ -283,8 +315,57 @@ function thinkHuman(b, s, dt) {
     } else stop = true;
   }
   if (hold && !danger) stop = true;
+  m.mountCd = (m.mountCd || 0) - dt; m.plyCd = (m.plyCd || 0) - dt; m.ladCd = (m.ladCd || 0) - dt;
+  const calm = !danger && !m.foe && !(visibleThreat && td < 500) && !(h.gasT > 0);
+  if (!h.onLadder && h.onGround && !h.carry && !h.canister && m.mountCd <= 0) {
+    // 1) вільний кулемет поруч і є в кого стріляти (або охоронець чує дрон) — стати за нього: бій важливіший за все
+    const want = (visibleThreat && td < 640) || m.foe || (h.guard && hear < 700);
+    const facing = (q) => !(visibleThreat || m.foe) || ((m.foe || threat).x - q.x) * q.dir > 0;
+    const free = (q) => !q.user && q.ammo > 0 && facing(q) && !G.humans.some((o) => o !== h && o.guard && !o.dead && o.player.team === h.player.team && o.player.ctrl.m && o.player.ctrl.m.goMount === q && dist(o.x, o.y, q.x, q.y) < dist(h.x, h.y, q.x, q.y));
+    let fm = want ? G.W.mounts.find((q) => free(q) && Math.abs(q.y - h.y) < 12 && Math.abs(q.x - h.x) < (h.guard ? 320 : 170)) : null;
+    // охоронець: вільний кулемет на іншому поверсі своєї будівлі — туди драбиною
+    const gb = h.guard && h.guard.kind === 'bld' ? h.guard.ref : null;
+    const fm2 = !fm && want && gb ? G.W.mounts.find((q) => free(q) && q.b === gb) : null;
+    m.goMount = fm || fm2 || null;
+    if (fm) {
+      if (nearMount(h) === fm) { s.aim = false; s.fire = false; s.up = false; s.down = false; b.tap(s, 'interact'); return; }
+      dir = Math.sign(fm.x - h.x) || dir; stop = false; s.aim = false; s.fire = false;
+    } else if (fm2 && !h.onLadder) {
+      const go = fm2.y < h.y ? -1 : 1;
+      const lads = G.W.ladders.filter((l) => l.x > gb.x && l.x < gb.x + gb.w && (go < 0 ? Math.abs(l.bottom - h.y) < 6 : Math.abs(l.top - h.y) < 6));
+      let best = null; for (const l of lads) if (!best || Math.abs(l.x - h.x) < Math.abs(best.x - h.x)) best = l;
+      if (best) {
+        if (Math.abs(best.x - h.x) < 10 && h.onGround) { if (h.stance !== 'stand') { s.down = false; b.tap(s, 'up'); return; } m.ladDir = go; botLadderTap(b, s, go); return; }
+        dir = Math.sign(best.x - h.x) || dir; stop = false; s.aim = false; s.fire = false;
+      }
+    } else if (h.guard && calm && h.stance === 'stand') {
+      // 2) охоронець спокійно — ставить кулемет на виході (і у вікні, якщо виходів уже прикрито)
+      const mt = mountTarget(h);
+      if (mt && !mt.bad && (mt.gp.door || (mt.b.mounts || 0) >= 1) && Math.random() < dt * 2) { s.aim = true; b.tap(s, 'interact'); m.mountCd = 3; return; }
+    }
+  }
+  // 3) латати діри в перекриттях фанерою — лише коли спокійно (бій попереду важливіший)
+  if (calm && !h.onLadder && h.onGround && m.plyCd <= 0 && (h.guard || isTeam())) {
+    const ft = fortTarget(h);
+    if (ft && ft.gp.kind !== 'side') { b.tap(s, 'build'); m.plyCd = 2; return; }
+    if (h.guard && !ft) { // дірка в стелі/підлозі свого поверху поруч — підійти до неї
+      const bb = bldUnder(h), hole = bb && bldGaps(bb).find((gp) => gp.kind !== 'side' && (Math.abs(h.y - gp.y) < 6 || Math.abs(h.y - (gp.y + FLOOR_H)) < 6 || (gp.kind === 'roof' && Math.abs(h.y - (bb.y + FLOOR_H)) < 6)) && Math.abs(gp.x + gp.w / 2 - h.x) < 260);
+      if (hole) { dir = Math.sign(hole.x + hole.w / 2 - h.x) || dir; stop = false; }
+    }
+  }
+  // 4) драбини: охоронець спокійно міняє поверхи; у бою — лізе туди, звідки видно ворога
+  if (!h.onLadder && h.onGround && m.ladCd <= 0 && h.guard) {
+    const up = ladderAt(h, -1), dn = ladderAt(h, 1);
+    let go = 0;
+    const lad = up || dn;
+    if (!lad) m.lastLad = null;
+    else if (calm && m.lastLad !== lad) { m.lastLad = lad; if (Math.random() < 0.5) go = up && dn ? (Math.random() < 0.5 ? -1 : 1) : up ? -1 : 1; } // біля драбини — інколи на інший поверх
+    else if (!calm && m.foe && Math.abs(m.foe.y - h.y) > 50) go = m.foe.y < h.y ? (up ? -1 : 0) : (dn ? 1 : 0);
+    if (go && h.stance === 'stand') { m.ladDir = go; m.ladCd = 6; botLadderTap(b, s, go); return; }
+  }
   // під землею: тримати тунель — у галереї; інакше — до виходу в потрібний бік (лазом — драбиною нагору)
-  if (h.onLadder) { s.up = true; return; }
+  if (h.onLadder) { s.left = s.right = false; if (m.ladDir > 0) { s.down = true; s.up = false; } else { s.up = true; s.down = false; } return; }
+  m.ladDir = 0;
   const tp = pipeAt(W, h.x, h.y);
   if (tp) {
     if (hold && objAt(h) && objAt(h).ref === tp) {

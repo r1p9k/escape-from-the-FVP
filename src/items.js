@@ -17,9 +17,9 @@ const THROW_G = 1100;        // кинуті речі падають трохи 
 const GRENADE_SPD = 600, GRENADE_FUSE = 2.2, GRENADES_START = 2, GRENADES_MAX = 4;
 const GRENADE_POWER = 70, GRENADE_R = 85, GRENADE_DRONE_R = 70; // дрон ближче 7 м від вибуху гранати — збито
 const PLY_PER_NET = 8;       // листів фанери на будівлю після сітки
-const PLY_TIME = 1.2, MOUNT_TIME = 2.5, MOUNTS_PER_BLD = 2, MOUNT_AMMO = 80;
+const PLY_TIME = 1.2, MOUNT_TIME = 2.5, MOUNTS_PER_BLD = 3, MOUNT_AMMO = 150;
 const BT = 14;               // товщина стін будівлі (як у world.js)
-WEAPONS.mrifle = { name: 'Станкова гвинтівка', ammo: MOUNT_AMMO, mag: MOUNT_AMMO, reload: 0, rate: 0.16, speed: 1900, range: 600, spread: 0.007, pellets: 1, dmg: 70 };
+WEAPONS.mrifle = { name: 'Станковий кулемет', ammo: MOUNT_AMMO, mag: MOUNT_AMMO, reload: 0, rate: 0.1, speed: 1900, range: 620, spread: 0.012, pellets: 1, dmg: 55 };
 AIM_SECTOR.mount = [-0.7, 0.4];
 STANCE_ACC.mount = 'станкова — дуже точно';
 
@@ -221,7 +221,7 @@ function nearGap(h, b, mount) {
       // вікно з вогневою позицією не забиваємо — гвинтівка стріляє крізь нього
       if (!mount && G.W.mounts.some((m) => Math.abs(m.x - (gp.x + BT / 2)) < 30 && m.y > gp.y && m.y - 40 < gp.y + gp.h)) continue;
       const dx = Math.abs(h.x - (gp.x + BT / 2));
-      if (dx < 40 && gp.y < h.y + 2 && gp.y + gp.h > h.y - 60) d = dx;
+      if (dx < 40 && gp.y < h.y - 4 && gp.y + gp.h > h.y - 60) d = dx;
     } else if (mount) continue;
     else {
       const inX = (m) => h.x > gp.x - m && h.x < gp.x + gp.w + m;
@@ -245,15 +245,16 @@ function fortTarget(h) {
 function mountTarget(h) {
   const b = buildingAt(h.x, h.y);
   if (!b || !h.onGround) return null;
-  if (isTeam() ? !hideOwnedBy(b, h.player.team) : !b.net) return null;
+  if (isTeam() && !hideOwnedBy(b, h.player.team)) return null;
   const gp = nearGap(h, b, true);
   if (!gp) return null;
-  const my = h.y - 38;
-  if (gp.y > my - 4 || gp.y + gp.h < my + 4) return { b, gp, bad: 'Отвір не на рівні гвинтівки' };
+  const sill = h.y - (gp.y + gp.h); // висота підвіконня над підлогою
+  if (gp.y > h.y - 30 || sill > 58) return { b, gp, bad: 'Отвір зависоко для кулемета' };
+  const gy = Math.max(38, Math.min(sill + 10, 64)); // кулемет — трохи вище підвіконня
   if ((b.mounts || 0) >= MOUNTS_PER_BLD) return { b, gp, bad: 'У будівлі вже ' + MOUNTS_PER_BLD + ' вогневі позиції' };
   const x = gp.side < 0 ? gp.x + BT + 12 : gp.x - 12;
-  if (G.W.mounts.some((m) => Math.abs(m.x - x) < 30 && Math.abs(m.y - h.y) < 20)) return { b, gp, bad: 'Тут уже є вогнева позиція' };
-  return { b, gp, x };
+  if (G.W.mounts.some((m) => Math.abs(m.x - x) < 30 && Math.abs(m.y - h.y) < 20) || G.humans.some((o) => o !== h && o.working && o.working.kind === 'mount' && Math.abs(o.working.x - x) < 30 && Math.abs(o.working.y - h.y) < 20)) return { b, gp, bad: 'Тут уже є вогнева позиція' };
+  return { b, gp, x, gy };
 }
 // латати можна скільки завгодно; великий пролом — частинами по 120 px біля людини
 function startPly(h, t) {
@@ -265,7 +266,7 @@ function startPly(h, t) {
 }
 function startMount(h, t) {
   if (t.bad) { tipOnce(h, t.bad); return; }
-  h.working = { kind: 'mount', t: 0, dur: MOUNT_TIME, b: t.b, gp: t.gp, x: t.x, y: h.y };
+  h.working = { kind: 'mount', t: 0, dur: MOUNT_TIME, b: t.b, gp: t.gp, x: t.x, y: h.y, gy: t.gy };
   h.vx = 0;
 }
 function tickWork(h, c, dt) {
@@ -316,9 +317,10 @@ function tickWork(h, c, dt) {
     buildBuckets(W);
     feed(h.player.name + (gp.door ? ' поставив фанерні двері — людина пройде, дрон ні' : ' залатав ' + (gp.kind === 'side' ? 'вікно' : 'пролом') + ' фанерою'), '#c9a36a');
   } else {
-    W.mounts.push({ x: D.x, y: D.y, dir: gp.side, ammo: MOUNT_AMMO, b: D.b, user: null });
+    if ((D.b.mounts || 0) >= MOUNTS_PER_BLD || W.mounts.some((m) => Math.abs(m.x - D.x) < 30 && Math.abs(m.y - D.y) < 20)) return;
+    W.mounts.push({ x: D.x, y: D.y, dir: gp.side, ammo: MOUNT_AMMO, b: D.b, user: null, gy: D.gy || 38 });
     D.b.mounts = (D.b.mounts || 0) + 1;
-    feed(h.player.name + ' облаштував вогневу позицію зі станковою гвинтівкою', '#c9a36a');
+    feed(h.player.name + (gp.door ? ' поставив станковий кулемет на виході' : ' поставив станковий кулемет у вікні'), '#c9a36a');
   }
   Sfx.click();
 }
@@ -374,7 +376,7 @@ function leaveMount(h) {
 }
 function mountMuzzle(h) {
   const m = h.mount, a = aimWorld(h);
-  return { x: m.x + Math.cos(a) * 22, y: m.y - 38 + Math.sin(a) * 22 };
+  return { x: m.x + Math.cos(a) * 22, y: m.y - (m.gy || 38) + Math.sin(a) * 22 };
 }
 function humanOnMount(h, c, dt) {
   const m = h.mount;
@@ -387,7 +389,7 @@ function humanOnMount(h, c, dt) {
   if (c.pressed('special')) activateReb(h);
   if (c.held('fire') && h.fireCd <= 0) {
     if (m.ammo > 0) { const mz = mountMuzzle(h); fireWeapon(h, mz.x, mz.y, 'mrifle', aimWorld(h), false, 'mount'); h.fireCd = WEAPONS.mrifle.rate; m.ammo--; }
-    else if (c.pressed('fire')) tipOnce(h, 'Набої станкової гвинтівки скінчилися');
+    else if (c.pressed('fire')) tipOnce(h, 'Набої кулемета скінчилися');
   }
   if (c.pressed('interact') || c.axisX === -m.dir) leaveMount(h);
   checkShelter(h);
@@ -400,7 +402,7 @@ function damageFort(x, y, power) {
     if (m.user) leaveMount(m.user);
     if (m.b) m.b.mounts = Math.max(0, (m.b.mounts || 1) - 1);
     for (let i = 0; i < 8; i++) G.parts.push({ type: 'debris', x: m.x, y: m.y - 30, vx: rand(-200, 200), vy: rand(-300, -50), life: rand(0.6, 1.1), max: 1.1, col: '#333' });
-    feed('Станкову гвинтівку знищено', '#f2994a');
+    feed('Станковий кулемет знищено', '#f2994a');
     return false;
   });
 }

@@ -108,7 +108,7 @@ function pipeSpans(W, sp, x, out, human) {
     const f = tunFloor(W, sp, x);
     const br = sp.breaks && sp.breaks.find((q) => x >= q.a && x <= q.b);
     if (br) out.push([-1e9, f - br.fill * H]); // перекриття обвалилося: яма, засипана на fill
-    else out.push([f - H - (sp.path ? Math.abs(pathSlope(sp.path, x)) * 16 : 0), f]); // на схилі — запас над головою
+    else out.push([f - H - (sp.path ? Math.max(Math.abs(pathSlope(sp.path, x)), Math.abs(pathSlope(sp.path, x - 14)), Math.abs(pathSlope(sp.path, x + 14))) * 20 : 0), f]); // на схилі й біля нього — запас над головою
   }
   for (const e of sp.exits) {
     if (e.prog != null) { exitPartial(e, x, H, out); continue; } // ще копається
