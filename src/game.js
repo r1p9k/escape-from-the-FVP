@@ -110,7 +110,7 @@ function earthFits(x, y, dim) {
   for (const cx of [x - hw, x, x + hw]) {
     let ok = false;
     for (const s of cavSpans(W, cx, true)) {
-      if (s.bot < y - 18 || s.top > y - 2) continue;
+      if (s.bot < y - 26 || s.top > y - 2) continue; // уступ до 26 px (низ спуску й підлога галереї можуть не збігатися) — переступає
       if (s.top <= Math.min(y, s.bot) - dim.h + 4) { ok = true; break; }
     }
     if (!ok) return false;
@@ -546,6 +546,11 @@ function moveHuman(h, dt) {
       if (h.x < s.x + s.w / 2) h.x = s.x - hw; else h.x = s.x + s.w + hw;
       h.vx = 0;
     }
+  }
+  if (h.onGround && W.ditches.length) for (const d of W.ditches) {
+    if (bridgeOk(d) || Math.abs(h.y - d.g) > 10) continue;
+    if (ox <= d.a - 8 && h.x > d.a - 8) { h.x = d.a - 8; h.vx = 0; h.wallT = 0.1; }
+    else if (ox >= d.b + 8 && h.x < d.b + 8) { h.x = d.b + 8; h.vx = 0; h.wallT = 0.1; }
   }
   const prevY = h.y;
   h.wasGround = h.onGround;
@@ -1087,6 +1092,14 @@ function buildDigDown(h, D) {
 function digAction(h, ditch, dry) {
   const W = G.W, pa = pipeHere(W, h.x, h.y);
   if (h.vehicle || h.hidden || h.mount || h.onLadder) return false;
+  const ed = ditchEdge(h);
+  if (ed) {
+    if (!dry) {
+      if (ditch || bridgeOk(ed)) { h.working = { kind: 'fill', t: 0, dur: FILL_TIME, d: ed }; h.vx = 0; }
+      else { h.working = { kind: 'bridge', t: 0, dur: BRIDGE_TIME, d: ed }; h.vx = 0; }
+    }
+    return true;
+  }
   if (ditch) {
     if (!canDitchHere(h)) { if (!dry) tipOnce(h, 'Рову тут не викопати: потрібне рівне вільне місце'); return false; }
     if (!dry) { const [a, b] = ditchSpan(h); h.working = { kind: 'ditch', t: 0, dur: DITCH_TIME, a, b }; h.vx = 0; }
@@ -1095,7 +1108,6 @@ function digAction(h, ditch, dry) {
   if (rubbleAt(h)) { if (!dry) startRubble(h, rubbleAt(h)); return true; }
   if (patchAt(h)) { if (!dry) startPatch(h, patchAt(h)); return true; }
 
-  if (bridgeSpot(h)) { if (!dry) { h.working = { kind: 'bridge', t: 0, dur: BRIDGE_TIME, d: bridgeSpot(h) }; h.vx = 0; } return true; }
   if (h.stance !== 'stand' && canFortHere(h)) { if (!dry) startFort(h); return true; }
   return false;
 }
@@ -1171,6 +1183,7 @@ function damageTunnels(x, y, power) {
     const g = gAt(W, x), f = tunFloor(W, sp, x), ceil = f - tunH(sp);
     const dy = y < g ? g - y : y > f ? y - f : 0; // над тунелем — відстань до поверхні; у тунелі — 0
     if (dy > 45) continue;
+    if (y < f - tunH(sp) && ceil - g > (power >= 70 ? 48 : 28)) continue; // глибоко під землею — вибух на поверхні не дістає
     if (sp.breaks && sp.breaks.some((q) => x > q.a - 24 && x < q.b + 24)) continue; // тут уже відкрито
     if (!sp.wood && sp.caved && sp.caved.some((q) => x > q.a - 24 && x < q.b + 24)) continue; // уже обвалювалося — ґрунт осів, удруге не завалює
     const k = Math.round(x / 40), dmg = sp.dmg || (sp.dmg = {});
@@ -1626,7 +1639,7 @@ function ramObstacles(v, list) {
   else { v.hp = Math.min(v.hp, Math.max(1, T.hp - 1)); v.crashSmoke = true; occ.forEach((o) => hurt(o, 10, 'fall')); feed(T.name + ' пошкоджено: ще одна перешкода — і кінець', '#f2994a'); }
 }
 // ---------- Протитанковий рів і переправа ----------
-const DITCH_W = 270, DITCH_D = 130, DITCH_TIME = 8, BRIDGE_TIME = 5;
+const DITCH_W = 270, DITCH_D = 130, DITCH_TIME = 8, BRIDGE_TIME = 5, FILL_TIME = 10;
 function ditchAt(x) { return G.W.ditches.find((d) => x > d.a && x < d.b) || null; }
 function bridgeOk(d) { return d.bridge && !d.bridge.dead && G.W.solids.includes(d.bridge); }
 function ditchSpan(h) { const a = h.facing > 0 ? h.x + 18 : h.x - 18 - DITCH_W; return [a, a + DITCH_W]; }
@@ -1644,26 +1657,41 @@ function canDitchHere(h) {
   return !solidsNear(W, a - 20, b + 20).some((s) => s.x < b + 20 && s.x + s.w > a - 20 && s.y < gAt(W, s.x + s.w / 2) + 2);
 }
 function buildDitch(h, D) {
-  const W = G.W, a = D.a, b = D.b, g = minGround(W, a, b);
+  const W = G.W, a = D.a, b = D.b, g = minGround(W, a, b), i0 = Math.max(0, Math.floor(a / GS)), orig = W.ground.slice(i0, Math.ceil(b / GS) + 1);
   for (let i = Math.max(0, Math.floor(a / GS)); i <= Math.min(W.ground.length - 1, Math.ceil(b / GS)); i++) {
     const e = Math.min(i * GS - a, b - i * GS);
     W.ground[i] = Math.max(W.ground[i], g + DITCH_D * clamp(e / 10, 0, 1)); // майже прямовисні стінки
   }
-  W.ditches.push({ a, b, g, bridge: null });
+  W.ditches.push({ a, b, g, bridge: null, i0, orig });
   cavDirty(W);
   for (const pk of W.pickups) if (pk.x > a && pk.x < b) pk.y = surfaceY(W, pk.x);
   for (const pr of W.props) if (pr.x > a && pr.x < b) pr.y = surfaceY(W, pr.x);
   for (const mi of G.mines) if (mi.x > a && mi.x < b) mi.y = gAt(W, mi.x);
   feed(h.player.name + ' викопав протитанковий рів', '#c8a26a');
 }
-// на краю рову — збудувати переправу
-function bridgeSpot(h) {
-  if (h.vehicle || h.hidden || !h.onGround || h.stance === 'prone') return null;
-  for (const d of G.W.ditches) {
-    if (bridgeOk(d)) continue;
-    if ((h.x > d.a - 34 && h.x < d.a + 2) || (h.x < d.b + 34 && h.x > d.b - 2)) if (Math.abs(h.y - d.g) < 8) return d;
-  }
+// на краю рову: лопата — переправа, біг+лопата (чи вже з переправою) — засипати
+function ditchEdge(h) {
+  if (h.vehicle || h.hidden || !h.onGround || h.stance === 'prone' || h.onLadder) return null;
+  for (const d of G.W.ditches) if (((h.x > d.a - 40 && h.x < d.a + 4) || (h.x < d.b + 40 && h.x > d.b - 4)) && Math.abs(h.y - d.g) < 10) return d;
   return null;
+}
+function bridgeSpot(h) { const d = ditchEdge(h); return d && !bridgeOk(d) ? d : null; }
+// засипати рів: ґрунт повертається, переправа вже не потрібна
+function fillDitch(h, d) {
+  const W = G.W;
+  if (!W.ditches.includes(d)) return;
+  for (let i = Math.max(0, Math.floor(d.a / GS) - 1); i <= Math.min(W.ground.length - 1, Math.ceil(d.b / GS) + 1); i++) {
+    const o = d.orig && d.orig[i - d.i0];
+    W.ground[i] = o != null ? o : Math.min(W.ground[i], d.g);
+  }
+  if (d.bridge) { W.solids = W.solids.filter((s) => s !== d.bridge); buildBuckets(W); }
+  W.ditches = W.ditches.filter((q) => q !== d);
+  cavDirty(W);
+  for (const pk of W.pickups) if (pk.x > d.a && pk.x < d.b) pk.y = surfaceY(W, pk.x);
+  for (const pr of W.props) if (pr.x > d.a && pr.x < d.b) pr.y = surfaceY(W, pr.x);
+  for (const mi of G.mines) if (mi.x > d.a && mi.x < d.b) mi.y = gAt(W, mi.x);
+  for (const o of G.humans) if (!o.dead && !o.vehicle && o.x > d.a && o.x < d.b && o.y > gAt(W, o.x)) { o.y = gAt(W, o.x); o.vy = 0; }
+  feed((h ? h.player.name : 'Хтось') + ' засипав протитанковий рів', '#c8a26a');
 }
 function buildBridge(h, d) {
   const W = G.W, s = { type: 'bridge', x: d.a - 14, y: d.g - 3, w: d.b - d.a + 28, h: 9, hp: 3 };
@@ -2189,7 +2217,8 @@ function craterAt(x, y, power, radius) {
   if (y < g - radius * 0.45 || y > g + 24) return; // високо в повітрі або під землею (тунель)
   let r = big ? 46 : 26;
   if (x < r * 2 + 20 || x > W.width - r * 2 - 20) return;
-  if (W.pipes.some((sp) => x + r > sp.x0 - 16 && x - r < sp.x1 + 16)) return; // над тунелем — його перекриття обвалюється окремо
+  const ceilAt = (xx) => { let c = 1e9; for (const sp of W.pipes) if (xx > sp.a - 16 && xx < sp.b + 16) c = Math.min(c, tunFloor(W, sp, clamp(xx, sp.a, sp.b)) - tunH(sp)); return c; };
+  if (ceilAt(x) - g < (big ? 60 : 40)) return; // мілкий тунель — його перекриття обвалюється окремо
   if (W.hides.some((o) => o.type !== 'pipe' && Math.abs(o.x - x) < r + 40)) return; // бліндажі, нори
   if (W.ditches.some((d) => x + r > d.a - 10 && x - r < d.b + 10)) return;
   if ((W.forts || []).some((f) => Math.abs(f.x - x) < r + 40)) return;
@@ -2205,9 +2234,17 @@ function craterAt(x, y, power, radius) {
     const jag = 0.85 + 0.3 * hash01(i * 7.13 + x);
     if (a < 1) d = depth * Math.pow(1 - Math.pow(a, 3.2), 0.7) * jag;
     else if (a < 1.25) d = -depth * 0.18 * Math.sin(((a - 1) / 0.25) * Math.PI) * jag; // викинутий ґрунт — вузький вал
-    W.ground[i] = Math.min(BASE_G + 900, W.ground[i] + d);
+    W.ground[i] = Math.min(BASE_G + 900, W.ground[i] + d, Math.max(W.ground[i], ceilAt(i * GS) - 18)); // до тунелю внизу не прокопує
   }
   for (const t of W.trees) if (Math.abs(t.x - x) < r * 1.5) t.y = gAt(W, t.x);
+  // мішки, тюки, колоди поруч осідають на новий ґрунт (а не висять над вирвою)
+  let moved = false;
+  for (const s of solidsNear(W, x - r * 1.5, x + r * 1.5)) {
+    if (!RAMMABLE[s.type] || s.dead || s.type === 'bridge') continue;
+    const gb = Math.max(gAt(W, s.x + 2), gAt(W, s.x + s.w / 2), gAt(W, s.x + s.w - 2));
+    if (s.y + s.h < gb - 1) { s.y = gb - s.h; moved = true; }
+  }
+  if (moved) buildBuckets(W);
   // зона голого ґрунту (трава зірвана) — для малювання; сусідні зони зливаються
   const z = { a: x - r * 1.1, b: x + r * 1.1 };
   W.craters = (W.craters || []).filter((q) => { if (q.b < z.a || q.a > z.b) return true; z.a = Math.min(z.a, q.a); z.b = Math.max(z.b, q.b); return false; });
