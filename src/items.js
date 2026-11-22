@@ -278,7 +278,7 @@ function tickWork(h, c, dt) {
     if (D.t >= D.dur) { h.working = null; buildDigDown(h, D); Sfx.click(); }
     return;
   }
-  if (D.kind === 'kit' || D.kind === 'ditch' || D.kind === 'bridge') {
+  if (D.kind === 'kit' || D.kind === 'ditch' || D.kind === 'bridge' || D.kind === 'fill') {
     h.digT = D.kind === 'kit' ? 0 : 0.2;
     if (D.kind !== 'kit') digDirt(h.x + h.facing * 14, h.y);
     else if (RND() < dt * 8) G.parts.push({ type: 'spark', x: D.v.x + rand(-20, 20), y: D.v.y - 20, vx: rand(-60, 60), vy: rand(-90, -20), life: 0.25, max: 0.25 });
@@ -290,6 +290,7 @@ function tickWork(h, c, dt) {
       h.kit = null;
       feed(h.player.name + ' встановив на ' + VEH[D.v.type].name.toLowerCase() + ': ' + KIT_NAMES[D.kit], '#c9a36a');
     } else if (D.kind === 'ditch') buildDitch(h, D);
+    else if (D.kind === 'fill') fillDitch(h, D.d);
     else if (!bridgeOk(D.d)) buildBridge(h, D.d);
     Sfx.click();
     return;

@@ -374,7 +374,7 @@ function thinkHuman(b, s, dt) {
     } else if (!stop) {
       let best = null, bd = 1e9;
       const exs = tp.exits.filter(exitDone);
-      for (const e of exs) { const dx = (e.tx - h.x) * dir; if (dx > -6 && dx < bd) { bd = dx; best = e; } }
+      for (const e of exs) { const dx = (e.tx - h.x) * dir; if (dx > 12 && dx < bd) { bd = dx; best = e; } } // лише вихід попереду (не той, з якого щойно зайшов)
       if (!best) for (const e of exs) { const dd = Math.abs(e.tx - h.x); if (dd < bd) { bd = dd; best = e; } }
       if (best) {
         if (best.kind === 'shaft' && Math.abs(best.tx - h.x) < 7 && ladderAt(h)) { b.tap(s, 'up'); return; }
@@ -384,10 +384,10 @@ function thinkHuman(b, s, dt) {
     }
   }
   // розосередження: свої не ходять купою — щоб один скид не накрив двох
-  if (G.mode !== 'dm' && !h.guard && !m.atCover) {
+  if (G.mode !== 'dm' && !h.guard && !m.atCover && !tp && !h.onLadder && !buildingAt(h.x, h.y - 4)) {
     let mate = null, md = BOT_SPREAD;
     for (const o of G.humans) {
-      if (o === h || o.dead || o.saved || o.vehicle || o.hidden || (G.mode !== 'escape' && !allyP(o.player, h.player))) continue;
+      if (o === h || o.dead || o.saved || o.vehicle || o.hidden || o.guard || o.onLadder || pipeAt(W, o.x, o.y) || (G.mode !== 'escape' && !allyP(o.player, h.player))) continue;
       const dd = Math.abs(o.x - h.x);
       if (dd < md && Math.abs(o.y - h.y) < 90) { md = dd; mate = o; }
     }
@@ -398,18 +398,21 @@ function thinkHuman(b, s, dt) {
       else if (ahead && !danger) {
         // той, хто попереду, — дати йому відійти; якщо він стоїть довго — обійти
         m.spreadT = (m.spreadT || 0) + dt;
-        if (m.spreadT < 2.5 || Math.abs(mate.vx) > 30) stop = true;
+        if (m.spreadT < 2 && (m.spreadT < 1 || mate.vx * dir > 30)) stop = true; // попутник іде вперед — трохи зачекати; далі — обійти
       } else if (!ahead && h.stamina > 0.3) s.sprint = true; // позаду хтось — відірватися
     }
   }
   // рів без переправи попереду — туди не йти
-  if (!stop && G.W.ditches.some((d) => !bridgeOk(d) && (dir > 0 ? d.a - h.x : h.x - d.b) > -4 && (dir > 0 ? d.a - h.x : h.x - d.b) < 40)) stop = true;
+  if (!stop && h.onGround && !h.carry && G.W.ditches.some((d) => !bridgeOk(d) && (dir > 0 ? d.a - h.x : h.x - d.b) > -4 && (dir > 0 ? d.a - h.x : h.x - d.b) < 40)) {
+    if (bridgeSpot(h) && !danger) { s.sprint = false; s.left = s.right = false; if (h.stance !== 'stand') b.tap(s, 'up'); else b.tap(s, 'dig'); return; }
+    if (danger) stop = true; // під дроном — не будувати
+  }
   if (!stop) {
     if (dir > 0) s.right = true; else s.left = true;
     s.sprint = (danger || h.openTime > 1.5) && h.stamina > 0.05;
     // застряг — стрибок / залізти на уступ
     if (h.onGround && Math.abs(h.vx) < 15) m.stuck += dt; else m.stuck = 0;
-    if (m.stuck > 0.2 && h.stance === 'stand') { b.tap(s, 'up'); }
+    if (m.stuck > 0.2 && (h.stance === 'stand' || !tp)) { s.down = false; b.tap(s, 'up'); } // уперся: спершу встати, далі — стрибок / залізти
     // міну на шляху перестрибнути
     if (h.onGround && G.mines.some((mi) => mi.arm <= 0 && (mi.x - h.x) * dir > 38 && (mi.x - h.x) * dir < 70 && Math.abs(mi.y - h.y) < 14)) {
       s.sprint = h.stamina > 0.1;
