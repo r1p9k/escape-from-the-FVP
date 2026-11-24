@@ -490,14 +490,14 @@ function canPeek(sp) { return sp.type === 'burrow' || (sp.type === 'bunker' && !
 // у окопі, цілячись, людина стає на вогневу сходинку: дуло й рука — над бруствером
 function trenchLift(h) {
   if (!h.aiming || h.vehicle || h.hidden || h.onLadder || h.dead || !G || h === MENU_HUMAN) return 0;
-  const c = G.W.covers.find((c) => c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y + 14);
+  const c = G.W.covers.find((c) => c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y + 14 && h.y < c.y + c.h + 6);
   if (!c) return 0;
   const top = h.y - HUMAN_DIM[h.stance].h * (h.grenAim ? 0.82 : 0.68);
   return Math.max(0, top - (c.y - 8));
 }
 function inTrench(h) {
   if (h.vehicle || h.hidden || h.onLadder) return false;
-  return G.W.covers.some((c) => c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y + 14);
+  return G.W.covers.some((c) => c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y + 14 && h.y < c.y + c.h + 6);
 }
 // кут у світі → кут відносно погляду
 function aimRel(a) { return Math.atan2(Math.sin(a), Math.abs(Math.cos(a))); }
@@ -1520,7 +1520,12 @@ function updateBullets(dt) {
       for (const d of G.drones) {
         if (dist(b.x, b.y, d.x, d.y) >= DRONE_R + 3 || ally(b.owner, d)) continue;
         hit = true;
-        if (d.hp > 1) { d.hp--; G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-90, 90), vy: rand(-120, 20), life: 0.3, max: 0.3 }); Sfx.tone(1400, 0.03, 0.05); }
+        if (!d.inverted) {
+          d.inverted = true; d.lix = -(d.lix || 0); d.liy = -(d.liy || 0);
+          for (let k = 0; k < 6; k++) G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-120, 120), vy: rand(-140, 20), life: 0.35, max: 0.35 });
+          Sfx.tone(1400, 0.03, 0.05);
+          if (b.owner && b.owner.player) feed(b.owner.player.name + ' влучив у дрон — керування збилося (інверсія)', '#56ccf2');
+        }
         else shootDownDrone(d, b.owner);
         break;
       }
@@ -2159,6 +2164,7 @@ function updateDrone(d, dt) {
     let ix = c.cur.ax || 0, iy = c.cur.ay || 0;
     const l = Math.hypot(ix, iy);
     if (l > 1) { ix /= l; iy /= l; }
+    if (d.inverted) { ix = -ix; iy = -iy; } // після влучання кулі керування навпаки
     if (c.pressed('aim')) {
       // біля землі — посадка, високо — ширший огляд
       if (landSurface(d.x, d.y) - d.y < 90) d.landing = !d.landing;

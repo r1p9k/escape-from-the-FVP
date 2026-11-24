@@ -1665,6 +1665,7 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
 
   if (d) {
     const ds = toScreen(d.x, d.y);
+    if (d.inverted && Math.floor(t * 2) % 2 === 0) { ctx.fillStyle = '#ff6a4a'; ctx.font = FONT(13 * sc, '700'); ctx.textAlign = 'center'; ctx.fillText('⚠ ВЛУЧАННЯ — КЕРУВАННЯ НАВПАКИ', vp.x + vp.w / 2, vp.y + vp.h - 40 * sc); }
     ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(ds.x - 26, ds.y); ctx.lineTo(ds.x - 14, ds.y); ctx.moveTo(ds.x + 14, ds.y); ctx.lineTo(ds.x + 26, ds.y);
