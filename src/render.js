@@ -1665,6 +1665,7 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
 
   if (d) {
     const ds = toScreen(d.x, d.y);
+    if (d.scrapes > 0.05) { ctx.fillStyle = d.scrapes > 1.9 ? '#ff6a4a' : '#f2c94c'; ctx.font = FONT(12 * sc, '700'); ctx.textAlign = 'center'; ctx.fillText((d.stunT > 0 ? 'УДАР ГВИНТОМ! ' : '') + 'ГВИНТИ: ' + '■'.repeat(Math.max(0, 3 - Math.ceil(d.scrapes))) + '□'.repeat(Math.min(3, Math.ceil(d.scrapes))), vp.x + vp.w / 2, vp.y + vp.h - 62 * sc); }
     if (d.inverted && Math.floor(t * 2) % 2 === 0) { ctx.fillStyle = '#ff6a4a'; ctx.font = FONT(13 * sc, '700'); ctx.textAlign = 'center'; ctx.fillText('⚠ ВЛУЧАННЯ — КЕРУВАННЯ НАВПАКИ', vp.x + vp.w / 2, vp.y + vp.h - 40 * sc); }
     ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5;
     ctx.beginPath();
