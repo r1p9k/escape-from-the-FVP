@@ -77,9 +77,19 @@ function throwMolotov(h, ang) {
   Sfx.click();
 }
 // вогонь на землі: смуга полум'я, що пече всіх, хто в ній (людей, техніку)
-function startFire(x, y, w, t, player) {
+// де може горіти трава: поверхня, не голий ґрунт вирви, не рів, не під землею
+function grassAt(x) {
+  const W = G.W;
+  if (x < 20 || x > W.width - 20) return false;
+  if ((W.craters || []).some((q) => x > q.a && x < q.b)) return false;
+  if (W.ditches.some((d) => x > d.a - 6 && x < d.b + 6)) return false;
+  if (W.decor.some((d) => d.type === 'road' && x > d.x && x < d.x + d.w)) return false;
+  return true;
+}
+const FIRE_SPREAD = 0.3, FIRE_GEN = 7, FIRE_MAX = 40; // шанс за с на кожен бік, скільки «перескоків», ліміт вогнищ
+function startFire(x, y, w, t, player, gen) {
   const W = G.W, gy = landSurface(x, y - 6);
-  (G.fires || (G.fires = [])).push({ x, y: gy, w, t, max: t, player, seed: Math.random() * 100 });
+  (G.fires || (G.fires = [])).push({ x, y: gy, w, t, max: t, player, seed: Math.random() * 100, gen: gen || 0 });
   for (let i = 0; i < 16; i++) G.parts.push({ type: 'spark', x: x + rand(-w / 2, w / 2), y: gy - rand(0, 20), vx: rand(-120, 120), vy: rand(-260, -60), life: rand(0.3, 0.7), max: 0.7 });
   Sfx.noise_(0.5, 0.3, 700, 'lowpass');
   // кущі в полум'ї згоряють
@@ -87,9 +97,24 @@ function startFire(x, y, w, t, player) {
 }
 function updateFires(dt) {
   if (!G.fires || !G.fires.length) return;
+  const born = [];
   for (const f of G.fires) {
     f.t -= dt;
     const k = Math.min(1, f.t / 1.5), half = f.w / 2;
+    // суха трава поруч займається — вогонь повзе далі (на поверхні, не в ямі)
+    const surf = Math.abs(f.y - gAt(G.W, f.x)) < 8;
+    if (surf && f.gen < FIRE_GEN && f.t > 1.5 && G.fires.length + born.length < FIRE_MAX) for (const s of [-1, 1]) {
+      if (RND() > dt * FIRE_SPREAD) continue;
+      const nx = f.x + s * (half + rand(20, 45));
+      if (!grassAt(nx) || G.fires.concat(born).some((o) => Math.abs(o.x - nx) < o.w / 2 + 18)) continue;
+      born.push({ x: nx, y: gAt(G.W, nx), w: rand(50, 75), t: rand(4, 7), player: f.player, gen: f.gen + 1 });
+    }
+    // дрон низько над полум'ям — займається й вибухає
+    for (const d of G.drones.slice()) {
+      if (d.dead || Math.abs(d.x - f.x) > half + 6 || d.y < f.y - 55 || d.y > f.y + 10) { if (d.fireT) d.fireT = Math.max(0, d.fireT - dt); continue; }
+      d.fireT = (d.fireT || 0) + dt * k;
+      if (d.fireT > 0.5) { feed(d.player.name + ': дрон загорівся й вибухнув', '#ff7a2a'); d.fireT = 0; explodeDrone(d); }
+    }
     if (RND() < dt * 10 * k) G.parts.push({ type: 'smoke', x: f.x + rand(-half, half), y: f.y - 20, vx: rand(-10, 10), vy: rand(-45, -20), life: 2.2, max: 2.2, size: rand(10, 18) });
     for (const h of G.humans) {
       if (h.dead || h.saved || h.vehicle || h.hidden || h.onLadder) continue;
@@ -104,7 +129,21 @@ function updateFires(dt) {
       if (v.burn > 4) { const occ = [v.driver, v.gunner].filter(Boolean); destroyVehicle(v); occ.forEach((o) => hurt(o, 40, 'blast')); feed(VEH[v.type].name + ' згоріла', '#ff7a2a'); }
     }
   }
+  for (const n of born) startFire(n.x, n.y, n.w, n.t, n.player, n.gen);
   G.fires = G.fires.filter((f) => f.t > 0);
+}
+// вибух збиває полум'я поруч: від вогнища лишаються краї
+function douseFires(x, y, radius) {
+  if (!G.fires || !G.fires.length) return;
+  const R0 = radius * 0.7, out = [];
+  for (const f of G.fires) {
+    const a = f.x - f.w / 2, b = f.x + f.w / 2;
+    if (Math.abs(f.y - y) > radius || b < x - R0 || a > x + R0) { out.push(f); continue; }
+    if (x - R0 - a > 20) out.push(Object.assign({}, f, { x: (a + x - R0) / 2, w: x - R0 - a }));
+    if (b - (x + R0) > 20) out.push(Object.assign({}, f, { x: (x + R0 + b) / 2, w: b - (x + R0), seed: f.seed + 7 }));
+    for (let i = 0; i < 6; i++) G.parts.push({ type: 'smoke', x: rand(Math.max(a, x - R0), Math.min(b, x + R0)), y: f.y - 10, vx: rand(-30, 30), vy: rand(-60, -20), life: 1.6, max: 1.6, size: rand(12, 20), light: true });
+  }
+  G.fires = out;
 }
 // куди полетить граната: точки дуги (та сама фізика, що й у кидка)
 function grenadePath(h) {
