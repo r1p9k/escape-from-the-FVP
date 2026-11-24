@@ -218,6 +218,7 @@ function humanVisibleToDrone(h, drone) {
   if (h.dead) return true;
   if (drone && ally(h, drone)) return !h.saved; // своїх дрон бачить завжди
   if (h.saved) return false;
+  if (h.stealthT > 0) return false; // щойно відродився — дрони ще не помітили
   // з нори визирає — дрон помітить після пострілу або впритул
   if (covered(h)) return !!(h.peek && drone && (h.reveal > 0 || dist(drone.x, drone.y, h.hidden.x, h.hidden.y - 8) < 160));
   // у тунелі: дрон бачить, лише зазирнувши в отвір (пряма видимість)
@@ -273,11 +274,13 @@ function updateHuman(h, dt) {
   if (h.alT > 0 && (h.alT -= dt) <= 0) { h.alT = 0; feed(h.player.name + ': «Альоша» закінчився', '#f2c94c'); }
   if (h.dead && h.respawnT > 0 && (h.respawnT -= dt) <= 0) respawnHuman(h);
   if (h.protT > 0) h.protT -= dt;
+  if (h.stealthT > 0) h.stealthT -= dt;
   if (h.rebCd > 0) h.rebCd -= dt;
   if (h.grenadeCd > 0) h.grenadeCd -= dt;
   if (h.meleeCd > 0) h.meleeCd -= dt;
   if (h.meleeT > 0) { h.meleeT -= dt; if (h.meleePend && h.meleeT < MELEE_T * 0.42) meleeHit(h); }
   if (h.dead || h.saved) return;
+  passCheckpoint(h);
   // гравець керує дроном — тіло лишається на місці
   if (h.piloting) { if (!h.hidden) { h.vx = 0; moveHuman(h, dt); } return; }
   if (h.mount) { humanOnMount(h, c, dt); return; }
@@ -1350,6 +1353,7 @@ function hurt(h, dmg, src) {
   }
 }
 // відновлення: з останньої схованки чи будівлі з маскувальною сіткою, інакше зі старту
+const RESPAWN_STEALTH = 15;
 function respawnHuman(h) {
   const W = G.W, sp = h.spawn;
   Object.assign(h, { kit: null, gasmask: false, lost: null, gibbed: false, dead: false, hp: 100, stance: 'stand', vx: 0, vy: 0, armor: 0, weapon: null, hidden: null, vehicle: null, seat: null,
@@ -1357,9 +1361,11 @@ function respawnHuman(h) {
   if (G.mode === 'team') { h.hidden = null; teamRespawn(h); }
   else if (sp && sp.hide && !sp.hide.ruined) { h.x = sp.hide.x; h.y = sp.hide.y; h.hidden = sp.hide; }
   else if (sp && sp.bld) { h.x = sp.x; h.y = sp.y; }
+  else if (sp && sp.pos) { h.x = sp.x; h.y = gAt(W, sp.x); }
   else { h.x = G.mode === 'dm' ? randomSpawnX() : W.start.x; h.y = gAt(W, h.x); }
-  h.onGround = true; h.healT = 0; h.canister = false;
-  feed(h.player.name + ' повернувся в гру', '#6fcf97');
+  h.onGround = true; h.healT = 0; h.canister = false; h.stealthT = RESPAWN_STEALTH;
+  for (const d of G.drones) if (d.lockOn === h) d.lockOn = null;
+  feed(h.player.name + ' повернувся в гру (' + RESPAWN_STEALTH + ' с непомітний для дронів)', '#6fcf97');
 }
 
 // розліт тіла на шматки від вибуху: голова в шоломі, тулуб, руки, ноги + бризки
@@ -1394,6 +1400,25 @@ function gibHuman(h, src) {
 function buildingAt(x, y) {
   for (const b of G.W.backs) if (!b.ruined && x > b.x + 10 && x < b.x + b.w - 10 && y > b.y && y <= b.y + b.h + 4) return b;
   return null;
+}
+// пройшов бліндаж, нору чи окоп — звідти й відродишся (сітка не потрібна; далі вперед — нова точка)
+function cpProgress(x) { const W = G.W; return W.shelter ? -Math.abs(W.shelter.x - x) : 0; }
+function spawnX(sp) { return sp.hide ? sp.hide.x : sp.x; }
+function passCheckpoint(h) {
+  if (G.mode === 'team' || h.vehicle || h.hidden && h.hidden.type === 'pipe') return;
+  const W = G.W, cur = h.spawn && !(h.spawn.hide && h.spawn.hide.ruined) ? h.spawn : null;
+  let found = null;
+  if (h.hidden && h.hidden.type !== 'pipe') found = { hide: h.hidden };
+  else {
+    for (const sp of W.hides) if (sp.type !== 'pipe' && !sp.ruined && Math.abs(h.x - sp.x) < 40 && Math.abs(h.y - sp.y) < 40) { found = { hide: sp }; break; }
+    if (!found && h.onGround) for (const c of W.covers) if (c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y) { found = { pos: true, x: clamp(h.x, c.x + 10, c.x + c.w - 10), y: h.y, cv: c }; break; }
+  }
+  if (!found) return;
+  const same = cur && (found.hide ? cur.hide === found.hide : cur.cv === found.cv);
+  if (same) return;
+  if (cur && W.shelter && cpProgress(spawnX(found)) < cpProgress(spawnX(cur))) return; // позаду — точку не переносимо
+  h.spawn = found;
+  feed(h.player.name + ': точка відродження — ' + (found.hide ? (found.hide.type === 'bunker' ? 'бліндаж' : 'нора') : 'окоп'), '#9c9');
 }
 // натягнути сітку на вхід у бліндаж/нору або в будівлі; там же — точка відновлення
 function placeNet(h) {
@@ -2081,7 +2106,16 @@ function updateDrone(d, dt) {
       else d.player.cam.wide = !d.player.cam.wide;
     }
     if (d.landing && (c.held('up') || boost)) d.landing = false;
-    const acc = (boost ? 2100 : 1500) * fast, max = (boost ? 720 : 460) * fast;
+    const bad = d.sig != null ? 1 - d.sig : 0; // 0 — чистий зв'язок, 0.7 — найгірший
+    if (bad > 0.02) {
+      if (d.dropT > 0) d.dropT -= dt;
+      else if (RND() < dt * bad * 5) d.dropT = rand(0.1, 0.45) * bad * 1.6; // команда загубилася — дрон летить, як летів
+      const a = Math.min(1, dt * (1.2 + 12 * (1 - bad))); // запізнення реакції
+      if (!(d.dropT > 0)) { d.lix = lerp(d.lix || 0, ix, a); d.liy = lerp(d.liy || 0, iy, a); }
+      ix = d.lix || 0; iy = d.liy || 0;
+      d.vx += rand(-1, 1) * bad * 1100 * dt; d.vy += rand(-1, 1) * bad * 1100 * dt; // смикає
+    } else { d.lix = ix; d.liy = iy; }
+    const acc = (boost ? 2100 : 1500) * fast * (1 - bad * 0.5), max = (boost ? 720 : 460) * fast * (1 - bad * 0.45);
     if (d.landing) {
       d.vx *= Math.exp(-5 * dt); d.vy = approach(d.vy, 90, 700 * dt);
     } else {

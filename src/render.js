@@ -178,14 +178,17 @@ function drawSignalNoise(ctx, vp, k) {
   if (k <= 0.02) return;
   ctx.save();
   ctx.globalAlpha = Math.min(0.85, k * 0.9);
-  const n = Math.floor(400 * k);
+  const n = Math.floor(650 * k);
   for (let i = 0; i < n; i++) { const g = (Math.random() * 255) | 0; ctx.fillStyle = 'rgb(' + g + ',' + g + ',' + g + ')'; ctx.fillRect(vp.x + Math.random() * vp.w, vp.y + Math.random() * vp.h, 2 + Math.random() * 3, 1 + Math.random() * 2); }
   ctx.globalAlpha = Math.min(0.6, k * 0.7);
   for (let i = 0; i < 3 + k * 6; i++) { const y = vp.y + Math.random() * vp.h; ctx.fillStyle = 'rgba(200,200,200,' + (0.2 + Math.random() * 0.3) + ')'; ctx.fillRect(vp.x, y, vp.w, 1 + Math.random() * 4 * k); }
-  if (k > 0.6) { ctx.globalAlpha = (k - 0.6) * 1.5; ctx.fillStyle = '#111'; ctx.fillRect(vp.x, vp.y, vp.w, vp.h); }
+  // кольорові блоки «битої» картинки й короткі провали сигналу
+  for (let i = 0; i < k * 10; i++) { ctx.globalAlpha = 0.25 + Math.random() * 0.35 * k; ctx.fillStyle = ['#3a6', '#c3c', '#38c', '#bbb'][(Math.random() * 4) | 0]; ctx.fillRect(vp.x + Math.random() * vp.w, vp.y + Math.random() * vp.h, 20 + Math.random() * 90 * k, 3 + Math.random() * 10 * k); }
+  if (Math.random() < k * 0.08) { ctx.globalAlpha = 0.35 + 0.4 * k; ctx.fillStyle = '#777'; ctx.fillRect(vp.x, vp.y, vp.w, vp.h); }
+  if (k > 0.5) { ctx.globalAlpha = (k - 0.5) * 1.2; ctx.fillStyle = '#111'; ctx.fillRect(vp.x, vp.y, vp.w, vp.h); }
   ctx.restore();
   ctx.fillStyle = '#ffdddd'; ctx.font = FONT(14); ctx.textAlign = 'center';
-  ctx.fillText(k > 0.85 ? 'ЗВ\'ЯЗОК ВТРАЧЕНО' : 'Слабкий сигнал ' + Math.round((1 - k) * 100) + '%', vp.x + vp.w / 2, vp.y + vp.h - 40);
+  ctx.fillText((k > 0.6 ? 'Сигнал ледь тримається ' : 'Слабкий сигнал ') + Math.round((1 - k) * 100) + '% — керування із запізненням', vp.x + vp.w / 2, vp.y + vp.h - 40);
 }
 function renderView(ctx, vp, p, t) {
   const W = G.W;
@@ -298,7 +301,7 @@ function renderView(ctx, vp, p, t) {
     drawDrone(ctx, d, t);
   }
   if (!isDrone && human && !human.dead && !human.saved) drawSoundDirs(ctx, human, t);
-  if (isDrone && drone && drone.sig != null && drone.sig < 0.97) G._noise = 1 - drone.sig; else G._noise = 0;
+  if (isDrone && drone && drone.sig != null && drone.sig < 0.97) G._noise = Math.min(0.82, (1 - drone.sig) * 1.17); else G._noise = 0;
   // кулі
   ctx.strokeStyle = '#ffe9a0'; ctx.lineWidth = 2;
   ctx.beginPath();
