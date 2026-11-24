@@ -2135,6 +2135,23 @@ function isHeadHit(d, h) {
   if (h.stance === 'prone') return Math.abs(px - (h.facing > 0 ? r.x + r.w : r.x)) < 13;
   return py < r.y + 15;
 }
+const CRASH = 170; // швидкість удару (по нормалі), після якої дрон розбивається одразу
+// доторк до стіни: гвинт черкнув — дрон кидає й смикає, керування на мить зникає; третій доторк — падає
+// (знизу на землю/дах — м'якше: можна легенько сісти)
+function droneTouch(d, impact, nx, ny) {
+  const floor = ny < -0.7, soft = floor ? 90 : 30, side = Math.hypot(d.vx - nx * (d.vx * nx + d.vy * ny), d.vy - ny * (d.vx * nx + d.vy * ny));
+  if (impact < soft && (floor || side < 160)) return false; // ледь торкнувся або ковзає повільно
+  if (d.touchCd > 0) return false;
+  d.touchCd = 0.45;
+  d.scrapes = (d.scrapes || 0) + (impact > soft * 2.5 || side > 260 ? 1.4 : 1);
+  d.stunT = 0.35 + Math.min(0.5, impact / 300);
+  d.vx += nx * 180 + rand(-140, 140); d.vy += ny * 180 + rand(-140, 140); // відкидає
+  d.tilt = clamp(d.tilt + rand(-0.6, 0.6), -0.9, 0.9);
+  for (let k = 0; k < 5; k++) G.parts.push({ type: 'spark', x: d.x - nx * DRONE_R, y: d.y - ny * DRONE_R, vx: rand(-120, 120), vy: rand(-140, 30), life: 0.3, max: 0.3 });
+  Sfx.tone(320, 0.06, 0.09);
+  if (d.scrapes >= 3) { feed(d.player.name + ': дрон зачепив стіну — гвинти зламано', '#ff7a2a'); return true; }
+  return false;
+}
 function updateDrone(d, dt) {
   const W = G.W, c = d.player.ctrl;
   // на землі («ждун»): АКБ не сідає, гвинти стоять
@@ -2165,6 +2182,7 @@ function updateDrone(d, dt) {
     const l = Math.hypot(ix, iy);
     if (l > 1) { ix /= l; iy /= l; }
     if (d.inverted) { ix = -ix; iy = -iy; } // після влучання кулі керування навпаки
+    if (d.stunT > 0) { ix = 0; iy = 0; d.vx += rand(-1, 1) * 900 * dt; d.vy += rand(-1, 1) * 900 * dt; } // черкнув стіну — мить без керування
     if (c.pressed('aim')) {
       // біля землі — посадка, високо — ширший огляд
       if (landSurface(d.x, d.y) - d.y < 90) d.landing = !d.landing;
@@ -2209,12 +2227,14 @@ function updateDrone(d, dt) {
     const sy = landSurface(d.x, d.y - DRONE_R);
     if (d.y + DRONE_R >= sy - 1) { d.y = sy - DRONE_R; d.vx = 0; d.vy = 0; d.landed = true; d.landing = false; return; }
   }
-  const CRASH = 300; // швидкість удару (по нормалі), після якої дрон розбивається
+  if (d.scrapes > 0) d.scrapes = Math.max(0, d.scrapes - dt / 8); // гвинти «відходять» повільно
+  if (d.touchCd > 0) d.touchCd -= dt;
+  if (d.stunT > 0) d.stunT -= dt;
   // земля й стіни тунелів (порожнини вільні — дрон може залетіти в тунель)
   const nn = dirtNormal(W, d.x, d.y, DRONE_R);
   if (nn) {
     const impact = -(d.vx * nn.x + d.vy * nn.y);
-    if (impact > CRASH || d.jammed) { explodeDrone(d); return; }
+    if (impact > CRASH || d.jammed || droneTouch(d, impact, nn.x, nn.y)) { explodeDrone(d); return; }
     for (let k = 0; k < 14 && dirtNormal(W, d.x, d.y, DRONE_R); k++) { d.x += nn.x; d.y += nn.y; }
     if (impact > 0) { d.vx += nn.x * impact * 1.2; d.vy += nn.y * impact * 1.2; }
     d.vx *= 0.97;
@@ -2227,7 +2247,7 @@ function updateDrone(d, dt) {
     if (dd === 0) { if (d.jammed || Math.hypot(d.vx, d.vy) > CRASH) { explodeDrone(d); return; } d.y = s.y - DRONE_R; d.vy = 0; continue; }
     const l = Math.sqrt(dd);
     const dot = (d.vx * dx + d.vy * dy) / l;
-    if (-dot > CRASH || d.jammed) { explodeDrone(d); return; }
+    if (-dot > CRASH || d.jammed || droneTouch(d, -dot, dx / l, dy / l)) { explodeDrone(d); return; }
     d.x = nx + (dx / l) * DRONE_R; d.y = ny + (dy / l) * DRONE_R;
     if (dot < 0) { d.vx -= (dx / l) * dot * 1.3; d.vy -= (dy / l) * dot * 1.3; }
   }
