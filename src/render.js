@@ -1530,7 +1530,7 @@ function drawHumanHud(ctx, vp, p, t) {
     bar(ctx, 70, 99, 150, 10, v.fuel / tank, v.fuel / tank > 0.25 ? '#f2c94c' : '#eb5757');
   } else if (h.weapon && !h.vehicle) {
     ctx.fillStyle = h.aiming ? '#6fcf97' : '#ccc';
-    ctx.fillText(h.grenAim ? (h.throwSel === 'molotov' ? 'КОКТЕЙЛЬ ' : 'ГРАНАТА ') + Math.round(-h.aimA * 57) + '° — [' + c.label('fire') + '] кинути, [' + c.label('slot1') + '] зброя' : h.aiming ? 'ПОЗИЦІЯ ' + Math.round(-h.aimA * 57) + '° · ' + STANCE_ACC[h.peek ? h.hidden.type : h.stance] + (inTrench(h) ? ' · з окопу' : '') : 'Тримай [' + c.label('aim') + '] — позиція', 16, 108);
+    ctx.fillText(h.grenAim ? (h.throwSel === 'molotov' ? 'КОКТЕЙЛЬ ' : 'ГРАНАТА ') + Math.round(-h.aimA * 57) + '° — [' + c.label('fire') + '] кинути, [' + c.label('slot1') + '] зброя' : h.aiming ? 'ПОЗИЦІЯ ' + Math.round(-h.aimA * 57) + '° · ' + STANCE_ACC[h.peek ? h.hidden.type : h.stance] + (inTrench(h) ? ' · з окопу' : '') : '[' + c.label('fire') + '] — вогонь з руки (сам наводиться, на бігу — мимо)   [' + c.label('aim') + '] — позиція, точно', 16, 108);
   }
   // дим: відлік до отруєння
   if (h.hidden && h.smokeT > 0 && !h.dead) {

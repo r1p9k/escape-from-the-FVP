@@ -270,6 +270,9 @@ function updateHuman(h, dt) {
   if (h.flipT > 0) { h.flipT -= dt; if (h.onGround && h.flipT < FLIP_T - 0.1) h.flipT = 0; }
   h.bloom = Math.max(0, h.bloom - dt * 1.6);
   if (h.reloadT > 0 && !h.dead && (h.reloadT -= dt) <= 0) finishReload(h);
+  if (h.hipT > 0) h.hipT -= dt;
+  h.idleFire = (h.idleFire || 0) + dt;
+  if (h.idleFire > 1.2 && h.weapon && !h.dead && h.reloadT <= 0 && !h.hidden && h.weapon.mag < Math.min(WEAPONS[h.weapon.type].mag, h.weapon.ammo)) startReload(h);
   if (h.hideAnim && (h.hideAnim.t += dt) >= h.hideAnim.dur) h.hideAnim = null;
   if (h.alT > 0 && (h.alT -= dt) <= 0) { h.alT = 0; feed(h.player.name + ': «Альоша» закінчився', '#f2c94c'); }
   if (h.dead && h.respawnT > 0 && (h.respawnT -= dt) <= 0) respawnHuman(h);
@@ -425,13 +428,19 @@ function updateHuman(h, dt) {
   else if (h.carry) { if (c.pressed('fire') && h.fireCd <= 0) throwCarry(h); } // предмет у руках — кинути
   else if (h.grenAim) { if (c.pressed('fire')) throwSelected(h); } // граната чи коктейль у руці — кидок лише кнопкою пострілу
   else if (h.alT > 0) { if (c.held('fire') && h.fireCd <= 0 && !h.canister) alioshaShot(h); }
-  // стріляти можна лише з позиції (режим прицілювання)
-  else if (h.aiming && c.held('fire') && h.weapon && h.canister && c.pressed('fire')) feed(h.player.name + ': руки зайняті каністрою — [' + c.label('slot1') + '] викинути', '#ccc');
+  else if (c.held('fire') && h.weapon && h.canister && c.pressed('fire')) feed(h.player.name + ': руки зайняті каністрою — [' + c.label('slot1') + '] викинути', '#ccc');
   else if (h.aiming && !h.grenAim && c.held('fire') && h.weapon && !h.canister && h.fireCd <= 0 && h.reloadT <= 0 && h.weapon.mag > 0) {
     humanShoot(h, muzzle(h), h.stance);
   }
-  // вогонь без позиції — перезарядити
-  else if (!h.aiming && c.pressed('fire') && h.weapon && h.reloadT <= 0 && h.alT <= 0 && h.weapon.mag < Math.min(WEAPONS[h.weapon.type].mag, h.weapon.ammo)) startReload(h);
+  // без позиції — з руки, одразу: приціл сам іде на найближчу ціль (або за мишею); на бігу розкид шалений
+  else if (!h.aiming && c.held('fire') && h.weapon && !h.canister && !h.onLadder && h.fireCd <= 0 && h.reloadT <= 0 && h.weapon.mag > 0) {
+    const run = Math.abs(h.vx) > 40 || !h.onGround;
+    setAimWorld(h, c.cur.aimAngle !== undefined ? c.cur.aimAngle : hipAim(h));
+    h.hipMul = run ? HIP_RUN : HIP_STILL; h.hipT = 0.5;
+    humanShoot(h, muzzle(h), h.stance);
+    h.hipMul = 0;
+  }
+  if (c.held('fire')) h.idleFire = 0;
   if (c.pressed('special')) {
     if (c.held('aim') && h.alCharges > 0 && h.alT <= 0) activateAliosha(h);
     else activateReb(h);
@@ -439,6 +448,25 @@ function updateHuman(h, dt) {
   checkShelter(h);
 }
 
+// розкид стрільби з руки: стоячи на місці — ×2.5, на бігу чи в стрибку — ×10
+const HIP_STILL = 2.5, HIP_RUN = 10;
+// куди сам наводиться ствол без позиції: найближчий видимий ворожий дрон (у командах — і людина) у межах дальності
+function hipAim(h) {
+  const Wp = WEAPONS[h.weapon.type], ox = h.x, oy = h.y - HUMAN_DIM[h.stance].h * 0.68;
+  let best = null, bd = Wp.range * 0.95;
+  for (const d of G.drones) {
+    if (ally(d, h) || d.dead) continue;
+    const dd = dist(ox, oy, d.x, d.y) + ((d.x - h.x) * h.facing < 0 ? 140 : 0); // попереду — охочіше
+    if (dd < bd && droneSeenBy(d, h, true) && lineOfSight(G.W, ox, oy, d.x, d.y)) { bd = dd; best = { x: d.x, y: d.y }; }
+  }
+  if (isTeam()) for (const o of G.humans) {
+    if (o === h || o.dead || o.saved || o.hidden || o.vehicle || allyP(o.player, h.player)) continue;
+    const ty = o.y - HUMAN_DIM[o.stance].h * 0.55, dd = dist(ox, oy, o.x, ty) + ((o.x - h.x) * h.facing < 0 ? 140 : 0);
+    if (dd < bd && lineOfSight(G.W, ox, oy, o.x, ty)) { bd = dd; best = { x: o.x, y: ty }; }
+  }
+  if (best) return Math.atan2(best.y - oy, best.x - ox);
+  return h.facing > 0 ? -0.12 : Math.PI + 0.12; // цілі нема — прямо перед собою
+}
 function humanShoot(h, m, stance) {
   fireWeapon(h, m.x, m.y, h.weapon.type, aimWorld(h), false, stance);
   h.fireCd = WEAPONS[h.weapon.type].rate;
@@ -1453,7 +1481,7 @@ function droneHovering(d, x, y) {
 function fireWeapon(h, ox, oy, type, base, moving, stance) {
   const Wp = WEAPONS[type];
   // розкид: положення тіла × рух × «віддача» від частої стрільби
-  const spread = Wp.spread * (STANCE_SPREAD[stance] || 1) * (moving ? 1.8 : 1) * (1 + (h.bloom || 0));
+  const spread = Wp.spread * (STANCE_SPREAD[stance] || 1) * (moving ? 1.8 : 1) * (1 + (h.bloom || 0)) * (h.hipMul || 1);
   h.bloom = Math.min(1.5, (h.bloom || 0) + (Wp.pellets > 1 ? 0.5 : 0.22));
   for (let i = 0; i < Wp.pellets; i++) {
     const a = base + (RND() * 2 - 1) * spread;
@@ -2098,7 +2126,7 @@ function updateDrone(d, dt) {
     d.jammed = false; d.landing = false;
     if (c.pressed('fire')) { explodeDrone(d); return; }
   } else if (!d.jammed) {
-    let ix = c.cur.ax, iy = c.cur.ay;
+    let ix = c.cur.ax || 0, iy = c.cur.ay || 0;
     const l = Math.hypot(ix, iy);
     if (l > 1) { ix /= l; iy /= l; }
     if (c.pressed('aim')) {
