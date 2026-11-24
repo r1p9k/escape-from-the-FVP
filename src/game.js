@@ -218,7 +218,6 @@ function humanVisibleToDrone(h, drone) {
   if (h.dead) return true;
   if (drone && ally(h, drone)) return !h.saved; // своїх дрон бачить завжди
   if (h.saved) return false;
-  if (h.stealthT > 0) return false; // щойно відродився — дрони ще не помітили
   // з нори визирає — дрон помітить після пострілу або впритул
   if (covered(h)) return !!(h.peek && drone && (h.reveal > 0 || dist(drone.x, drone.y, h.hidden.x, h.hidden.y - 8) < 160));
   // у тунелі: дрон бачить, лише зазирнувши в отвір (пряма видимість)
@@ -277,7 +276,6 @@ function updateHuman(h, dt) {
   if (h.alT > 0 && (h.alT -= dt) <= 0) { h.alT = 0; feed(h.player.name + ': «Альоша» закінчився', '#f2c94c'); }
   if (h.dead && h.respawnT > 0 && (h.respawnT -= dt) <= 0) respawnHuman(h);
   if (h.protT > 0) h.protT -= dt;
-  if (h.stealthT > 0) h.stealthT -= dt;
   if (h.rebCd > 0) h.rebCd -= dt;
   if (h.grenadeCd > 0) h.grenadeCd -= dt;
   if (h.meleeCd > 0) h.meleeCd -= dt;
@@ -375,7 +373,9 @@ function updateHuman(h, dt) {
     } else {
       let speed = h.stance === 'stand' ? RUN : h.stance === 'crouch' ? CROUCH_SPD : CRAWL;
       const wantSprint = c.held('sprint') && h.stance === 'stand' && ax !== 0;
-      if (wantSprint && h.stamina > 0 && !h.exhausted) {
+      h.adren = G.drones.some((d) => !d.dead && !ally(d, h) && !d.onPad && dist(d.x, d.y, h.x, h.y - 25) < ADREN_R);
+      if (wantSprint && h.adren) { speed = SPRINT; h.exhausted = false; h.stamina = Math.min(1, h.stamina + dt / 8); } // страх: дрон поруч — біг без утоми
+      else if (wantSprint && h.stamina > 0 && !h.exhausted) {
         speed = SPRINT; h.stamina -= dt / 6; h.staminaDelay = 0.9; // запасу витривалості — на 6 с бігу
         if (h.stamina <= 0) { h.stamina = 0; h.exhausted = true; }
       } else {
@@ -451,6 +451,7 @@ function updateHuman(h, dt) {
 // розкид стрільби з руки: стоячи на місці — ×2.5, на бігу чи в стрибку — ×10
 const HIP_STILL = 2.5, HIP_RUN = 10;
 // куди сам наводиться ствол без позиції: найближчий видимий ворожий дрон (у командах — і людина) у межах дальності
+const ADREN_R = 340; // дрон ближче — адреналін
 function hipAim(h) {
   const Wp = WEAPONS[h.weapon.type], ox = h.x, oy = h.y - HUMAN_DIM[h.stance].h * 0.68;
   let best = null, bd = Wp.range * 0.95;
@@ -489,14 +490,14 @@ function canPeek(sp) { return sp.type === 'burrow' || (sp.type === 'bunker' && !
 // у окопі, цілячись, людина стає на вогневу сходинку: дуло й рука — над бруствером
 function trenchLift(h) {
   if (!h.aiming || h.vehicle || h.hidden || h.onLadder || h.dead || !G || h === MENU_HUMAN) return 0;
-  const c = G.W.covers.find((c) => c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y + 14);
+  const c = G.W.covers.find((c) => c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y + 14 && h.y < c.y + c.h + 6);
   if (!c) return 0;
   const top = h.y - HUMAN_DIM[h.stance].h * (h.grenAim ? 0.82 : 0.68);
   return Math.max(0, top - (c.y - 8));
 }
 function inTrench(h) {
   if (h.vehicle || h.hidden || h.onLadder) return false;
-  return G.W.covers.some((c) => c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y + 14);
+  return G.W.covers.some((c) => c.type === 'trench' && h.x > c.x && h.x < c.x + c.w && h.y > c.y + 14 && h.y < c.y + c.h + 6);
 }
 // кут у світі → кут відносно погляду
 function aimRel(a) { return Math.atan2(Math.sin(a), Math.abs(Math.cos(a))); }
@@ -1382,7 +1383,19 @@ function hurt(h, dmg, src) {
   }
 }
 // відновлення: з останньої схованки чи будівлі з маскувальною сіткою, інакше зі старту
-const RESPAWN_STEALTH = 15;
+const RESPAWN_ZONE = 3000; // перші 300 м від старту
+// випадкове вільне місце на поверхні в перших 300 м (від старту — у бік укриття)
+function startZoneX() {
+  const W = G.W, dir = W.shelter ? Math.sign(W.shelter.x - W.start.x) || 1 : 1;
+  for (let t = 0; t < 40; t++) {
+    const x = clamp(W.start.x + dir * rand(0, RESPAWN_ZONE), 60, W.width - 60), g = gAt(W, x);
+    if (W.ditches.some((d) => x > d.a - 30 && x < d.b + 30) || rockIn(x - 12, x + 12)) continue;
+    if (solidsNear(W, x - 30, x + 30).some((s) => !s.thin && s.x < x + 14 && s.x + s.w > x - 14 && s.y < g && s.y + s.h > g - 60)) continue;
+    if (G.fires && G.fires.some((f) => Math.abs(f.x - x) < f.w / 2 + 40)) continue;
+    return x;
+  }
+  return W.start.x;
+}
 function respawnHuman(h) {
   const W = G.W, sp = h.spawn;
   Object.assign(h, { kit: null, gasmask: false, lost: null, gibbed: false, dead: false, hp: 100, stance: 'stand', vx: 0, vy: 0, armor: 0, weapon: null, hidden: null, vehicle: null, seat: null,
@@ -1391,10 +1404,10 @@ function respawnHuman(h) {
   else if (sp && sp.hide && !sp.hide.ruined) { h.x = sp.hide.x; h.y = sp.hide.y; h.hidden = sp.hide; }
   else if (sp && sp.bld) { h.x = sp.x; h.y = sp.y; }
   else if (sp && sp.pos) { h.x = sp.x; h.y = gAt(W, sp.x); }
-  else { h.x = G.mode === 'dm' ? randomSpawnX() : W.start.x; h.y = gAt(W, h.x); }
-  h.onGround = true; h.healT = 0; h.canister = false; h.stealthT = RESPAWN_STEALTH;
+  else { h.x = G.mode === 'dm' ? randomSpawnX() : startZoneX(); h.y = gAt(W, h.x); }
+  h.onGround = true; h.healT = 0; h.canister = false;
   for (const d of G.drones) if (d.lockOn === h) d.lockOn = null;
-  feed(h.player.name + ' повернувся в гру (' + RESPAWN_STEALTH + ' с непомітний для дронів)', '#6fcf97');
+  feed(h.player.name + ' повернувся в гру', '#6fcf97');
 }
 
 // розліт тіла на шматки від вибуху: голова в шоломі, тулуб, руки, ноги + бризки
@@ -1507,7 +1520,12 @@ function updateBullets(dt) {
       for (const d of G.drones) {
         if (dist(b.x, b.y, d.x, d.y) >= DRONE_R + 3 || ally(b.owner, d)) continue;
         hit = true;
-        if (d.hp > 1) { d.hp--; G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-90, 90), vy: rand(-120, 20), life: 0.3, max: 0.3 }); Sfx.tone(1400, 0.03, 0.05); }
+        if (!d.inverted) {
+          d.inverted = true; d.lix = -(d.lix || 0); d.liy = -(d.liy || 0);
+          for (let k = 0; k < 6; k++) G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-120, 120), vy: rand(-140, 20), life: 0.35, max: 0.35 });
+          Sfx.tone(1400, 0.03, 0.05);
+          if (b.owner && b.owner.player) feed(b.owner.player.name + ' влучив у дрон — керування збилося (інверсія)', '#56ccf2');
+        }
         else shootDownDrone(d, b.owner);
         break;
       }
@@ -1944,13 +1962,16 @@ function updateBombs(dt) {
       else { G.mines.push({ x: b.x, y: b.y + 3, arm: 0.8, seed: Math.random() * 10, player: b.player }); Sfx.tone(180, 0.06, 0.1); }
     } else {
       G.blastBy = null;
-      G.smokes.push({ x: b.x, y: b.y - 30, t: SMOKE_TIME, max: SMOKE_TIME, r: SMOKE_R, seed: Math.random() * 100 });
+      makeSmoke(b.x, b.y);
       Sfx.noise_(0.6, 0.25, 1200, 'bandpass');
     }
     G.blastBy = null;
   }
   for (const sm of G.smokes) {
     sm.t -= dt;
+    const gk = clamp((sm.max - sm.t) / sm.grow, 0, 1);
+    sm.r = sm.r0 + (sm.rMax - sm.r0) * (1 - (1 - gk) * (1 - gk)); // повільно розходиться до меж приміщення
+    if (sm.env === 'open') sm.x += SMOKE_WIND * dt;
     if (RND() < dt * 14) G.parts.push({ type: 'smoke', x: sm.x + rand(-sm.r, sm.r) * 0.7, y: sm.y + rand(-30, 25), vx: rand(-15, 15), vy: rand(-25, -5), life: 3, max: 3, size: rand(16, 28), light: true });
   }
   G.smokes = G.smokes.filter((s) => s.t > 0);
@@ -1981,6 +2002,20 @@ function updateBombs(dt) {
       if (RND() < dt * 3) G.parts.push({ type: 'smoke', x: h.x, y: h.y - 34, vx: rand(-10, 10), vy: -20, life: 0.8, max: 0.8, size: 6, light: true });
     }
   }
+}
+// дим: де впав — там і поводиться (відкрите місце, будівля, схованка, тунель)
+const SMOKE_WIND = 14;
+function makeSmoke(x, y) {
+  const W = G.W, b = buildingAt(x, y - 4), sp = hideAtPoint(x, y) || W.hides.find((q) => q.type !== 'pipe' && !q.ruined && dist(x, y, q.x, q.y) < 50), tp = pipeAt(W, x, y + 2);
+  let s;
+  if (b) s = { env: 'bld', x: clamp(x, b.x + 30, b.x + b.w - 30), y: y - 30, t: 45, r0: 40, rMax: Math.min(b.w / 2 + 10, 170), grow: 12 };
+  else if (sp && sp.sp) s = { env: 'hide', x: sp.x, y: sp.y - 30, t: 40, r0: 26, rMax: 75, grow: 8 };
+  else if (sp) s = { env: 'hide', x: sp.x, y: sp.y - 30, t: 40, r0: 26, rMax: 75, grow: 8 };
+  else if (tp) s = { env: 'tun', x, y: y - 20, t: 40, r0: 30, rMax: 150, grow: 15 };
+  else s = { env: 'open', x, y: y - 30, t: 16, r0: 60, rMax: SMOKE_R * 1.1, grow: 3 };
+  s.max = s.t; s.r = s.r0; s.seed = Math.random() * 100;
+  G.smokes.push(s);
+  return s;
 }
 function inSmoke(x, y) { return G.smokes.some((s) => dist(x, y, s.x, s.y) < s.r * 0.85); }
 
@@ -2129,6 +2164,7 @@ function updateDrone(d, dt) {
     let ix = c.cur.ax || 0, iy = c.cur.ay || 0;
     const l = Math.hypot(ix, iy);
     if (l > 1) { ix /= l; iy /= l; }
+    if (d.inverted) { ix = -ix; iy = -iy; } // після влучання кулі керування навпаки
     if (c.pressed('aim')) {
       // біля землі — посадка, високо — ширший огляд
       if (landSurface(d.x, d.y) - d.y < 90) d.landing = !d.landing;
@@ -2235,6 +2271,7 @@ function explosion(x, y, power, radius, direct) {
   G.lastBlast = { x, y, power };
   Sfx.boom(power > 60);
   explosionFx(x, y, power, radius);
+  douseFires(x, y, radius);
   // техніка: броня приймає удар, люди всередині лише поранені
   const shielded = new Set();
   for (const h of G.humans) if (h.vehicle) shielded.add(h);

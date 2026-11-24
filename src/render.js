@@ -1505,7 +1505,8 @@ function drawHumanHud(ctx, vp, p, t) {
   ctx.fillStyle = '#fff';
   ctx.fillText((G.mode !== 'escape' ? 'Рахунок: ' + p.score : 'Життя: ' + '♥'.repeat(Math.max(0, h.lives)) + '♡'.repeat(Math.max(0, HUMAN_LIVES - h.lives))) + '  Сітки: ' + h.nets + '  Гранати: ' + h.grenades + ((h.molotovs || 0) ? '  Молотов: ' + h.molotovs : '') + ' [' + c.label('slot3') + ']', 16, 163);
   bar(ctx, 16, 34, 194, 11, h.hp / 100, h.hp > 35 ? '#6fcf97' : '#eb5757');
-  bar(ctx, 16, 49, 194, 6, h.stamina, h.exhausted ? '#a66' : '#f2c94c');
+  bar(ctx, 16, 49, 194, 6, h.adren ? 1 : h.stamina, h.adren ? '#ff6a4a' : h.exhausted ? '#a66' : '#f2c94c');
+  if (h.adren) { ctx.fillStyle = '#ff8a6a'; ctx.font = FONT(10, '600'); ctx.textAlign = 'left'; ctx.fillText('АДРЕНАЛІН', 216, 56); }
   ctx.font = FONT(12, '600'); ctx.fillStyle = '#fff';
   let wtxt = 'Без зброї';
   if (h.vehicle && h.seat === 'gunner') {
@@ -1664,6 +1665,7 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
 
   if (d) {
     const ds = toScreen(d.x, d.y);
+    if (d.inverted && Math.floor(t * 2) % 2 === 0) { ctx.fillStyle = '#ff6a4a'; ctx.font = FONT(13 * sc, '700'); ctx.textAlign = 'center'; ctx.fillText('⚠ ВЛУЧАННЯ — КЕРУВАННЯ НАВПАКИ', vp.x + vp.w / 2, vp.y + vp.h - 40 * sc); }
     ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(ds.x - 26, ds.y); ctx.lineTo(ds.x - 14, ds.y); ctx.moveTo(ds.x + 14, ds.y); ctx.lineTo(ds.x + 26, ds.y);

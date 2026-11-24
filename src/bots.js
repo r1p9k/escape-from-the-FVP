@@ -649,6 +649,7 @@ function thinkDrone(b, s, dt) {
   let ax = (vx - d.vx) / 260, ay = (vy - d.vy) / 260;
   const al = Math.hypot(ax, ay);
   if (al > 1) { ax /= al; ay /= al; }
+  if (d.inverted) { ax = -ax; ay = -ay; } // керування навпаки — бот компенсує
   s.ax = ax; s.ay = ay; s.sprint = boost;
   m.attack = attack;
 }
