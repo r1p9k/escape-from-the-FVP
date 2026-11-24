@@ -258,6 +258,8 @@ function thinkHuman(b, s, dt) {
   m.fortCd = (m.fortCd || 0) - dt;
   // командний режим: граната по ворожій людині на відстані кидка
   m.grenT = (m.grenT || 0) - dt;
+  if (h.throwSel && (m.grenBack = (m.grenBack || 0) - dt) < 0 && m.grenT > 0) b.tap(s, 'slot1'); // кинув — назад до зброї
+  if (h.throwSel && !(m.grenT <= 0 && isTeam())) { if ((m.grenHold = (m.grenHold || 0) + dt) > 2) { b.tap(s, 'slot1'); m.grenHold = 0; } } else m.grenHold = 0;
   if (isTeam() && h.grenades > 0 && m.grenT <= 0 && h.onGround && !h.carry && !h.canister && !s.fire) {
     let foe = null, fd = 380;
     for (const o of G.humans) {
@@ -269,7 +271,7 @@ function thinkHuman(b, s, dt) {
     }
     if (foe) {
       const a = grenadeAngle(handPos(h), foe.x, foe.y - 10);
-      if (a != null) { s.aim = true; s.aimAngle = a; b.tap(s, 'slot3'); m.grenT = 5 + Math.random() * 3; }
+      if (a != null) { s.aim = true; s.aimAngle = a; if (h.throwSel === 'grenade' && h.grenAim) { b.tap(s, 'fire'); m.grenT = 5 + Math.random() * 3; m.grenBack = 0.5; } else if (h.throwSel !== 'grenade') b.tap(s, 'slot3'); }
     }
   }
   // рукопашна: ворог чи «ждун» впритул — бити; у командах ворога поруч — наздогнати
