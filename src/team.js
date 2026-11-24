@@ -276,7 +276,7 @@ function endPilot(dp) {
 }
 
 // ---------- Підвіз: НРК везуть дрони й зброю на базу ----------
-const STOCK_START = 12, STOCK_MAX = 20, UGV_EVERY = 30, UGV_SPD = 110, UGV_HP = 100, UGV_DRONES = 6;
+const STOCK_START = 12, STOCK_MAX = 20, UGV_EVERY = 30, UGV_SPD = 110, UGV_HP = 180, UGV_DRONES = 6;
 function initSupply() {
   G.stock = [STOCK_START, STOCK_START];
   G.ugvs = [];

@@ -313,7 +313,7 @@ function drawBodyUpright(ctx, h, t, C) {
     front = { x: Sh.x + 5, y: Sh.y - 7 - 5 * q }; back = { x: Sh.x + 5, y: Sh.y - 7 + 5 * q };
   } else if (h.weapon && h.healT <= 0) {
     gunBack = false;
-    if (h.aiming) {
+    if (h.aiming || h.hipT > 0) { // позиція або стрільба з руки — ствол на ціль
       const a = h.aimA, B = { x: Sh.x + 1 - Math.cos(a) * rec * 2.5, y: Sh.y + 1 - Math.sin(a) * rec * 2.5 };
       gun = { B, ang: a };
     } else {

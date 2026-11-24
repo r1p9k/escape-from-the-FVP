@@ -294,7 +294,6 @@ function thinkHuman(b, s, dt) {
 
   if (!stop && h.stance !== 'stand') b.tap(s, 'up');
   // перезарядитися, поки спокійно
-  if (h.weapon && !s.aim && !danger && h.reloadT <= 0 && h.weapon.mag < Math.min(WEAPONS[h.weapon.type].mag, h.weapon.ammo)) b.tap(s, 'fire');
 
   // підбір і техніка
   const pk = nearPickup(h);
