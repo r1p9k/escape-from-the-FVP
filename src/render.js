@@ -195,13 +195,14 @@ function renderView(ctx, vp, p, t) {
   const isDrone = p.role === 'drone';
   const drone = isDrone ? p.ent.drone : null;
   const human = isDrone ? null : p.ent;
-  const visH = isDrone ? (p.cam.wide ? 900 : 600) : 480 * (p.cam.z || 1);
+  const visH = isDrone ? (p.cam.dz || 600) * (p.cam.wide ? 1.35 : 1) : 480 * (p.cam.z || 1);
   const s = Math.min(vp.h / visH, vp.w / 700);
   const viewW = vp.w / s, viewH = vp.h / s;
   const cx = clamp(p.cam.x - viewW / 2, 0, Math.max(0, W.width - viewW));
   const cy = clamp(p.cam.y - viewH / 2, -80, Math.max(BASE_G + 140, p.cam.y + viewH * 0.5 + 60) - viewH); // глибокі поверхи й вирви теж видно
   const theme = THEME[W.themeAt(cx + viewW / 2)];
   const viewer = { isDrone, drone, human };
+  if (human && (p.ctrl === CONTROLLERS.kb || state === 'net')) MOUSE_VIEW = { vp, cx, cy, s, h: human };
 
   ctx.save();
   ctx.beginPath(); ctx.rect(vp.x, vp.y, vp.w, vp.h); ctx.clip();
@@ -366,6 +367,13 @@ function renderView(ctx, vp, p, t) {
     ctx.beginPath(); ctx.arc(r.x, r.y, r.r * (1 - 0.04 * Math.sin(t * 4)), 0, Math.PI * 2); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(187,134,252,0.06)'; ctx.fill();
+  }
+  if (isDrone && drone && drone.y - DRONE_R > gAt(W, drone.x) + 2) {
+    // під землею: над поверхнею — темна земля, видно лише порожнину навколо
+    ctx.fillStyle = '#0d0b08';
+    ctx.beginPath(); ctx.moveTo(x0, cy - 400);
+    for (let x = x0; x <= x1; x += 8) ctx.lineTo(x, gAt(W, x) - 1);
+    ctx.lineTo(x1, cy - 400); ctx.closePath(); ctx.fill();
   }
   ctx.restore();
 
@@ -1588,7 +1596,7 @@ function drawHumanHud(ctx, vp, p, t) {
   }
   // підказки
   let tip = '';
-  if (h.digMode) tip = 'Лопата: ' + c.label('up') + c.label('down') + ' — напрямок (круто — лаз із драбиною)   ' + c.label('left') + c.label('right') + ' — бік   тримати ' + c.label('fire') + ' — копати   ' + c.label('dig') + ' — сховати';
+  if (h.digMode) tip = 'Лопата (поки тримаєш ' + c.label('dig') + ' — копає): ' + c.label('up') + c.label('down') + ' — напрямок (круто — лаз із драбиною)   ' + c.label('left') + c.label('right') + ' — бік   відпусти — сховати';
   else if (h.vehicle) tip = h.seat === 'driver' ? '[' + c.label('left') + c.label('right') + '] їхати   [' + c.label('aim') + '] гальмо' + (h.vehicle.type === 'moto' ? '   [' + c.label('up') + '] дибки (через перешкоди)   [' + c.label('down') + '] на переднє   у повітрі ' + c.label('up') + c.label('down') + ' — обертати' : '') + (h.vehicle.hasMG && !h.vehicle.gunner ? '   [' + c.label('slot1') + '] до кулемета' : '') + '   [' + c.label('interact') + '] вийти' : '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('left') + c.label('right') + '] бік  [' + c.label('fire') + '] кулемет' + (!h.vehicle.driver ? '  [' + c.label('slot1') + '] за кермо' : '') + '  [' + c.label('interact') + '] вийти';
   else if (h.mount) tip = '[' + c.label('up') + c.label('down') + '] кут  [' + c.label('fire') + '] вогонь (' + h.mount.ammo + ')  [' + c.label('interact') + '] відійти';
   else if (h.working) tip = ({ ply: 'Забиваєш фанерою… ', fort: 'Облаштовуєш вогневу позицію… ', kit: 'Встановлюєш обладнання… ', ditch: 'Копаєш рів… ', bridge: 'Будуєш переправу… ', fill: 'Засипаєш рів… ' }[h.working.kind] || 'Ставиш станкову гвинтівку… ') + Math.round(h.working.t / h.working.dur * 100) + '%   [' + c.label('left') + c.label('right') + '] перервати';
@@ -1667,7 +1675,7 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
       const hs = toScreen(h.x, h.y - 25);
       const m = 34;
       const onScreen = hs.x > vp.x + m && hs.x < vp.x + vp.w - m && hs.y > vp.y + m && hs.y < vp.y + vp.h - m;
-      const meters = (dist(d.x, d.y, h.x, h.y) / 10) | 0;
+      const meters = '~' + Math.max(100, Math.round(dist(d.x, d.y, h.x, h.y) / 1000) * 100); // грубо, сотнями метрів — щоб не вести просто на людину
       ctx.strokeStyle = '#ff4040'; ctx.fillStyle = '#ff4040'; ctx.lineWidth = 2;
       if (onScreen) {
         const r = 22;
