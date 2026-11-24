@@ -281,6 +281,7 @@ function renderView(ctx, vp, p, t) {
   }
   for (const m of W.mounts) if (inX(m.x - 40, m.x + 40)) drawMount(ctx, m);
   for (const th of G.throws) if (inX(th.x - 20, th.x + 20)) drawThrow(ctx, th, t);
+  if (G.fires) for (const f of G.fires) if (inX(f.x - f.w, f.x + f.w)) drawFire(ctx, f, t);
   if (G.ugvs) for (const u of G.ugvs) if (inX(u.x - 40, u.x + 40)) drawUgv(ctx, u, t);
   for (const v of W.vehicles) {
     if (v.dead || !inX(v.x - 60, v.x + 60)) continue;
@@ -304,11 +305,13 @@ function renderView(ctx, vp, p, t) {
   for (const b of G.bullets) { ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * 0.012, b.y - b.vy * 0.012); }
   ctx.stroke();
   for (const bm of G.bombs) {
-    const sn = bm.type === 'frag' ? 'bomb' : bm.type === 'mine' ? 'mine' : 'smoke';
+    const sn = bm.type === 'frag' || bm.type === 'fire' ? 'bomb' : bm.type === 'mine' ? 'mine' : 'smoke';
     ctx.save(); ctx.translate(bm.x, bm.y); ctx.rotate(bm.type === 'frag' ? Math.atan2(bm.vy, bm.vx) - Math.PI / 2 : 0);
-    const ok = ispCenter(ctx, sn, bm.type === 'mine' ? 12 : undefined); ctx.restore();
+    const ok = ispCenter(ctx, sn, bm.type === 'mine' ? 12 : undefined);
+    if (ok && bm.type === 'fire') { ctx.globalCompositeOperation = 'source-atop'; ctx.fillStyle = 'rgba(220,60,20,0.55)'; ctx.fillRect(-10, -14, 20, 28); }
+    ctx.restore();
     if (ok) continue;
-    ctx.fillStyle = bm.type === 'frag' ? '#3b3b2a' : bm.type === 'mine' ? '#4d5a2a' : '#9a9a9a';
+    ctx.fillStyle = bm.type === 'frag' ? '#3b3b2a' : bm.type === 'fire' ? '#a8321e' : bm.type === 'mine' ? '#4d5a2a' : '#9a9a9a';
     ctx.beginPath(); ctx.ellipse(bm.x, bm.y, 3.5, 5, Math.atan2(bm.vy, bm.vx) - Math.PI / 2, 0, 7); ctx.fill();
   }
   if (!isDrone) for (const h of G.humans) {
@@ -487,7 +490,30 @@ function drawCanopy(ctx, tr, a) {
   }
   ctx.globalAlpha = 1;
 }
+function drawFire(ctx, f, t) {
+  const k = Math.min(1, f.t / 1.5, (f.max - f.t) * 4 + 0.3), half = f.w / 2, n = Math.max(5, Math.round(f.w / 9));
+  ctx.save();
+  const glow = ctx.createRadialGradient(f.x, f.y - 6, 4, f.x, f.y - 6, half + 30);
+  glow.addColorStop(0, 'rgba(255,150,50,' + (0.35 * k) + ')'); glow.addColorStop(1, 'rgba(255,120,40,0)');
+  ctx.fillStyle = glow; ctx.fillRect(f.x - half - 30, f.y - half - 40, f.w + 60, half + 60);
+  ctx.fillStyle = 'rgba(60,30,15,' + (0.55 * k) + ')'; ctx.fillRect(f.x - half, f.y - 2, f.w, 4); // обвуглена земля
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < n; i++) {
+    const u = (i + 0.5) / n, x = f.x - half + u * f.w, edge = Math.sin(u * Math.PI);
+    const ph = f.seed + i * 2.3, hgt = (10 + 22 * edge * (0.6 + 0.4 * Math.sin(t * 9 + ph))) * k, sw = Math.sin(t * 7 + ph * 1.7) * 3;
+    ctx.fillStyle = 'rgba(255,90,20,0.55)';
+    ctx.beginPath(); ctx.moveTo(x - 6, f.y); ctx.quadraticCurveTo(x - 4 + sw, f.y - hgt * 0.6, x + sw * 1.6, f.y - hgt); ctx.quadraticCurveTo(x + 4 + sw, f.y - hgt * 0.6, x + 6, f.y); ctx.fill();
+    ctx.fillStyle = 'rgba(255,200,80,0.6)';
+    ctx.beginPath(); ctx.moveTo(x - 3, f.y); ctx.quadraticCurveTo(x - 2 + sw, f.y - hgt * 0.35, x + sw, f.y - hgt * 0.6); ctx.quadraticCurveTo(x + 2 + sw, f.y - hgt * 0.35, x + 3, f.y); ctx.fill();
+  }
+  ctx.restore();
+}
 function drawBush(ctx, b, a) {
+  if (b.burnt) { // згорілий кущ — чорні гілки
+    ctx.save(); ctx.globalAlpha = a; ctx.strokeStyle = '#2a241c'; ctx.lineWidth = 1.3;
+    for (let i = 0; i < 6; i++) { const x = b.x + b.w * (0.15 + 0.7 * hash(b.seed + i)); ctx.beginPath(); ctx.moveTo(x, b.y + 2); ctx.lineTo(x + (hash(b.seed * 3 + i) - 0.5) * 10, b.y - b.h * (0.4 + 0.5 * hash(b.seed + i * 7))); ctx.stroke(); }
+    ctx.restore(); return;
+  }
   const bn = ['bush1', 'bush2', 'bush3'][Math.floor(hash(b.seed * 13) * 3)];
   if (ISP.parts[bn]) {
     const P = ISP.parts[bn], d = P.d, w = b.w * 1.2, h = w * (d.r[3] - d.r[1]) / (d.r[2] - d.r[0]);
@@ -904,7 +930,7 @@ function drawLadder(ctx, l) {
   for (let y = l.bottom - 10; y > l.top - 4; y -= 14) { ctx.moveTo(l.x - 9, y); ctx.lineTo(l.x + 9, y); }
   ctx.stroke();
 }
-const PICKUP_STYLE = { rifle: ['#3b4a2f', 'АК'], shotgun: ['#5a3d24', 'ДР'], smg: ['#3b4a2f', 'ПП'], sniper: ['#36402c', 'СН'], mg: ['#3b4a2f', 'КЛ'], reb: ['#5b3b8a', 'РЕБ'], medkit: ['#e8e8e8', '+'], fuel: ['#a8322d', 'ПАЛ'], armor: ['#4a5568', 'БР'], detector: ['#22625c', 'ДЕТ'], pack: ['#6b5a3a', 'РЮК'], shovel: ['#7a5a32', 'ЛОП'], grenade: ['#4d5a2a', 'ГРН'], gasmask: ['#3f5552', 'ПРГ'], ammo: ['#6b5d2a', 'НАБ'] };
+const PICKUP_STYLE = { rifle: ['#3b4a2f', 'АК'], shotgun: ['#5a3d24', 'ДР'], smg: ['#3b4a2f', 'ПП'], sniper: ['#36402c', 'СН'], mg: ['#3b4a2f', 'КЛ'], reb: ['#5b3b8a', 'РЕБ'], medkit: ['#e8e8e8', '+'], fuel: ['#a8322d', 'ПАЛ'], armor: ['#4a5568', 'БР'], detector: ['#22625c', 'ДЕТ'], pack: ['#6b5a3a', 'РЮК'], shovel: ['#7a5a32', 'ЛОП'], grenade: ['#4d5a2a', 'ГРН'], molotov: ['#8a3a1a', 'МОЛ'], gasmask: ['#3f5552', 'ПРГ'], ammo: ['#6b5d2a', 'НАБ'] };
 // маскувальна сітка: зелено-коричнева сітка з «листям»
 function drawNet(ctx, x, y, w, h, seed, light) {
   ctx.save();
@@ -1088,6 +1114,18 @@ function drawProp(ctx, type, x, y, rot, label) {
   if (label) { ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.font = FONT(9); ctx.textAlign = 'center'; ctx.fillText(PROP_TYPES[type].name, x, y - 28); }
 }
 function drawThrow(ctx, th, t) {
+  if (th.kind === 'molotov') {
+    ctx.save(); ctx.translate(th.x, th.y); ctx.rotate(th.rot);
+    ctx.fillStyle = 'rgba(120,160,90,0.9)'; roundRect(ctx, -3, -4, 6, 9, 2); ctx.fill();
+    ctx.fillStyle = 'rgba(200,120,40,0.85)'; ctx.fillRect(-2.5, 0, 5, 4.5);
+    ctx.fillStyle = '#556b3a'; ctx.fillRect(-1.3, -8, 2.6, 4.5);
+    ctx.fillStyle = '#e6dcc0'; ctx.fillRect(-1, -10, 2, 2.5);
+    ctx.restore();
+    const fl = 3 + Math.sin(t * 40 + th.x) * 1.2;
+    ctx.fillStyle = 'rgba(255,170,60,0.9)'; ctx.beginPath(); ctx.arc(th.x - Math.sin(th.rot) * 10, th.y - Math.cos(th.rot) * 10, fl, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,240,170,0.9)'; ctx.beginPath(); ctx.arc(th.x - Math.sin(th.rot) * 10, th.y - Math.cos(th.rot) * 10, fl * 0.45, 0, 7); ctx.fill();
+    return;
+  }
   if (th.kind === 'prop') { ctx.save(); ctx.translate(th.x, th.y); ctx.rotate(th.rot); drawProp(ctx, th.type, 0, 6, 0); ctx.restore(); return; }
   ctx.save(); ctx.translate(th.x, th.y); ctx.rotate(th.rot);
   if (ispCenter(ctx, 'grenade')) ctx.restore(); else {
@@ -1454,7 +1492,7 @@ function drawHumanHud(ctx, vp, p, t) {
   if (h.detector) { ctx.fillStyle = '#5ad1c4'; ctx.fillText('ДЕТЕКТОР', 110, 181); }
   if (h.gasmask) { ctx.fillStyle = '#9fd3c7'; ctx.fillText('ПРОТИГАЗ', 16, 199); }
   ctx.fillStyle = '#fff';
-  ctx.fillText((G.mode !== 'escape' ? 'Рахунок: ' + p.score : 'Життя: ' + '♥'.repeat(Math.max(0, h.lives)) + '♡'.repeat(Math.max(0, HUMAN_LIVES - h.lives))) + '  Сітки: ' + h.nets + '  Гранати: ' + h.grenades + ' [' + c.label('slot3') + ']', 16, 163);
+  ctx.fillText((G.mode !== 'escape' ? 'Рахунок: ' + p.score : 'Життя: ' + '♥'.repeat(Math.max(0, h.lives)) + '♡'.repeat(Math.max(0, HUMAN_LIVES - h.lives))) + '  Сітки: ' + h.nets + '  Гранати: ' + h.grenades + ((h.molotovs || 0) ? '  Молотов: ' + h.molotovs : '') + ' [' + c.label('slot3') + ']', 16, 163);
   bar(ctx, 16, 34, 194, 11, h.hp / 100, h.hp > 35 ? '#6fcf97' : '#eb5757');
   bar(ctx, 16, 49, 194, 6, h.stamina, h.exhausted ? '#a66' : '#f2c94c');
   ctx.font = FONT(12, '600'); ctx.fillStyle = '#fff';
@@ -1481,7 +1519,7 @@ function drawHumanHud(ctx, vp, p, t) {
     bar(ctx, 70, 99, 150, 10, v.fuel / tank, v.fuel / tank > 0.25 ? '#f2c94c' : '#eb5757');
   } else if (h.weapon && !h.vehicle) {
     ctx.fillStyle = h.aiming ? '#6fcf97' : '#ccc';
-    ctx.fillText(h.grenAim ? 'ГРАНАТА ' + Math.round(-h.aimA * 57) + '° — відпусти [' + c.label('slot3') + '], щоб кинути' : h.aiming ? 'ПОЗИЦІЯ ' + Math.round(-h.aimA * 57) + '° · ' + STANCE_ACC[h.peek ? h.hidden.type : h.stance] + (inTrench(h) ? ' · з окопу' : '') : 'Тримай [' + c.label('aim') + '] — позиція', 16, 108);
+    ctx.fillText(h.grenAim ? (h.throwSel === 'molotov' ? 'КОКТЕЙЛЬ ' : 'ГРАНАТА ') + Math.round(-h.aimA * 57) + '° — [' + c.label('fire') + '] кинути, [' + c.label('slot1') + '] зброя' : h.aiming ? 'ПОЗИЦІЯ ' + Math.round(-h.aimA * 57) + '° · ' + STANCE_ACC[h.peek ? h.hidden.type : h.stance] + (inTrench(h) ? ' · з окопу' : '') : 'Тримай [' + c.label('aim') + '] — позиція', 16, 108);
   }
   // дим: відлік до отруєння
   if (h.hidden && h.smokeT > 0 && !h.dead) {
@@ -1697,7 +1735,7 @@ function drawDroneHud(ctx, vp, p, toScreen, t, s) {
   ctx.restore();
 }
 
-const DROP_STYLE = { frag: ['#c9a227', 'ГРАН'], smoke: ['#bdbdbd', 'ДИМ'], mine: ['#7a9a3a', 'МІНА'] };
+const DROP_STYLE = { frag: ['#c9a227', 'ГРАН'], smoke: ['#bdbdbd', 'ДИМ'], mine: ['#7a9a3a', 'МІНА'], fire: ['#ff7a2a', 'ВОГН'] };
 // 4 місця для скидів: у польоті підсвічено обраний тип, на старті — місце, яке редагується
 function drawSlots(ctx, x, y, slots, payload, sel) {
   let marked = false;
@@ -1754,7 +1792,7 @@ function humanControls(h, c) {
   if (h.nets > 0) it.push(L('aim') + '+' + L('interact') + ' сітка');
   if (h.canister) it.push(L('slot1') + ' викинути каністру');
   if (h.carry) it.push(L('fire') + ' кинути', L('slot1') + ' покласти');
-  if (h.grenades > 0) it.push(L('slot3') + ' граната');
+  if (h.grenades > 0 || h.molotovs > 0) it.push(L('slot3') + (h.molotovs > 0 ? ' граната / коктейль' : ' граната') + ' (у руку, ' + L('fire') + ' — кинути)');
   if (pilotSpot(h)) it.push(L('slot1') + ' взяти дрон');
   it.push(L('fire') + ' впритул — удар');
   if (h.medkits > 0) it.push(L('slot2') + ' аптечка (5 с)');

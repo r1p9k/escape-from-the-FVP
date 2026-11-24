@@ -48,7 +48,64 @@ function dropCarry(h) {
 function throwAngle(h) { return h.aiming ? aimWorld(h) : h.facing > 0 ? -0.55 : Math.PI + 0.55; }
 function handPos(h) { return { x: h.x + h.facing * 8, y: h.y - HUMAN_DIM[h.stance].h * 0.82 - trenchLift(h) }; }
 // чи можна зараз цілитися гранатою (затиснута кнопка гранати)
-function canGrenAim(h) { return h.grenades > 0 && !h.carry && !h.canister && !h.mount && !h.vehicle && h.grenadeCd <= 0; }
+function canGrenAim(h) { return !!h.throwSel && throwCount(h, h.throwSel) > 0 && !h.carry && !h.canister && !h.mount && !h.vehicle && h.grenadeCd <= 0; }
+// що можна кинути: граната, коктейль Молотова
+const THROW_KINDS = ['grenade', 'molotov'];
+function throwCount(h, k) { return k === 'grenade' ? h.grenades : k === 'molotov' ? h.molotovs || 0 : 0; }
+function nextThrow(h, cur, skipNull) {
+  const order = [null, ...THROW_KINDS];
+  for (let k = 1; k <= order.length; k++) { const t = order[(order.indexOf(cur) + k) % order.length]; if (t === null ? !skipNull : throwCount(h, t) > 0) return t; }
+  return null;
+}
+function cycleThrow(h) {
+  const was = h.throwSel; h.throwSel = nextThrow(h, h.throwSel, false);
+  if (h.throwSel && !was) h.aimA = -0.55; // типовий кут кидка
+  if (h.throwSel) tipOnce(h, (h.throwSel === 'grenade' ? 'Граната' : 'Коктейль Молотова') + ' в руці: ' + h.player.ctrl.label('fire') + ' — кинути, ' + h.player.ctrl.label('slot1') + ' — зброя');
+  else if (!was && !throwCount(h, 'grenade') && !throwCount(h, 'molotov')) tipOnce(h, 'Гранат і коктейлів немає');
+}
+function throwSelected(h) { if (h.throwSel === 'molotov') throwMolotov(h, aimWorld(h)); else throwGrenade(h, aimWorld(h)); }
+// коктейль Молотова: розбивається об будь-що й розливає вогонь
+const MOLOTOV_MAX = 3, FIRE_T = 7, FIRE_DPS = 22;
+function throwMolotov(h, ang) {
+  if (!(h.molotovs > 0)) { tipOnce(h, 'Коктейлів немає'); return; }
+  if (h.canister || h.carry) { tipOnce(h, 'Руки зайняті'); return; }
+  if (h.grenadeCd > 0) return;
+  const a = ang != null ? ang : throwAngle(h), p = handPos(h);
+  h.molotovs--; h.grenadeCd = 0.8;
+  G.throws.push({ kind: 'molotov', x: p.x, y: p.y, vx: Math.cos(a) * GRENADE_SPD + h.vx * 0.3, vy: Math.sin(a) * GRENADE_SPD, rot: 0, spin: rand(-12, 12), owner: h });
+  feed(h.player.name + ': коктейль Молотова!', '#ff8a3a');
+  Sfx.click();
+}
+// вогонь на землі: смуга полум'я, що пече всіх, хто в ній (людей, техніку)
+function startFire(x, y, w, t, player) {
+  const W = G.W, gy = landSurface(x, y - 6);
+  (G.fires || (G.fires = [])).push({ x, y: gy, w, t, max: t, player, seed: Math.random() * 100 });
+  for (let i = 0; i < 16; i++) G.parts.push({ type: 'spark', x: x + rand(-w / 2, w / 2), y: gy - rand(0, 20), vx: rand(-120, 120), vy: rand(-260, -60), life: rand(0.3, 0.7), max: 0.7 });
+  Sfx.noise_(0.5, 0.3, 700, 'lowpass');
+  // кущі в полум'ї згоряють
+  for (const b of W.bushes) if (b.x < x + w / 2 && b.x + b.w > x - w / 2 && Math.abs((b.y || gy) - gy) < 40) b.burnt = true;
+}
+function updateFires(dt) {
+  if (!G.fires || !G.fires.length) return;
+  for (const f of G.fires) {
+    f.t -= dt;
+    const k = Math.min(1, f.t / 1.5), half = f.w / 2;
+    if (RND() < dt * 10 * k) G.parts.push({ type: 'smoke', x: f.x + rand(-half, half), y: f.y - 20, vx: rand(-10, 10), vy: rand(-45, -20), life: 2.2, max: 2.2, size: rand(10, 18) });
+    for (const h of G.humans) {
+      if (h.dead || h.saved || h.vehicle || h.hidden || h.onLadder) continue;
+      if (h.x < f.x - half - 6 || h.x > f.x + half + 6 || h.y < f.y - 30 || h.y > f.y + 12) continue;
+      G.blastBy = f.player; hurt(h, FIRE_DPS * dt * (0.4 + 0.6 * k), 'fire'); G.blastBy = null;
+      h.burnT = 0.6;
+      if (!h.fireMsg || G.time - h.fireMsg > 3) { h.fireMsg = G.time; feed(h.player.name + ' горить!', '#ff7a2a'); }
+    }
+    for (const v of G.W.vehicles) {
+      if (v.dead || Math.abs(v.x - f.x) > half + VEH[v.type].len / 2 - 10 || Math.abs(v.y - f.y) > 30) continue;
+      v.burn = (v.burn || 0) + dt;
+      if (v.burn > 4) { const occ = [v.driver, v.gunner].filter(Boolean); destroyVehicle(v); occ.forEach((o) => hurt(o, 40, 'blast')); feed(VEH[v.type].name + ' згоріла', '#ff7a2a'); }
+    }
+  }
+  G.fires = G.fires.filter((f) => f.t > 0);
+}
 // куди полетить граната: точки дуги (та сама фізика, що й у кидка)
 function grenadePath(h) {
   const a = aimWorld(h), p = handPos(h), W = G.W, pts = [{ x: p.x, y: p.y }];
@@ -126,6 +183,8 @@ function updateThrows(dt) {
   for (let i = G.throws.length - 1; i >= 0; i--) {
     const th = G.throws[i];
     if (th.kind === 'grenade' && (th.fuse -= dt) <= 0) { G.throws.splice(i, 1); grenadeBlast(th); continue; }
+    if (th.kind === 'molotov' && th.smash) { G.throws.splice(i, 1); breakProp({ type: 'jar', x: th.x, y: th.y }); startFire(th.x, th.y, 80, FIRE_T, th.owner && th.owner.player); continue; }
+    if (th.kind === 'molotov' && th.age > 0.12) for (const o of G.humans) if (!o.dead && o !== th.owner && !o.vehicle && !o.hidden && rectDist(th.x, th.y, humanRect(o)) < 3) th.smash = true;
     // граната, що котиться чи падає біля входу в схованку, залітає всередину
     th.age = (th.age || 0) + dt;
     if (th.kind === 'grenade' && !th.inside && Math.hypot(th.vx, th.vy) < 380 && th.age > 0.35) {
@@ -146,7 +205,8 @@ function updateThrows(dt) {
       if (!th.hitDrone) for (const d of G.drones) {
         if (dist(th.x, th.y, d.x, d.y) > DRONE_R + 6 || ally(th.owner, d)) continue;
         th.hitDrone = true;
-        if (th.kind === 'grenade') { th.vx *= 0.3; th.vy = Math.abs(th.vy) * 0.2; }
+        if (th.kind === 'molotov') { th.smash = true; if (d.hp > 1) d.hp--; else shootDownDrone(d, th.owner); }
+        else if (th.kind === 'grenade') { th.vx *= 0.3; th.vy = Math.abs(th.vy) * 0.2; }
         else { propHitsDrone(th, d); th.vx *= -0.3; th.vy = 60; }
         break;
       }
@@ -155,6 +215,7 @@ function updateThrows(dt) {
       // удар об поверхню
       const hitX = pointSolid(W, th.x, py, list), hitY = pointSolid(W, px, th.y, list);
       th.x = px; th.y = py;
+      if (th.kind === 'molotov') { th.smash = true; break; }
       if (th.kind === 'prop') {
         if (PROP_TYPES[th.type].breaks) breakProp(th);
         else { W.props.push({ type: th.type, x: th.x, y: landSurface(th.x, th.y - 4) }); Sfx.tone(160, 0.05, 0.08); }

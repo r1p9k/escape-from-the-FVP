@@ -13,10 +13,10 @@ const AIR_BONUS = {                                 // бонуси для др�
   ammo: { name: 'Поповнення скидів', short: '+СКИД', color: '#d79a5a' },
 };
 const HUMAN_LIVES = 3, RESPAWN_TIME = 3, NETS = 3; // 3 життя; відновлення через 3 с; 3 маскувальні сітки // «Альоша»: після 5+ збитих/пережитих дронів, триває 10 с
-const DROP_TYPES = ['frag', 'smoke', 'mine'];
-const DROP_NAMES = { frag: 'Граната', smoke: 'Дим', mine: 'Міна' };
+const DROP_TYPES = ['frag', 'smoke', 'mine', 'fire'];
+const DROP_NAMES = { frag: 'Граната', smoke: 'Дим', mine: 'Міна', fire: 'Запальний' };
 const DEFAULT_LOADOUT = ['frag', 'frag', 'smoke', 'mine'];
-const BOT_LOADOUTS = [['frag', 'frag', 'smoke', 'mine'], ['frag', 'frag', 'frag', 'mine'], ['frag', 'mine', 'mine', 'smoke'], ['frag', 'frag', 'smoke', 'smoke']];
+const BOT_LOADOUTS = [['frag', 'frag', 'smoke', 'mine'], ['frag', 'frag', 'frag', 'mine'], ['frag', 'mine', 'mine', 'smoke'], ['frag', 'frag', 'smoke', 'smoke'], ['frag', 'fire', 'fire', 'mine'], ['frag', 'frag', 'fire', 'smoke']];
 const OPEN_TIME = 3;          // секунд на відкритій місцевості до появи стрілки
 const HUMAN_DIM = { stand: { w: 18, h: 56 }, crouch: { w: 20, h: 38 }, prone: { w: 46, h: 16 } };
 const STANCE_DMG = { stand: 1, crouch: 0.75, prone: 0.5 };
@@ -34,7 +34,7 @@ const STANCE_ACC = { stand: 'стоячи — розкид', crouch: 'сидяч
 const AIM_SECTOR = { burrow: [-0.75, 0.12], bunker: [-0.6, 0.05], trench: [-1.45, -0.12] };
 const PACK_CAP = 4;      // місць у рюкзаку: аптечки, заряди РЕБ, детектор
 const DETECT_R = 650;    // радіус детектора дронів
-const PICKUP_NAMES = { rifle: 'Автомат', shotgun: 'Дробовик', smg: 'Пістолет-кулемет', sniper: 'Снайперська гвинтівка', mg: 'Кулемет', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого', shovel: 'Лопата', grenade: 'Гранати', ammo: 'Набої', gasmask: 'Протигаз' };
+const PICKUP_NAMES = { molotov: 'Коктейлі Молотова', rifle: 'Автомат', shotgun: 'Дробовик', smg: 'Пістолет-кулемет', sniper: 'Снайперська гвинтівка', mg: 'Кулемет', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого', shovel: 'Лопата', grenade: 'Гранати', ammo: 'Набої', gasmask: 'Протигаз' };
 const DIG_PX_M = 30;     // одиниць світу в метрі копання (людина ≈ 1,8 м)
 const DIG_SPD = 13;      // швидкість копання, одиниць/с (повільно)
 const TUN_SPD = 72;      // хода зігнувшись у тунелі
@@ -48,7 +48,7 @@ function newGame(slots, loc, opts) {
   opts = opts || {};
   const mode = opts.mode === 'dm' || opts.mode === 'team' ? opts.mode : 'escape';
   const W = makeWorld(loc, (Math.random() * 1e9) | 0, opts.len, mode === 'team');
-  G = { W, opts, mode, timeLeft: (opts.dmMin || 10) * 60, players: [], humans: [], dps: [], drones: [], bullets: [], bombs: [], throws: [], mines: [], smokes: [], parts: [], rebs: [], feed: [], time: 0, over: null, overReason: '', overT: 0, stats: { dronesUsed: 0, shotDown: 0, deaths: 0 } };
+  G = { W, opts, mode, timeLeft: (opts.dmMin || 10) * 60, players: [], humans: [], dps: [], drones: [], bullets: [], bombs: [], throws: [], mines: [], smokes: [], fires: [], parts: [], rebs: [], feed: [], time: 0, over: null, overReason: '', overT: 0, stats: { dronesUsed: 0, shotDown: 0, deaths: 0 } };
   if (mode === 'team') slots = fillTeams(slots); // мало учасників — решту заповнюють боти
   const nHum = slots.filter((s) => s.role === 'human').length;
   const nDr = slots.filter((s) => s.role === 'drone').length;
@@ -83,7 +83,7 @@ function makeHuman(p, x) {
     player: p, x, y: gAt(G.W, x), vx: 0, vy: 0, stance: 'stand', facing: 1, onGround: true, onThin: false, wasGround: true,
     hp: 100, stamina: 1, staminaDelay: 0, exhausted: false, climb: null, onLadder: false, dropT: 0,
     vehicle: null, seat: null, hidden: null, tun: null, digging: null, shovel: Infinity, weapon: null, reb: 1, fireCd: 0,
-    carry: null, mount: null, working: null, grenades: G.mode === 'team' ? 3 : GRENADES_START, grenadeCd: 0, piloting: false,
+    carry: null, mount: null, working: null, grenades: G.mode === 'team' ? 3 : GRENADES_START, molotovs: 1, throwSel: null, grenadeCd: 0, piloting: false,
     openTime: 0, reveal: 0, hurtT: 0, dead: false, saved: false, anim: 0,
     aimA: -0.5, aiming: false, diving: false, diveCd: 0, canister: false, smokeT: 0, gasT: 0, gasWarned: false,
     armor: 0, beaten: 0, alCharges: 0, alT: 0, alGranted: false, hideAnim: null,
@@ -321,8 +321,9 @@ function updateHuman(h, dt) {
   }
 
   // режим прицілювання: людина стоїть, стрілки змінюють кут
-  h.grenAim = c.held('slot3') && canGrenAim(h) && h.onGround && !h.onLadder;
-  if (h.grenAim && c.pressed('slot3') && !c.held('aim')) h.aimA = -0.55; // типовий кут кидка
+  if (c.pressed('slot3')) cycleThrow(h);
+  if (h.throwSel && !throwCount(h, h.throwSel)) h.throwSel = nextThrow(h, h.throwSel, true);
+  h.grenAim = !!h.throwSel && canGrenAim(h) && h.onGround && !h.onLadder;
   h.aiming = (c.held('aim') || h.grenAim) && h.onGround && !h.onLadder;
   if (h.aiming) {
     if (c.cur.aimAngle !== undefined) setAimWorld(h, c.cur.aimAngle);
@@ -336,13 +337,13 @@ function updateHuman(h, dt) {
     moveHuman(h, dt);
   } else {
     if (c.pressed('up') && !h.onLadder) {
-      if (lad && h.stance !== 'prone' && h.y > lad.top + 4) { h.onLadder = true; h.stance = 'stand'; h.x = lad.x; }
+      if (lad && h.y > lad.top + 4) { h.onLadder = true; h.stance = 'stand'; h.x = lad.x; }
       else if (h.stance === 'prone') tryStance(h, 'crouch');
       else if (h.stance === 'crouch') tryStance(h, 'stand');
       else if (h.onGround && !tryMantle(h)) { h.vy = -JUMP; h.onGround = false; }
     }
     if (c.pressed('down') && !h.onLadder) {
-      if (lad && h.onGround && h.stance === 'stand' && Math.abs(h.y - lad.top) < 5) { h.onLadder = true; h.x = lad.x; h.y += 6; }
+      if (lad && h.onGround && Math.abs(h.y - lad.top) < 5 && ladderAt(h, 1)) { h.onLadder = true; h.stance = 'stand'; h.x = lad.x; h.y += 6; } // з будь-якої пози
       else if (h.stance === 'stand' && h.onGround && Math.abs(h.vx) > 140 && h.diveCd <= 0 && freeAt(h.x + h.facing * 20, h.y, HUMAN_DIM.prone)) {
         // різкий кидок на землю вперед
         h.stance = 'prone'; h.diving = true; h.diveCd = 1.2;
@@ -419,6 +420,7 @@ function updateHuman(h, dt) {
   const mt = !h.aiming && c.pressed('fire') && !(h.meleeCd > 0) ? meleeTarget(h) : null;
   if (mt) melee(h, mt); // впритул — рукопашна
   else if (h.carry) { if (c.pressed('fire') && h.fireCd <= 0) throwCarry(h); } // предмет у руках — кинути
+  else if (h.grenAim) { if (c.pressed('fire')) throwSelected(h); } // граната чи коктейль у руці — кидок лише кнопкою пострілу
   else if (h.alT > 0) { if (c.held('fire') && h.fireCd <= 0 && !h.canister) alioshaShot(h); }
   // стріляти можна лише з позиції (режим прицілювання)
   else if (h.aiming && c.held('fire') && h.weapon && h.canister && c.pressed('fire')) feed(h.player.name + ': руки зайняті каністрою — [' + c.label('slot1') + '] викинути', '#ccc');
@@ -603,6 +605,7 @@ function packUsed(h) { return h.medkits + h.reb + (h.detector ? 1 : 0) + (h.cans
 function canTake(h, p) {
   if (p.type === 'gasmask') return !h.gasmask;
   if (p.type === 'grenade') return h.grenades < GRENADES_MAX;
+  if (p.type === 'molotov') return (h.molotovs || 0) < MOLOTOV_MAX;
   if (p.type === 'ammo') return !!h.weapon && h.weapon.ammo < WEAPONS[h.weapon.type].ammo * 2;
   if (p.type === 'medkit') return h.medkits < MEDKIT_MAX && packUsed(h) < PACK_CAP;
   if (p.type === 'reb') return packUsed(h) < PACK_CAP;
@@ -629,6 +632,7 @@ function takePickup(h, p) {
   else if (p.type === 'fuel') { h.cans = (h.cans || 0) + 1; feed(h.player.name + ': каністра в рюкзаку — заправить техніку, коли скінчиться пальне', '#f2c94c'); }
   else if (p.type === 'ammo') { h.weapon.ammo += WEAPONS[h.weapon.type].ammo; feed(h.player.name + ': поповнив набої', '#ddd'); }
   else if (p.type === 'grenade') { h.grenades = Math.min(GRENADES_MAX, h.grenades + 2); feed(h.player.name + ': гранат ' + h.grenades, '#c9a227'); }
+  else if (p.type === 'molotov') { h.molotovs = Math.min(MOLOTOV_MAX, (h.molotovs || 0) + 2); feed(h.player.name + ': коктейлів Молотова ' + h.molotovs, '#ff8a3a'); }
   else if (p.type === 'gasmask') { h.gasmask = true; feed(h.player.name + ' вдягнув протигаз — дим більше не шкодить', '#9fd3c7'); }
   else if (p.type === 'armor') h.armor = 100;
   else { h.weapon = makeWeapon(p.type); if (p.ammo != null) { h.weapon.ammo = p.ammo; h.weapon.mag = Math.min(p.mag, p.ammo); } h.reloadT = 0; }
@@ -1877,9 +1881,10 @@ function updateBombs(dt) {
     if (!hit) continue;
     G.bombs.splice(i, 1);
     G.blastBy = b.player;
-    const into = b.type === 'frag' && !hitH && !hitV ? hideAtPoint(b.x, b.y) : null;
-    if (into && into.e) { feed('Скид залетів у ' + into.name + '!', '#ff8a5a'); grenadeInside({ inside: into, owner: { player: b.player } }); }
+    const into = (b.type === 'frag' || b.type === 'fire') && !hitH && !hitV ? hideAtPoint(b.x, b.y) : null;
+    if (into && into.e && b.type === 'frag') { feed('Скид залетів у ' + into.name + '!', '#ff8a5a'); grenadeInside({ inside: into, owner: { player: b.player } }); }
     else if (b.type === 'frag') explosion(b.x, b.y, 80, 90);
+    else if (b.type === 'fire') { startFire(b.x, b.y, 120, FIRE_T + 2, b.player); if (hitH) hurt(hitH, 25, 'fire'); if (into) for (const o of G.humans) if (!o.dead && o.hidden === into.sp) hurt(o, 45, 'fire'); }
     else if (b.type === 'mine') {
       if (hitH || hitV) mineExplode(b.x, b.y);
       else { G.mines.push({ x: b.x, y: b.y + 3, arm: 0.8, seed: Math.random() * 10, player: b.player }); Sfx.tone(180, 0.06, 0.1); }
@@ -2020,7 +2025,7 @@ function droneSignal(d) {
   let open = 1e9;
   for (let dx = 0; dx <= 260; dx += 10) for (const s of [-1, 1]) { const x = d.x + s * dx; if (d.y <= gAt(W, x) + 6) open = Math.min(open, dx); }
   const depth = Math.max(under, Math.min(open, 260) * 0.6);
-  return clamp(1 - depth / 170, 0, 1);
+  return 0.3 + 0.7 * clamp(1 - depth / 170, 0, 1); // глибоко — лише перешкоди, керування лишається
 }
 function acquireLock(d) {
   const h = d.lockOn;
@@ -2059,7 +2064,6 @@ function updateDrone(d, dt) {
   const fast = d.speedT > 0 ? 2 : 1;
   // автозахоплення: людина поруч — дрон летить у неї сам, навіть під РЕБом
   d.sig = droneSignal(d); // під землею зв'язок слабшає
-  if (d.sig < 0.15) d.jammed = true; // глибоко — зв'язок утрачено
   if (false) {
     const h = d.lockOn, r = humanRect(h), tx = h.x, ty = r.y + r.h * 0.5;
     const dx = tx - d.x, dy = ty - d.y, l = Math.hypot(dx, dy) || 1, v = 560 * fast;
@@ -2361,6 +2365,7 @@ function updateGame(dt) {
   for (const h of G.humans) updateHuman(h, dt);
   updateVehicles(dt);
   updateDitches();
+  updateFires(dt);
   for (const dp of G.dps) updateDronePlayer(dp, dt);
   for (const d of G.drones.slice()) updateDrone(d, dt);
   for (const d of G.drones) d.inBush = droneInBush(d);
@@ -2449,7 +2454,8 @@ function teamScores() {
 // ---------- Рюкзак людини ----------
 // 1 — зброя (якщо в руках каністра — викинути її), 2 — аптечка (5 с), 3 — РЕБ
 function backpackInput(h, c) {
-  if (c.pressed('slot1') && h.canister) dropCanister(h);
+  if (c.pressed('slot1') && h.throwSel) { h.throwSel = null; h.grenAim = false; } // назад до зброї
+  else if (c.pressed('slot1') && h.canister) dropCanister(h);
   else if (c.pressed('slot1') && h.carry) dropCarry(h);
   else if (c.pressed('slot1') && isTeam()) tryPilot(h);
   if (c.pressed('slot2')) {
@@ -2458,9 +2464,6 @@ function backpackInput(h, c) {
     else if (h.hp >= 100) feed(h.player.name + ': здоров\'я повне', '#ccc');
     else { h.healT = 0.001; feed(h.player.name + ' перев\'язується…', '#9c9'); }
   }
-  if (h.grenAim) h.grenA = aimWorld(h);
-  if (!c.held('slot3') && c.prev.slot3 && h.grenA != null && !h.hidden && !h.vehicle && !h.mount) throwGrenade(h, h.grenA);
-  if (!c.held('slot3')) { h.grenA = null; h.grenAim = false; }
 }
 function dropCanister(h) {
   h.canister = false;
@@ -2508,7 +2511,7 @@ function updateAirBonuses(dt) {
   }
 }
 // ---------- Знахідки для людей: час від часу з'являються поруч і зникають ----------
-const HUMAN_BONUS = { rifle: 1, shotgun: 0.7, medkit: 1.2, armor: 0.6, reb: 0.4, detector: 0.7, grenade: 0.7 };
+const HUMAN_BONUS = { rifle: 1, shotgun: 0.7, medkit: 1.2, armor: 0.6, reb: 0.4, detector: 0.7, grenade: 0.7, molotov: 0.5 };
 function groundFree(x) {
   const W = G.W, g = gAt(W, x);
   return !solidsNear(W, x - 30, x + 30).some((s) => !s.thin && s.x < x + 20 && s.x + s.w > x - 20 && s.y < g && s.y + s.h > g - 60);
@@ -2531,7 +2534,7 @@ function updatePickups(dt) {
   const type = weighted(G.mode === 'team' ? TEAM_BONUS : HUMAN_BONUS); // у командах зброя й аптечки — лише на базах
   W.pickups.push({ type, x, y: gAt(W, x), timed: true, life: 45, max: 45 });
 }
-const POS_LOOT = { rifle: 1, shotgun: 0.7, smg: 0.8, sniper: 0.35, mg: 0.35, grenade: 0.45 };
+const POS_LOOT = { rifle: 1, shotgun: 0.7, smg: 0.8, sniper: 0.35, mg: 0.35, grenade: 0.45, molotov: 0.35 };
 function spawnPositionWeapon() {
   const W = G.W, live = G.humans.filter((h) => !h.dead && !h.saved);
   if (!live.length || W.pickups.filter((p) => p.pos && !p.taken).length >= 5) return;
