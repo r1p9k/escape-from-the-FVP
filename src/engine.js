@@ -63,7 +63,21 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => { Keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in Keys) Keys[k] = false; });
-window.addEventListener('mousedown', () => Sfx.unlock());
+// миша для людини: курсор — куди цілитися, ЛКМ — вогонь, ПКМ — позиція
+const Mouse = { x: 0, y: 0, t: -1e9, l: false, r: false };
+let MOUSE_VIEW = null; // вид людини, що грає з цього ПК (заповнює рендер)
+window.addEventListener('mousedown', (e) => { Sfx.unlock(); if (typeof state !== 'undefined' && state === 'lobby') return; if (e.button === 0) Mouse.l = true; if (e.button === 2) Mouse.r = true; Mouse.t = performance.now(); });
+window.addEventListener('mouseup', (e) => { if (e.button === 0) Mouse.l = false; if (e.button === 2) Mouse.r = false; });
+window.addEventListener('mousemove', (e) => { Mouse.x = e.clientX; Mouse.y = e.clientY; Mouse.t = performance.now(); });
+window.addEventListener('contextmenu', (e) => { if (typeof state !== 'undefined' && state !== 'lobby') e.preventDefault(); });
+window.addEventListener('blur', () => { Mouse.l = Mouse.r = false; });
+function mouseAim() {
+  const v = MOUSE_VIEW;
+  if (!v || !v.h || v.h.dead || performance.now() - Mouse.t > 2500 && !Mouse.l && !Mouse.r) return undefined;
+  if (Mouse.x < v.vp.x || Mouse.x > v.vp.x + v.vp.w || Mouse.y < v.vp.y || Mouse.y > v.vp.y + v.vp.h) return undefined;
+  const wx = (Mouse.x - v.vp.x) / v.s + v.cx, wy = (Mouse.y - v.vp.y) / v.s + v.cy, h = v.h;
+  return Math.atan2(wy - (h.y - HUMAN_DIM[h.stance].h * 0.7), wx - h.x);
+}
 
 class Controller {
   constructor(id) {
@@ -83,6 +97,9 @@ class Controller {
     if (!this.isPad) {
       const m = KB_SCHEMES[this.id].keys;
       for (const a of ACTIONS) s[a] = m[a].some((c) => !!Keys[c]);
+      if (Mouse.l) s.fire = true;
+      if (Mouse.r) s.aim = true;
+      const ma = mouseAim(); if (ma !== undefined) s.aimAngle = ma;
     } else {
       const gps = navigator.getGamepads ? navigator.getGamepads() : [];
       const gp = gps[+this.id.slice(2)];

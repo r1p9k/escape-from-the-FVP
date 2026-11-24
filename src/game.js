@@ -948,17 +948,18 @@ function startDigExit(h, sp) {
 const DIG_TOOL_SPD = 22, MAX_DIG_DEPTH = TUN_DEPTH + 72 * 3 + 40;
 function startDigMode(h) {
   if (h.vehicle || h.hidden || h.mount || h.onLadder || !h.onGround || h.carry || h.player.bot) return; // боти лопатою не копають
-  h.digMode = true; h.digA = h.digA || 0; h.vx = 0; h.aiming = false; h.digHost = null;
-  tipOnce(h, 'Лопата: ' + h.player.ctrl.label('up') + h.player.ctrl.label('down') + ' — напрямок, ' + h.player.ctrl.label('left') + h.player.ctrl.label('right') + ' — бік, тримати ' + h.player.ctrl.label('fire') + ' — копати, ' + h.player.ctrl.label('dig') + ' — сховати');
+  h.digMode = true; h.digA = h.digA || 0; h.vx = 0; h.aiming = false; h.digHost = null; h.digHeld = 0;
+  tipOnce(h, 'Лопата: поки тримаєш ' + h.player.ctrl.label('dig') + ' — копає; ' + h.player.ctrl.label('up') + h.player.ctrl.label('down') + ' — напрямок, ' + h.player.ctrl.label('left') + h.player.ctrl.label('right') + ' — бік; відпусти — сховати');
 }
 function digModeTick(h, c, dt) {
-  if (c.pressed('dig') || c.pressed('interact') || c.pressed('aim') || h.dead || h.vehicle || h.hidden) { h.digMode = false; h.digHost = null; return; }
+  if (!c.held('dig') || c.pressed('interact') || c.pressed('aim') || h.dead || h.vehicle || h.hidden) { h.digMode = false; h.digHost = null; return; }
+  h.digHeld = (h.digHeld || 0) + dt;
   h.vx = 0;
   if (c.pressed('left')) { h.facing = -1; h.digHost = null; }
   if (c.pressed('right')) { h.facing = 1; h.digHost = null; }
   const v = (c.held('down') ? 1 : 0) - (c.held('up') ? 1 : 0);
   if (v) { const was = Math.abs(h.digA || 0) > DIG_MAX + 0.01; h.digA = clamp((h.digA || 0) + v * 1.3 * dt, -Math.PI / 2, Math.PI / 2); if (was !== Math.abs(h.digA) > DIG_MAX + 0.01) h.digHost = null; }
-  if (!c.held('fire') || !h.onGround && !h.onLadder) return;
+  if (h.digHeld < 0.25 && !c.held('fire') || !h.onGround && !h.onLadder) return; // мить — щоб навести стрілку, далі копає сама
   const d = DIG_TOOL_SPD * dt, a = h.digA || 0;
   h.digT = 0.2; h.anim += dt * 6;
   if (Math.abs(a) <= DIG_MAX + 0.01) digCorridor(h, h.facing, Math.tan(a), d);
@@ -2369,11 +2370,22 @@ function updateCameras(dt) {
       if (d) { tx = d.x + d.vx * 0.35; ty = d.y + d.vy * 0.2; }
       else { const pd = curPad(p.ent); tx = pd.x + 120 * fwdDir(p); ty = pd.y - 150; }
     }
+    let az = 1;
+    if (p.role === 'human') {
+      // прицілювання з далекобійної зброї — камера відходить і зсувається в бік прицілу
+      const h = p.ent, wt = h.mount ? 'mrifle' : h.vehicle && h.seat === 'gunner' ? 'mg' : h.aiming && !h.grenAim && h.weapon ? h.weapon.type : null;
+      if (wt && !h.dead) { const rg = WEAPONS[wt].range; az = clamp(rg / 400, 1, 2.3); const a = aimWorld(h); tx += Math.cos(a) * rg * 0.3; ty += Math.sin(a) * rg * 0.15; }
+    } else {
+      // дрон: що вище над землею, то далі видно; під землею — тісно
+      const d = p.ent.drone, alt = d ? gAt(G.W, d.x) - d.y : 150;
+      const tz = alt < -4 ? 430 : clamp(470 + alt * 0.85, 480, 1150);
+      p.cam.dz = (p.cam.dz || tz) + (tz - (p.cam.dz || tz)) * Math.min(1, dt * 2);
+    }
     const k = Math.min(1, dt * 5);
     p.cam.x += (tx - p.cam.x) * k; p.cam.y += (ty - p.cam.y) * k;
     if (p.role === 'human') {
       const h = p.ent, still = !h.dead && Math.abs(h.vehicle ? h.vehicle.vx : h.vx) < 20;
-      const tz = still ? p.cam.userZ || 1 : 1;
+      const tz = Math.max(still ? p.cam.userZ || 1 : 1, az);
       p.cam.z = (p.cam.z || 1) + (tz - (p.cam.z || 1)) * Math.min(1, dt * (tz > (p.cam.z || 1) ? 2.5 : 4));
     }
   }

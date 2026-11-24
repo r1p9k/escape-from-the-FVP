@@ -458,6 +458,7 @@ function netClientFrame(dt, t) {
   // клавіші цього ПК
   const kb = CONTROLLERS.kb.cur, s = { ax: kb.ax || 0, ay: kb.ay || 0 };
   for (const a of ACTIONS) s[a] = !!kb[a];
+  if (kb.aimAngle !== undefined) s.aimAngle = +kb.aimAngle.toFixed(3);
   NET.ctrl.prev = NET.ctrl.cur; NET.ctrl.cur = s;
   const js = JSON.stringify(s);
   NET.inT += dt;
