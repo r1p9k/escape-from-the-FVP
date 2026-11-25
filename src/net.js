@@ -312,9 +312,12 @@ function netHostTick(dt) {
   for (const name of ['shot', 'boom', 'click', 'reb', 'win', 'tone', 'noise_']) {
     const orig = Sfx[name];
     Sfx[name] = function (...a) {
-      if (NET.rec && NET.depth === 0 && NET.sfx.length < 40) NET.sfx.push([name, a]);
+      const src = SND_SRC;
+      if (NET.rec && NET.depth === 0 && NET.sfx.length < 40) NET.sfx.push([name, a, src ? [src.x == null ? null : Math.round(src.x), src.y == null ? null : Math.round(src.y), src.p ? src.p.idx : -1] : 0]);
+      const k0 = this.k;
+      if (NET.depth === 0) this.k = sfxGain(src, name);
       NET.depth++;
-      try { return orig.apply(this, a); } finally { NET.depth--; }
+      try { return orig.apply(this, a); } finally { NET.depth--; this.k = k0; }
     };
   }
   const sb = Sfx.setBuzz;
@@ -396,8 +399,9 @@ function netClientMsg(raw) {
     decApply(m.n, true);
     G.W.cavMap = new Map();
     for (const p of m.p) G.parts.push(p);
-    for (const [n, a] of m.f) if (Sfx[n]) Sfx[n](...a);
-    Sfx.setBuzz(m.b[0], m.b[1]);
+    for (const [n, a, sr] of m.f) if (Sfx[n]) { SND_SRC = sr ? { x: sr[0], y: sr[1], p: sr[2] >= 0 ? G.players[sr[2]] : null } : null; Sfx[n](...a); }
+    SND_SRC = null;
+    { const z = droneBuzz(); Sfx.setBuzz(z[0], z[1]); } // гул дронів — для свого персонажа
     NET.pz = !!m.pz;
     netLocalCtrl();
     if (now - (NET.pruneT || 0) > 3000) { NET.pruneT = now; decPrune(); }

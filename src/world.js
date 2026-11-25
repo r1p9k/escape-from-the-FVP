@@ -331,7 +331,7 @@ const F = {
 };
 
 function weaponType() { return weighted({ rifle: 1, shotgun: 0.7, smg: 0.8, sniper: 0.35, mg: 0.25 }); }
-function pickupType() { return weighted({ rifle: 0.9, shotgun: 0.6, smg: 0.6, sniper: 0.25, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25, grenade: 0.6, gasmask: 0.4 }); }
+function pickupType() { return weighted({ bomb: 0.2, bazooka: 0.3, rifle: 0.9, shotgun: 0.6, smg: 0.6, sniper: 0.25, reb: 0.25, medkit: 0.9, fuel: 2.4, armor: 0.5, detector: 0.25, grenade: 0.6, gasmask: 0.4 }); }
 // предмети побуту в будівлях (їх можна кидати)
 const PROP_KINDS = { jar: 3, chair: 2, stool: 1.5, pot: 1.5, brick: 1.2, tv: 0.8, iron: 1 };
 

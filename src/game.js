@@ -34,7 +34,7 @@ const STANCE_ACC = { stand: 'стоячи — розкид', crouch: 'сидяч
 const AIM_SECTOR = { burrow: [-0.75, 0.12], bunker: [-0.6, 0.05], trench: [-1.45, -0.12] };
 const PACK_CAP = 4;      // місць у рюкзаку: аптечки, заряди РЕБ, детектор
 const DETECT_R = 650;    // радіус детектора дронів
-const PICKUP_NAMES = { molotov: 'Коктейлі Молотова', rifle: 'Автомат', shotgun: 'Дробовик', smg: 'Пістолет-кулемет', sniper: 'Снайперська гвинтівка', mg: 'Кулемет', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого', shovel: 'Лопата', grenade: 'Гранати', ammo: 'Набої', gasmask: 'Протигаз' };
+const PICKUP_NAMES = { bomb: 'Фугас', bazooka: 'Базука', molotov: 'Коктейлі Молотова', rifle: 'Автомат', shotgun: 'Дробовик', smg: 'Пістолет-кулемет', sniper: 'Снайперська гвинтівка', mg: 'Кулемет', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого', shovel: 'Лопата', grenade: 'Гранати', ammo: 'Набої', gasmask: 'Протигаз' };
 const DIG_PX_M = 30;     // одиниць світу в метрі копання (людина ≈ 1,8 м)
 const DIG_SPD = 13;      // швидкість копання, одиниць/с (повільно)
 const TUN_SPD = 72;      // хода зігнувшись у тунелі
@@ -83,7 +83,7 @@ function makeHuman(p, x) {
     player: p, x, y: gAt(G.W, x), vx: 0, vy: 0, stance: 'stand', facing: 1, onGround: true, onThin: false, wasGround: true,
     hp: 100, stamina: 1, staminaDelay: 0, exhausted: false, climb: null, onLadder: false, dropT: 0,
     vehicle: null, seat: null, hidden: null, tun: null, digging: null, shovel: Infinity, weapon: null, reb: 1, fireCd: 0,
-    carry: null, mount: null, working: null, grenades: G.mode === 'team' ? 3 : GRENADES_START, molotovs: 1, throwSel: null, grenadeCd: 0, piloting: false,
+    rockets: 0, mines: 0, bombs: 0, carry: null, mount: null, working: null, grenades: G.mode === 'team' ? 3 : GRENADES_START, molotovs: 1, throwSel: null, grenadeCd: 0, piloting: false,
     openTime: 0, reveal: 0, hurtT: 0, dead: false, saved: false, anim: 0,
     aimA: -0.5, aiming: false, diving: false, diveCd: 0, canister: false, smokeT: 0, gasT: 0, gasWarned: false,
     armor: 0, beaten: 0, alCharges: 0, alT: 0, alGranted: false, hideAnim: null,
@@ -261,6 +261,7 @@ function droneSeenBy(d, h, noDetector) {
 
 // ---------- Людина ----------
 function updateHuman(h, dt) {
+  SND_SRC = { x: h.x, y: h.y, p: h.player };
   const c = h.player.ctrl, W = G.W;
   h.fireCd -= dt; h.reveal -= dt; h.hurtT -= dt;
   if (h.digT > 0) h.digT -= dt;
@@ -328,9 +329,10 @@ function updateHuman(h, dt) {
   if (c.pressed('slot3')) cycleThrow(h);
   if (h.throwSel && !throwCount(h, h.throwSel)) h.throwSel = nextThrow(h, h.throwSel, true);
   h.grenAim = !!h.throwSel && canGrenAim(h) && h.onGround && !h.onLadder;
-  h.aiming = (c.held('aim') || h.grenAim) && h.onGround && !h.onLadder;
+  h.aiming = c.held('aim') && h.onGround && !h.onLadder; // граната в руці не зупиняє — бігти можна далі
   if (h.aiming) {
-    if (c.cur.aimAngle !== undefined) setAimWorld(h, c.cur.aimAngle);
+    if (h.bzPoint && h.throwSel === 'bazooka') bazookaMarker(h, c, dt);
+    else if (c.cur.aimAngle !== undefined) setAimWorld(h, c.cur.aimAngle);
     else {
       if (c.pressed('left')) h.facing = -1;
       if (c.pressed('right')) h.facing = 1;
@@ -397,36 +399,27 @@ function updateHuman(h, dt) {
   // є місце — предмети підбираються самі (крім щойно викладених цією ж людиною)
   for (const pk of G.W.pickups) if (!pk.taken && Math.abs(pk.x - h.x) < 30 && Math.abs(pk.y - h.y) < 40 && autoTake(h, pk)) { takePickup(h, pk); break; }
   if (c.pressed('drop')) dropItem(h);
-  if (c.pressed('build') && !h.working) { const ft = fortTarget(h); if (tunnelDoorSpot(h)) startTunnelDoor(h); else if (ft) startPly(h, ft); else tipOnce(h, 'Двері з фанери ставлять у тунелі або в отворі будинку'); }
+  if (c.pressed('build') && h.throwSel === 'bazooka') { h.bzPoint = !h.bzPoint; h.bzMark = null; feed(h.player.name + ': базука — ' + (h.bzPoint ? 'точка прильоту (' + c.label('aim') + '+стрілки)' : 'кут і сила'), '#c9a227'); }
+  else if (c.pressed('build') && !h.working) { const ft = fortTarget(h); if (tunnelDoorSpot(h)) startTunnelDoor(h); else if (ft) startPly(h, ft); else tipOnce(h, 'Двері з фанери ставлять у тунелі або в отворі будинку'); }
   // «Позиція» + «Дія»: сітка; у будівлі з сіткою біля вікна — вогнева позиція
-  if (c.pressed('interact') && c.held('aim')) { const mt = mountTarget(h); if (mt) startMount(h, mt); else placeNet(h); }
+  // [V] — станковий кулемет у вікні чи дверях (окремо від фанери)
+  if (c.pressed('mount') && !h.working) { const mt = mountTarget(h); if (mt && !mt.bad) startMount(h, mt); else tipOnce(h, 'Станковий кулемет ставлять у будівлі з сіткою — біля вікна чи дверей'); }
+  if (c.pressed('interact') && c.held('aim')) placeNet(h);
   else if (c.pressed('interact')) {
-    const m = nearMount(h), v = nearVehicle(h), kv = kitVehicle(h), shop = nearShop(h);
-    if (kv) { h.working = { kind: 'kit', t: 0, dur: 3, v: kv, kit: h.kit }; h.vx = 0; } // встановити обладнання на техніку
-    else if (shop) takeKit(h);
-    else if (m) useMount(h, m);
-    else if (v) enterVehicle(h, v);
-    else {
-      const pk = nearPickup(h);
-      if (pk) takeOrSwap(h, pk);
-      else {
-        const sp = nearHide(h), pr = !h.carry && !h.canister ? nearProp(h) : null, ft = fortTarget(h);
-        if (sp) enterHide(h, sp);
-        else if (pr) takeProp(h, pr);
-        else if (ft) startPly(h, ft);
-        else if (tunnelDoorSpot(h)) startTunnelDoor(h);
-        else if (h.carry) dropCarry(h);
-        else if (digAction(h, false, true)) tipOnce(h, 'Копати — [' + c.label('dig') + ']' + (pipeAt(G.W, h.x, h.y) ? '; углиб — [' + c.label('down') + '] + [' + c.label('dig') + ']' : ''));
-      }
-    }
+    const it = interactTarget(h);
+    if (it) it.go();
+    else if (h.carry) dropCarry(h);
+    else if (digAction(h, false, true)) tipOnce(h, 'Копати — [' + c.label('dig') + ']' + (pipeAt(G.W, h.x, h.y) ? '; углиб — [' + c.label('down') + '] + [' + c.label('dig') + ']' : ''));
   }
   // «Копати» — лопата: завали, перекриття, виходи, спуски, окопчик; із «Бігом» — протитанковий рів
   if (c.pressed('dig') && !h.working && !h.carry && !digAction(h, c.held('sprint'), false)) startDigMode(h); // інакше — лопата: стрілка напрямку й копання
   // «Альоша»: автонаведення на дрони, стріляти можна й на бігу
-  const mt = !h.aiming && c.pressed('fire') && !(h.meleeCd > 0) ? meleeTarget(h) : null;
+  if (!c.held('fire')) h.fireLock = false; // після кидка — не стріляти, поки кнопку не відпустили
+  const mt = !h.aiming && c.pressed('fire') && !(h.meleeCd > 0) && !h.grenAim ? meleeTarget(h) : null;
   if (mt) melee(h, mt); // впритул — рукопашна
   else if (h.carry) { if (c.pressed('fire') && h.fireCd <= 0) throwCarry(h); } // предмет у руках — кинути
-  else if (h.grenAim) { if (c.pressed('fire')) throwSelected(h); } // граната чи коктейль у руці — кидок лише кнопкою пострілу
+  else if (h.grenAim || h.throwSel === 'bazooka') { if (c.pressed('fire') || h.throwSel === 'bazooka') handItemFire(h, c, dt); } // граната, коктейль, базука в руці — лише вони, без пострілу зброї
+  else if (h.fireLock) { /* щойно кинув — чекаємо, поки відпустять кнопку */ }
   else if (h.alT > 0) { if (c.held('fire') && h.fireCd <= 0 && !h.canister) alioshaShot(h); }
   else if (c.held('fire') && h.weapon && h.canister && c.pressed('fire')) feed(h.player.name + ': руки зайняті каністрою — [' + c.label('slot1') + '] викинути', '#ccc');
   else if (h.aiming && !h.grenAim && c.held('fire') && h.weapon && !h.canister && h.fireCd <= 0 && h.reloadT <= 0 && h.weapon.mag > 0) {
@@ -442,7 +435,9 @@ function updateHuman(h, dt) {
   }
   if (c.held('fire')) h.idleFire = 0;
   if (c.pressed('special')) {
-    if (c.held('aim') && h.alCharges > 0 && h.alT <= 0) activateAliosha(h);
+    const ch = myCharge(h);
+    if (ch) { ch.t = 0; feed(h.player.name + ' підірвав фугас', '#ff4a3a'); }
+    else if (c.held('aim') && h.alCharges > 0 && h.alT <= 0) activateAliosha(h);
     else activateReb(h);
   }
   checkShelter(h);
@@ -633,11 +628,13 @@ function nearHide(h) {
   return null;
 }
 // ---------- Рюкзак: 4 місця (аптечки, заряди РЕБ, детектор) ----------
-function packUsed(h) { return h.medkits + h.reb + (h.detector ? 1 : 0) + (h.cans || 0); }
+function packUsed(h) { return h.medkits + h.reb + (h.detector ? 1 : 0) + (h.cans || 0) + (h.mines || 0); }
 function canTake(h, p) {
   if (p.type === 'gasmask') return !h.gasmask;
   if (p.type === 'grenade') return h.grenades < GRENADES_MAX;
   if (p.type === 'molotov') return (h.molotovs || 0) < MOLOTOV_MAX;
+  if (p.type === 'bazooka') return (h.rockets || 0) < ROCKET_MAX;
+  if (p.type === 'bomb') return !(h.bombs > 0);
   if (p.type === 'ammo') return !!h.weapon && h.weapon.ammo < WEAPONS[h.weapon.type].ammo * 2;
   if (p.type === 'medkit') return h.medkits < MEDKIT_MAX && packUsed(h) < PACK_CAP;
   if (p.type === 'reb') return packUsed(h) < PACK_CAP;
@@ -649,7 +646,7 @@ function canTake(h, p) {
 // чи є в рюкзаку загиблого щось, що можна забрати
 function packGain(h, k) {
   const room = packUsed(h) < PACK_CAP;
-  return !!((k.weapon && !h.weapon) || (room && k.detector && !h.detector) || (room && k.medkits > 0 && h.medkits < MEDKIT_MAX) || (room && k.reb > 0));
+  return !!((k.weapon && !h.weapon) || (room && k.detector && !h.detector) || (room && k.medkits > 0 && h.medkits < MEDKIT_MAX) || (room && k.reb > 0) || (room && k.mines > 0));
 }
 function takePickup(h, p) {
   if (!canTake(h, p)) {
@@ -665,6 +662,8 @@ function takePickup(h, p) {
   else if (p.type === 'ammo') { h.weapon.ammo += WEAPONS[h.weapon.type].ammo; feed(h.player.name + ': поповнив набої', '#ddd'); }
   else if (p.type === 'grenade') { h.grenades = Math.min(GRENADES_MAX, h.grenades + 2); feed(h.player.name + ': гранат ' + h.grenades, '#c9a227'); }
   else if (p.type === 'molotov') { h.molotovs = Math.min(MOLOTOV_MAX, (h.molotovs || 0) + 2); feed(h.player.name + ': коктейлів Молотова ' + h.molotovs, '#ff8a3a'); }
+  else if (p.type === 'bomb') { h.bombs = 1; feed(h.player.name + ': фугас — закласти в тунелі ([' + h.player.ctrl.label('slot3') + '] у руки, [' + h.player.ctrl.label('fire') + '] — закласти)', '#ff4a3a'); }
+  else if (p.type === 'bazooka') { h.rockets = ROCKET_MAX; feed(h.player.name + ': базука, ракет ' + h.rockets + ' — [' + h.player.ctrl.label('slot3') + '] у руки', '#c9a227'); }
   else if (p.type === 'gasmask') { h.gasmask = true; feed(h.player.name + ' вдягнув протигаз — дим більше не шкодить', '#9fd3c7'); }
   else if (p.type === 'armor') h.armor = 100;
   else { h.weapon = makeWeapon(p.type); if (p.ammo != null) { h.weapon.ammo = p.ammo; h.weapon.mag = Math.min(p.mag, p.ammo); } h.reloadT = 0; }
@@ -735,7 +734,8 @@ function takePack(h, p) {
   if (k.detector && !h.detector && packUsed(h) < PACK_CAP) { h.detector = true; k.detector = false; got.push('детектор'); }
   while (k.medkits > 0 && h.medkits < MEDKIT_MAX && packUsed(h) < PACK_CAP) { k.medkits--; h.medkits++; got.push('аптечка'); }
   while (k.reb > 0 && packUsed(h) < PACK_CAP) { k.reb--; h.reb++; got.push('РЕБ'); }
-  if (!k.weapon && !k.detector && !k.medkits && !k.reb) p.taken = true;
+  while (k.mines > 0 && packUsed(h) < PACK_CAP) { k.mines--; h.mines = (h.mines || 0) + 1; got.push('міна'); }
+  if (!k.weapon && !k.detector && !k.medkits && !k.reb && !k.mines) p.taken = true;
   feed(h.player.name + ' забрав із рюкзака: ' + got.join(', '), '#9c9');
   Sfx.click();
 }
@@ -747,9 +747,9 @@ function dropPack(h) {
   h.working = null; h.grenades = 0;
   if (h.canister) { h.canister = false; W.pickups.push({ type: 'fuel', x, y: surfaceY(W, x) }); }
   for (; h.cans > 0; h.cans--) W.pickups.push({ type: 'fuel', x: clamp(x + rand(-20, 20), 20, W.width - 20), y: h.y });
-  const k = { weapon: h.weapon, medkits: h.medkits, reb: h.reb, detector: h.detector };
-  h.weapon = null; h.medkits = 0; h.reb = 0; h.detector = false; h.digging = null; h.reloadT = 0; h.healT = 0;
-  if (!k.weapon && !k.medkits && !k.reb && !k.detector) return;
+  const k = { weapon: h.weapon, medkits: h.medkits, reb: h.reb, detector: h.detector, mines: h.mines || 0 };
+  h.weapon = null; h.medkits = 0; h.reb = 0; h.detector = false; h.mines = 0; h.rockets = 0; h.throwSel = null; h.digging = null; h.reloadT = 0; h.healT = 0;
+  if (!k.weapon && !k.medkits && !k.reb && !k.detector && !k.mines) return;
   W.pickups.push({ type: 'pack', x, y: surfaceY(W, x), pack: k, life: 150, max: 150 });
   feed(h.player.name + ' втратив рюкзак — його можна підібрати', '#ccc');
 }
@@ -1520,7 +1520,9 @@ function updateBullets(dt) {
       for (const d of G.drones) {
         if (dist(b.x, b.y, d.x, d.y) >= DRONE_R + 3 || ally(b.owner, d)) continue;
         hit = true;
-        if (!d.inverted) {
+        SND_SRC = { x: b.x, y: b.y };
+        if (d.hp > 1) { d.hp--; G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-90, 90), vy: rand(-120, 20), life: 0.3, max: 0.3 }); Sfx.tone(1400, 0.03, 0.05); }
+        else if (!d.inverted) {
           d.inverted = true; d.lix = -(d.lix || 0); d.liy = -(d.liy || 0);
           for (let k = 0; k < 6; k++) G.parts.push({ type: 'spark', x: b.x, y: b.y, vx: rand(-120, 120), vy: rand(-140, 20), life: 0.35, max: 0.35 });
           Sfx.tone(1400, 0.03, 0.05);
@@ -1804,6 +1806,36 @@ function nearShop(h) {
 function kitVehicle(h) {
   return h.kit ? G.W.vehicles.find((v) => !v.dead && garageOf(v) && Math.abs(v.x - h.x) < VEH[v.type].len / 2 + 18 && Math.abs(v.y - h.y) < 40) || null : null;
 }
+// «Дія»: коли поруч кілька об'єктів — береться найближчий (а не перший за списком)
+function interactTarget(h) {
+  const L = [], add = (kind, x, o, go) => { if (o) L.push({ kind, d: Math.abs(x - h.x), o, go }); };
+  const m = nearMount(h), v = nearVehicle(h), pk = nearPickup(h), sp = nearHide(h), pr = !h.carry && !h.canister ? nearProp(h) : null, mi = nearMine(h);
+  add('mount', m && m.x, m, () => useMount(h, m));
+  add('vehicle', v && v.x, v, () => enterVehicle(h, v));
+  if (pk) L.push({ kind: 'pickup', d: Math.abs(pk.x - h.x) - 6, o: pk, go: () => takeOrSwap(h, pk) }); // предмет під ногами — трохи пріоритетніше
+  add('hide', sp && sp.x, sp, () => enterHide(h, sp));
+  add('prop', pr && pr.x, pr, () => takeProp(h, pr));
+  add('mine', mi && mi.x, mi, () => startDemine(h, mi));
+  if (!L.length) return null;
+  return L.reduce((a, q) => (q.d < a.d ? q : a));
+}
+const GARAGE_T = 15; // секунд у боксі на кожну деталь
+function updateGarages(dt) {
+  for (const v of G.W.vehicles) {
+    if (v.dead) continue;
+    const g = garageOf(v), need = !(v.cageHp > 0) ? 'cage' : !v.ram ? 'ram' : null;
+    if (!g || !need || Math.abs(v.vx) > 8) { v.garT = 0; v.garNeed = null; continue; }
+    if (v.garNeed !== need) { v.garNeed = need; v.garT = 0; }
+    v.garT += dt;
+    if (RND() < dt * 5) G.parts.push({ type: 'spark', x: v.x + rand(-26, 26), y: v.y - VEH[v.type].h - rand(0, 10), vx: rand(-60, 60), vy: rand(-90, -20), life: 0.25, max: 0.25 });
+    if (v.garT >= GARAGE_T) {
+      if (need === 'cage') v.cageHp = 3; else v.ram = true;
+      v.garT = 0; v.garNeed = null;
+      feed('Майстерня: на ' + VEH[v.type].name.toLowerCase() + ' встановлено ' + KIT_NAMES[need], '#c9a36a');
+      SND_SRC = { x: v.x, y: v.y }; Sfx.click();
+    }
+  }
+}
 function takeKit(h) {
   h.kit = h.kit === 'cage' ? 'ram' : 'cage';
   feed(h.player.name + ' взяв ' + KIT_NAMES[h.kit] + ' — встановити на техніку', '#c9a36a');
@@ -1858,7 +1890,9 @@ function loadoutInput(dp, c) {
   if (c.pressed('right')) dp.sel = (dp.sel + 1) % 4;
   if (c.pressed('down')) {
     const cur = dp.loadout[dp.sel];
-    dp.loadout[dp.sel] = DROP_TYPES[(DROP_TYPES.indexOf(cur) + 1) % DROP_TYPES.length];
+    let nx = DROP_TYPES[(DROP_TYPES.indexOf(cur) + 1) % DROP_TYPES.length];
+    if (nx === 'bomb' && dp.loadout.some((t, i) => t === 'bomb' && i !== dp.sel)) nx = DROP_TYPES[(DROP_TYPES.indexOf(nx) + 1) % DROP_TYPES.length]; // фугас — лише один
+    dp.loadout[dp.sel] = nx;
     Sfx.click();
   }
   if (c.pressed('interact') || c.pressed('aim')) {
@@ -1868,6 +1902,7 @@ function loadoutInput(dp, c) {
   if (d) { d.slots = dp.loadout.slice(); d.payload = firstDrop(d.slots); }
 }
 function updateDronePlayer(dp, dt) {
+  SND_SRC = { p: dp.player };
   if (G.over) return;
   // людина, що взяла дрон: 1 — повернутися (дрон без вибуху вимикається)
   if (dp.temp && G.time > dp.t0 + 0.2 && dp.player.ctrl.pressed('slot1')) { endPilot(dp); return; }
@@ -1932,6 +1967,53 @@ function cyclePayload(d) {
     if (d.slots.includes(t)) { d.payload = t; return; }
   }
 }
+// ---------- Фугас: людина закладає в тунелі; вибух — кнопкою [Особливе] або сам через 15 с ----------
+const BOMB_TIME = 15, BOMB_SET_T = 3;
+function bombTunnel(h) { return !h.vehicle && !h.hidden && h.onGround && h.y > gAt(G.W, h.x) + 10 ? pipeAt(G.W, h.x, h.y) : null; }
+function startPlantBomb(h) {
+  if (!(h.bombs > 0) || h.working) return;
+  if (!bombTunnel(h)) { tipOnce(h, 'Фугас закладають у тунелі (під землею)'); return; }
+  h.working = { kind: 'bombset', t: 0, dur: BOMB_SET_T }; h.vx = 0;
+}
+function plantCharge(h) {
+  const sp = bombTunnel(h);
+  if (!sp || !(h.bombs > 0)) return;
+  h.bombs--;
+  (G.charges || (G.charges = [])).push({ x: h.x, y: h.y, sp, t: BOMB_TIME, player: h.player, owner: h, beep: 0 });
+  feed(h.player.name + ' заклав фугас — ' + BOMB_TIME + ' с, [' + h.player.ctrl.label('special') + '] — підірвати раніше', '#ff4a3a');
+  if (!h.bombs) h.throwSel = nextThrow(h, 'bomb', true);
+}
+function myCharge(h) { return (G.charges || []).find((q) => q.owner === h && !q.dead) || null; }
+function updateCharges(dt) {
+  if (!G.charges || !G.charges.length) return;
+  for (const c of G.charges) {
+    c.t -= dt; c.beep -= dt;
+    if (c.beep <= 0) { c.beep = c.t > 5 ? 1 : c.t > 1.5 ? 0.5 : 0.2; SND_SRC = { x: c.x, y: c.y }; Sfx.tone(1250, 0.07, 0.12); }
+    if (c.t <= 0) { c.dead = true; bunkerBlast(c); }
+  }
+  G.charges = G.charges.filter((c) => !c.dead);
+}
+// вибух шириною як 8 скидів: руйнує все навколо; на землі не вижити, на поверхах будівель — мінус половина здоров'я
+const BUNKER_HALF = 360;
+function bunkerBlast(c) {
+  const W = G.W, x = c.x;
+  G.blastBy = c.player; G.noHumanDmg = true;
+  for (let k = 0; k < 8; k++) { const bx = x - BUNKER_HALF + 45 + k * 90; SND_SRC = { x: bx, y: c.y }; explosion(bx, gAt(W, bx) - 4, 95, 110); }
+  G.noHumanDmg = false;
+  for (const sp of W.hides) if (sp.type !== 'pipe' && !sp.ruined && Math.abs(sp.x - x) < BUNKER_HALF) ruinHide(sp);
+  G.parts.push({ type: 'shake', x, y: c.y, life: 4, max: 4, amp: 2.2 });
+  for (const h of G.humans) {
+    if (h.dead || h.saved || Math.abs(h.x - x) > BUNKER_HALF + 20) continue;
+    const g = gAt(W, h.x), b = buildingAt(h.x, h.y - 4);
+    if ((h.hidden && h.hidden.type !== 'pipe') || (c.sp.type === 'pipe' && pipeAt(W, h.x, h.y) === c.sp)) hurt(h, 999, 'blast'); // у бліндажі, норі чи в самому ході
+    else if (h.vehicle) hurt(h, 60, 'blast');
+    else if (b && h.y < g - 20) hurt(h, 50, 'blast'); // поверх будівлі — половина здоров'я
+    else if (h.y > g + 30) hurt(h, 30, 'blast'); // глибоко в тунелі
+    else hurt(h, 999, 'blast'); // на землі — не вижити
+  }
+  feed('Фугас! Тунель і все над ним знищено', '#ff4a3a');
+  G.blastBy = null;
+}
 function updateBombs(dt) {
   const W = G.W;
   for (let i = G.bombs.length - 1; i >= 0; i--) {
@@ -1954,6 +2036,7 @@ function updateBombs(dt) {
     G.bombs.splice(i, 1);
     G.blastBy = b.player;
     const into = (b.type === 'frag' || b.type === 'fire') && !hitH && !hitV ? hideAtPoint(b.x, b.y) : null;
+    SND_SRC = { x: b.x, y: b.y };
     if (into && into.e && b.type === 'frag') { feed('Скид залетів у ' + into.name + '!', '#ff8a5a'); grenadeInside({ inside: into, owner: { player: b.player } }); }
     else if (b.type === 'frag') explosion(b.x, b.y, 80, 90);
     else if (b.type === 'fire') { startFire(b.x, b.y, 120, FIRE_T + 2, b.player); if (hitH) hurt(hitH, 25, 'fire'); if (into) for (const o of G.humans) if (!o.dead && o.hidden === into.sp) hurt(o, 45, 'fire'); }
@@ -2028,6 +2111,7 @@ function updateMines(dt) {
     let trig = false;
     for (const h of G.humans) {
       if (h.dead || h.saved || h.hidden || h.vehicle) continue;
+      if (m.hand && isTeam() && allyP(h.player, m.player)) continue; // свої знають, де закладено
       // спрацьовує й тоді, коли людина пролітає низько над нею — перестрибнути важко
       if (Math.abs(h.x - m.x) < MINE_TRIGGER && h.y > m.y - 34 && h.y < m.y + 14) { trig = true; break; }
     }
@@ -2044,6 +2128,7 @@ function updateMines(dt) {
 }
 // вибух міни: поруч — мінус 50% здоров'я без броні (15 у броні), далі до MINE_R — менше; техніка — знищена ходова
 function mineExplode(x, y) {
+  SND_SRC = { x, y };
   G.lastBlast = { x, y, power: 90 };
   explosionFx(x, y - 4, 45, 50);
   Sfx.boom(false);
@@ -2135,24 +2220,27 @@ function isHeadHit(d, h) {
   if (h.stance === 'prone') return Math.abs(px - (h.facing > 0 ? r.x + r.w : r.x)) < 13;
   return py < r.y + 15;
 }
-const CRASH = 170; // швидкість удару (по нормалі), після якої дрон розбивається одразу
-// доторк до стіни: гвинт черкнув — дрон кидає й смикає, керування на мить зникає; третій доторк — падає
-// (знизу на землю/дах — м'якше: можна легенько сісти)
+const CRASH = 230, CRASH_ARMOR = 330, PROP_LIVES = 4; // удар по нормалі, після якого дрон розбивається одразу; доторків до поломки гвинтів
+function droneCrash(d) { return d.hp > 1 ? CRASH_ARMOR : CRASH; }
+// доторк до стіни: гвинт черкнув — дрон кидає й смикає, керування на мить зникає; кілька доторків — падає
+// (знизу на землю/дах — м'якше: можна легенько сісти); броня-клітка береже гвинти — лише відкидає
 function droneTouch(d, impact, nx, ny) {
-  const floor = ny < -0.7, soft = floor ? 90 : 30, side = Math.hypot(d.vx - nx * (d.vx * nx + d.vy * ny), d.vy - ny * (d.vx * nx + d.vy * ny));
-  if (impact < soft && (floor || side < 160)) return false; // ледь торкнувся або ковзає повільно
+  const armored = d.hp > 1, floor = ny < -0.7, soft = floor ? 110 : 55, side = Math.hypot(d.vx - nx * (d.vx * nx + d.vy * ny), d.vy - ny * (d.vx * nx + d.vy * ny));
+  if (impact < soft && (floor || side < 230)) return false; // ледь торкнувся або ковзає вздовж стіни
   if (d.touchCd > 0) return false;
-  d.touchCd = 0.45;
-  d.scrapes = (d.scrapes || 0) + (impact > soft * 2.5 || side > 260 ? 1.4 : 1);
-  d.stunT = 0.35 + Math.min(0.5, impact / 300);
-  d.vx += nx * 180 + rand(-140, 140); d.vy += ny * 180 + rand(-140, 140); // відкидає
+  d.touchCd = 0.5;
+  if (!armored) d.scrapes = (d.scrapes || 0) + (impact > soft * 2.5 || side > 330 ? 1.3 : 1);
+  d.stunT = (armored ? 0.12 : 0.25) + Math.min(0.3, impact / 450);
+  const kick = armored ? 90 : 130;
+  d.vx += nx * kick + rand(-90, 90); d.vy += ny * kick + rand(-90, 90); // відкидає
   d.tilt = clamp(d.tilt + rand(-0.6, 0.6), -0.9, 0.9);
   for (let k = 0; k < 5; k++) G.parts.push({ type: 'spark', x: d.x - nx * DRONE_R, y: d.y - ny * DRONE_R, vx: rand(-120, 120), vy: rand(-140, 30), life: 0.3, max: 0.3 });
   Sfx.tone(320, 0.06, 0.09);
-  if (d.scrapes >= 3) { feed(d.player.name + ': дрон зачепив стіну — гвинти зламано', '#ff7a2a'); return true; }
+  if (d.scrapes >= PROP_LIVES) { feed(d.player.name + ': дрон зачепив стіну — гвинти зламано', '#ff7a2a'); return true; }
   return false;
 }
 function updateDrone(d, dt) {
+  SND_SRC = { x: d.x, y: d.y, p: d.player };
   const W = G.W, c = d.player.ctrl;
   // на землі («ждун»): АКБ не сідає, гвинти стоять
   if (d.landed) {
@@ -2227,14 +2315,14 @@ function updateDrone(d, dt) {
     const sy = landSurface(d.x, d.y - DRONE_R);
     if (d.y + DRONE_R >= sy - 1) { d.y = sy - DRONE_R; d.vx = 0; d.vy = 0; d.landed = true; d.landing = false; return; }
   }
-  if (d.scrapes > 0) d.scrapes = Math.max(0, d.scrapes - dt / 8); // гвинти «відходять» повільно
+  if (d.scrapes > 0) d.scrapes = Math.max(0, d.scrapes - dt / 5); // гвинти «відходять» повільно
   if (d.touchCd > 0) d.touchCd -= dt;
   if (d.stunT > 0) d.stunT -= dt;
   // земля й стіни тунелів (порожнини вільні — дрон може залетіти в тунель)
   const nn = dirtNormal(W, d.x, d.y, DRONE_R);
   if (nn) {
     const impact = -(d.vx * nn.x + d.vy * nn.y);
-    if (impact > CRASH || d.jammed || droneTouch(d, impact, nn.x, nn.y)) { explodeDrone(d); return; }
+    if (impact > droneCrash(d) || d.jammed || droneTouch(d, impact, nn.x, nn.y)) { explodeDrone(d); return; }
     for (let k = 0; k < 14 && dirtNormal(W, d.x, d.y, DRONE_R); k++) { d.x += nn.x; d.y += nn.y; }
     if (impact > 0) { d.vx += nn.x * impact * 1.2; d.vy += nn.y * impact * 1.2; }
     d.vx *= 0.97;
@@ -2244,10 +2332,10 @@ function updateDrone(d, dt) {
     const nx = clamp(d.x, s.x, s.x + s.w), ny = clamp(d.y, s.y, s.y + s.h);
     const dx = d.x - nx, dy = d.y - ny, dd = dx * dx + dy * dy;
     if (dd >= DRONE_R * DRONE_R) continue;
-    if (dd === 0) { if (d.jammed || Math.hypot(d.vx, d.vy) > CRASH) { explodeDrone(d); return; } d.y = s.y - DRONE_R; d.vy = 0; continue; }
+    if (dd === 0) { if (d.jammed || Math.hypot(d.vx, d.vy) > droneCrash(d)) { explodeDrone(d); return; } d.y = s.y - DRONE_R; d.vy = 0; continue; }
     const l = Math.sqrt(dd);
     const dot = (d.vx * dx + d.vy * dy) / l;
-    if (-dot > CRASH || d.jammed || droneTouch(d, -dot, dx / l, dy / l)) { explodeDrone(d); return; }
+    if (-dot > droneCrash(d) || d.jammed || droneTouch(d, -dot, dx / l, dy / l)) { explodeDrone(d); return; }
     d.x = nx + (dx / l) * DRONE_R; d.y = ny + (dy / l) * DRONE_R;
     if (dot < 0) { d.vx -= (dx / l) * dot * 1.3; d.vy -= (dy / l) * dot * 1.3; }
   }
@@ -2289,7 +2377,7 @@ function explosionFx(x, y, power, radius) {
 function explosion(x, y, power, radius, direct) {
   const W = G.W;
   G.lastBlast = { x, y, power };
-  Sfx.boom(power > 60);
+  { const s0 = SND_SRC; SND_SRC = { x, y }; Sfx.boom(power > 60); SND_SRC = s0; }
   explosionFx(x, y, power, radius);
   douseFires(x, y, radius);
   // техніка: броня приймає удар, люди всередині лише поранені
@@ -2311,8 +2399,8 @@ function explosion(x, y, power, radius, direct) {
       else { occ.forEach((o) => hurt(o, power > 60 ? 18 : 6, 'blast')); feed(VEH[v.type].name + ' пошкоджено', '#f2994a'); }
     }
   }
-  // люди
-  for (const h of G.humans) {
+  // люди (фугас рахує їх сам)
+  for (const h of G.noHumanDmg ? [] : G.humans) {
     if (h.dead || h.saved || h.vehicle || shielded.has(h)) continue;
     if (covered(h)) {
       const e = hideEntrance(h);
@@ -2500,9 +2588,13 @@ function updateGame(dt) {
   for (const dp of G.dps) updateDronePlayer(dp, dt);
   for (const d of G.drones.slice()) updateDrone(d, dt);
   for (const d of G.drones) d.inBush = droneInBush(d);
+  SND_SRC = null;
   updateBullets(dt);
   updateBombs(dt);
   updateThrows(dt);
+  updateRockets(dt);
+  updateCharges(dt);
+  updateGarages(dt);
   updateMines(dt);
   updateAirBonuses(dt);
   updatePickups(dt);
@@ -2537,6 +2629,45 @@ function updateParts(dt) {
     }
   }
 }
+// ---------- Звук для тих, хто грає за цим ПК: свої звуки — повністю, чужі — за відстанню, чужі клацання — не чути ----------
+function sfxListeners() {
+  if (!G || !G.players) return [];
+  return typeof NET !== 'undefined' && NET.role === 'client' ? G.players.filter((p) => p.cid === NET.cid) : G.players.filter((p) => !p.bot && !p.remote);
+}
+function listenerPos(p) {
+  const e = p.ent;
+  if (p.role === 'drone' && e && e.drone) return { x: e.drone.x, y: e.drone.y };
+  if (p.role === 'human' && e) return { x: e.x, y: e.y - 30 };
+  return { x: p.cam.x, y: p.cam.y };
+}
+function sfxGain(src, name) {
+  if (!src || !G || typeof state === 'undefined' || state === 'lobby') return 1;
+  const L = sfxListeners();
+  if (!L.length) return 1;
+  const pi = src.p == null ? -1 : typeof src.p === 'number' ? src.p : src.p.idx;
+  if (pi >= 0 && L.some((p) => p.idx === pi)) return 1; // свій звук
+  if (name === 'click' || name === 'win') return 0; // чужі клацання інтерфейсу
+  if (src.x == null) return pi >= 0 ? 0 : 1;
+  const range = name === 'boom' ? 2600 : name === 'shot' ? 1500 : name === 'reb' ? 1000 : 750;
+  let best = 0;
+  for (const p of L) { const q = listenerPos(p); best = Math.max(best, clamp(1 - dist(q.x, q.y, src.x, src.y) / range, 0, 1)); }
+  return Math.pow(best, 1.4);
+}
+// гул дронів: свій дрон — рівно, чужі — що ближче, то гучніше
+function droneBuzz() {
+  let lvl = 0, pitch = 160;
+  if (!G) return [0, 160];
+  const L = sfxListeners();
+  for (const d of G.drones) {
+    if (d.landed) continue;
+    for (const p of L) {
+      const own = p.role === 'drone' && p.ent && p.ent.drone === d;
+      const q = listenerPos(p), l = own ? 0.5 : clamp(1 - dist(d.x, d.y, q.x, q.y) / 900, 0, 1);
+      if (l > lvl) { lvl = l; pitch = 150 + Math.hypot(d.vx || 0, d.vy || 0) * 0.25; }
+    }
+  }
+  return [lvl, pitch];
+}
 function updateGameTail(dt) {
   // відкритість людей (для стрілки дрона)
   for (const h of G.humans) {
@@ -2544,16 +2675,9 @@ function updateGameTail(dt) {
     else h.openTime += dt;
   }
   updateCameras(dt);
-  // звук дронів: гучність залежить від відстані до найближчої живої людини
-  let lvl = 0, pitch = 160;
-  for (const d of G.drones) {
-    if (d.landed) continue;
-    let md = 1e9;
-    for (const h of G.humans) if (!h.dead && !h.saved) md = Math.min(md, dist(d.x, d.y, h.x, h.y));
-    const l = clamp(1 - md / 900, 0, 1);
-    if (l > lvl) { lvl = l; pitch = 150 + Math.hypot(d.vx, d.vy) * 0.25; }
-  }
-  Sfx.setBuzz(G.over ? 0 : lvl, pitch);
+  SND_SRC = null;
+  const z = droneBuzz();
+  Sfx.setBuzz(G.over ? 0 : z[0], z[1]);
   // кінець гри
   if (!G.over) {
     if (G.mode === 'team') teamTick(dt);
