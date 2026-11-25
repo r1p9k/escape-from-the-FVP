@@ -13,8 +13,8 @@ const AIR_BONUS = {                                 // бонуси для др�
   ammo: { name: 'Поповнення скидів', short: '+СКИД', color: '#d79a5a' },
 };
 const HUMAN_LIVES = 3, RESPAWN_TIME = 3, NETS = 3; // 3 життя; відновлення через 3 с; 3 маскувальні сітки // «Альоша»: після 5+ збитих/пережитих дронів, триває 10 с
-const DROP_TYPES = ['frag', 'smoke', 'mine', 'fire', 'bomb'];
-const DROP_NAMES = { frag: 'Граната', smoke: 'Дим', mine: 'Міна', fire: 'Запальний', bomb: 'Фугас' };
+const DROP_TYPES = ['frag', 'smoke', 'mine', 'fire'];
+const DROP_NAMES = { frag: 'Граната', smoke: 'Дим', mine: 'Міна', fire: 'Запальний' };
 const DEFAULT_LOADOUT = ['frag', 'frag', 'smoke', 'mine'];
 const BOT_LOADOUTS = [['frag', 'frag', 'smoke', 'mine'], ['frag', 'frag', 'frag', 'mine'], ['frag', 'mine', 'mine', 'smoke'], ['frag', 'frag', 'smoke', 'smoke'], ['frag', 'fire', 'fire', 'mine'], ['frag', 'frag', 'fire', 'smoke']];
 const OPEN_TIME = 3;          // секунд на відкритій місцевості до появи стрілки
@@ -34,7 +34,7 @@ const STANCE_ACC = { stand: 'стоячи — розкид', crouch: 'сидяч
 const AIM_SECTOR = { burrow: [-0.75, 0.12], bunker: [-0.6, 0.05], trench: [-1.45, -0.12] };
 const PACK_CAP = 4;      // місць у рюкзаку: аптечки, заряди РЕБ, детектор
 const DETECT_R = 650;    // радіус детектора дронів
-const PICKUP_NAMES = { bazooka: 'Базука', molotov: 'Коктейлі Молотова', rifle: 'Автомат', shotgun: 'Дробовик', smg: 'Пістолет-кулемет', sniper: 'Снайперська гвинтівка', mg: 'Кулемет', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого', shovel: 'Лопата', grenade: 'Гранати', ammo: 'Набої', gasmask: 'Протигаз' };
+const PICKUP_NAMES = { bomb: 'Фугас', bazooka: 'Базука', molotov: 'Коктейлі Молотова', rifle: 'Автомат', shotgun: 'Дробовик', smg: 'Пістолет-кулемет', sniper: 'Снайперська гвинтівка', mg: 'Кулемет', reb: 'Заряд РЕБ', medkit: 'Аптечка', fuel: 'Каністра з пальним', armor: 'Бронежилет', detector: 'Детектор дронів', pack: 'Рюкзак загиблого', shovel: 'Лопата', grenade: 'Гранати', ammo: 'Набої', gasmask: 'Протигаз' };
 const DIG_PX_M = 30;     // одиниць світу в метрі копання (людина ≈ 1,8 м)
 const DIG_SPD = 13;      // швидкість копання, одиниць/с (повільно)
 const TUN_SPD = 72;      // хода зігнувшись у тунелі
@@ -83,7 +83,7 @@ function makeHuman(p, x) {
     player: p, x, y: gAt(G.W, x), vx: 0, vy: 0, stance: 'stand', facing: 1, onGround: true, onThin: false, wasGround: true,
     hp: 100, stamina: 1, staminaDelay: 0, exhausted: false, climb: null, onLadder: false, dropT: 0,
     vehicle: null, seat: null, hidden: null, tun: null, digging: null, shovel: Infinity, weapon: null, reb: 1, fireCd: 0,
-    rockets: 0, mines: 0, carry: null, mount: null, working: null, grenades: G.mode === 'team' ? 3 : GRENADES_START, molotovs: 1, throwSel: null, grenadeCd: 0, piloting: false,
+    rockets: 0, mines: 0, bombs: 0, carry: null, mount: null, working: null, grenades: G.mode === 'team' ? 3 : GRENADES_START, molotovs: 1, throwSel: null, grenadeCd: 0, piloting: false,
     openTime: 0, reveal: 0, hurtT: 0, dead: false, saved: false, anim: 0,
     aimA: -0.5, aiming: false, diving: false, diveCd: 0, canister: false, smokeT: 0, gasT: 0, gasWarned: false,
     armor: 0, beaten: 0, alCharges: 0, alT: 0, alGranted: false, hideAnim: null,
@@ -435,7 +435,9 @@ function updateHuman(h, dt) {
   }
   if (c.held('fire')) h.idleFire = 0;
   if (c.pressed('special')) {
-    if (c.held('aim') && h.alCharges > 0 && h.alT <= 0) activateAliosha(h);
+    const ch = myCharge(h);
+    if (ch) { ch.t = 0; feed(h.player.name + ' підірвав фугас', '#ff4a3a'); }
+    else if (c.held('aim') && h.alCharges > 0 && h.alT <= 0) activateAliosha(h);
     else activateReb(h);
   }
   checkShelter(h);
@@ -632,6 +634,7 @@ function canTake(h, p) {
   if (p.type === 'grenade') return h.grenades < GRENADES_MAX;
   if (p.type === 'molotov') return (h.molotovs || 0) < MOLOTOV_MAX;
   if (p.type === 'bazooka') return (h.rockets || 0) < ROCKET_MAX;
+  if (p.type === 'bomb') return !(h.bombs > 0);
   if (p.type === 'ammo') return !!h.weapon && h.weapon.ammo < WEAPONS[h.weapon.type].ammo * 2;
   if (p.type === 'medkit') return h.medkits < MEDKIT_MAX && packUsed(h) < PACK_CAP;
   if (p.type === 'reb') return packUsed(h) < PACK_CAP;
@@ -659,6 +662,7 @@ function takePickup(h, p) {
   else if (p.type === 'ammo') { h.weapon.ammo += WEAPONS[h.weapon.type].ammo; feed(h.player.name + ': поповнив набої', '#ddd'); }
   else if (p.type === 'grenade') { h.grenades = Math.min(GRENADES_MAX, h.grenades + 2); feed(h.player.name + ': гранат ' + h.grenades, '#c9a227'); }
   else if (p.type === 'molotov') { h.molotovs = Math.min(MOLOTOV_MAX, (h.molotovs || 0) + 2); feed(h.player.name + ': коктейлів Молотова ' + h.molotovs, '#ff8a3a'); }
+  else if (p.type === 'bomb') { h.bombs = 1; feed(h.player.name + ': фугас — закласти в тунелі ([' + h.player.ctrl.label('slot3') + '] у руки, [' + h.player.ctrl.label('fire') + '] — закласти)', '#ff4a3a'); }
   else if (p.type === 'bazooka') { h.rockets = ROCKET_MAX; feed(h.player.name + ': базука, ракет ' + h.rockets + ' — [' + h.player.ctrl.label('slot3') + '] у руки', '#c9a227'); }
   else if (p.type === 'gasmask') { h.gasmask = true; feed(h.player.name + ' вдягнув протигаз — дим більше не шкодить', '#9fd3c7'); }
   else if (p.type === 'armor') h.armor = 100;
@@ -1963,23 +1967,28 @@ function cyclePayload(d) {
     if (d.slots.includes(t)) { d.payload = t; return; }
   }
 }
-// фугас у бліндажі: біля входу в бліндаж чи нору або в підземному ході
-function bunkerAt(x, y) {
-  const W = G.W, sp = W.hides.find((q) => q.type !== 'pipe' && !q.ruined && Math.abs(x - q.x) < 50 && y > q.y - 40 && y < q.y + 90);
-  if (sp) return { sp, x: sp.x, y: sp.y };
-  const tp = y > gAt(W, x) + 8 ? pipeAt(W, x, y) : null;
-  return tp ? { sp: tp, x, y } : null;
+// ---------- Фугас: людина закладає в тунелі; вибух — кнопкою [Особливе] або сам через 15 с ----------
+const BOMB_TIME = 15, BOMB_SET_T = 3;
+function bombTunnel(h) { return !h.vehicle && !h.hidden && h.onGround && h.y > gAt(G.W, h.x) + 10 ? pipeAt(G.W, h.x, h.y) : null; }
+function startPlantBomb(h) {
+  if (!(h.bombs > 0) || h.working) return;
+  if (!bombTunnel(h)) { tipOnce(h, 'Фугас закладають у тунелі (під землею)'); return; }
+  h.working = { kind: 'bombset', t: 0, dur: BOMB_SET_T }; h.vx = 0;
 }
-function plantCharge(bk, player) {
-  const sp = bk.sp;
-  (G.charges || (G.charges = [])).push({ x: bk.x, y: bk.y, sp, t: 3, player, beep: 0 });
-  feed('Фугас закладено в бліндаж — 3 секунди!', '#ff4a3a');
+function plantCharge(h) {
+  const sp = bombTunnel(h);
+  if (!sp || !(h.bombs > 0)) return;
+  h.bombs--;
+  (G.charges || (G.charges = [])).push({ x: h.x, y: h.y, sp, t: BOMB_TIME, player: h.player, owner: h, beep: 0 });
+  feed(h.player.name + ' заклав фугас — ' + BOMB_TIME + ' с, [' + h.player.ctrl.label('special') + '] — підірвати раніше', '#ff4a3a');
+  if (!h.bombs) h.throwSel = nextThrow(h, 'bomb', true);
 }
+function myCharge(h) { return (G.charges || []).find((q) => q.owner === h && !q.dead) || null; }
 function updateCharges(dt) {
   if (!G.charges || !G.charges.length) return;
   for (const c of G.charges) {
     c.t -= dt; c.beep -= dt;
-    if (c.beep <= 0) { c.beep = c.t > 1 ? 0.5 : 0.2; SND_SRC = { x: c.x, y: c.y }; Sfx.tone(1250, 0.07, 0.12); }
+    if (c.beep <= 0) { c.beep = c.t > 5 ? 1 : c.t > 1.5 ? 0.5 : 0.2; SND_SRC = { x: c.x, y: c.y }; Sfx.tone(1250, 0.07, 0.12); }
     if (c.t <= 0) { c.dead = true; bunkerBlast(c); }
   }
   G.charges = G.charges.filter((c) => !c.dead);
@@ -2002,7 +2011,7 @@ function bunkerBlast(c) {
     else if (h.y > g + 30) hurt(h, 30, 'blast'); // глибоко в тунелі
     else hurt(h, 999, 'blast'); // на землі — не вижити
   }
-  feed('Фугас! Бліндаж і все навколо знищено', '#ff4a3a');
+  feed('Фугас! Тунель і все над ним знищено', '#ff4a3a');
   G.blastBy = null;
 }
 function updateBombs(dt) {
@@ -2028,8 +2037,7 @@ function updateBombs(dt) {
     G.blastBy = b.player;
     const into = (b.type === 'frag' || b.type === 'fire') && !hitH && !hitV ? hideAtPoint(b.x, b.y) : null;
     SND_SRC = { x: b.x, y: b.y };
-    if (b.type === 'bomb') { const bk = !hitH && !hitV ? bunkerAt(b.x, b.y) : null; if (bk) plantCharge(bk, b.player); else explosion(b.x, b.y, 95, 110); }
-    else if (into && into.e && b.type === 'frag') { feed('Скид залетів у ' + into.name + '!', '#ff8a5a'); grenadeInside({ inside: into, owner: { player: b.player } }); }
+    if (into && into.e && b.type === 'frag') { feed('Скид залетів у ' + into.name + '!', '#ff8a5a'); grenadeInside({ inside: into, owner: { player: b.player } }); }
     else if (b.type === 'frag') explosion(b.x, b.y, 80, 90);
     else if (b.type === 'fire') { startFire(b.x, b.y, 120, FIRE_T + 2, b.player); if (hitH) hurt(hitH, 25, 'fire'); if (into) for (const o of G.humans) if (!o.dead && o.hidden === into.sp) hurt(o, 45, 'fire'); }
     else if (b.type === 'mine') {

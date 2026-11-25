@@ -50,9 +50,9 @@ function handPos(h) { return { x: h.x + h.facing * 8, y: h.y - HUMAN_DIM[h.stanc
 // чи можна зараз цілитися гранатою (затиснута кнопка гранати)
 function canGrenAim(h) { return !!h.throwSel && throwCount(h, h.throwSel) > 0 && !h.carry && !h.canister && !h.mount && !h.vehicle; }
 // що можна кинути: граната, коктейль Молотова
-const THROW_KINDS = ['grenade', 'molotov', 'bazooka', 'mine'];
-function throwCount(h, k) { return k === 'grenade' ? h.grenades : k === 'molotov' ? h.molotovs || 0 : k === 'bazooka' ? h.rockets || 0 : k === 'mine' ? h.mines || 0 : 0; }
-const HAND_NAMES = { grenade: 'Граната', molotov: 'Коктейль Молотова', bazooka: 'Базука', mine: 'Міна' };
+const THROW_KINDS = ['grenade', 'molotov', 'bazooka', 'mine', 'bomb'];
+function throwCount(h, k) { return k === 'grenade' ? h.grenades : k === 'molotov' ? h.molotovs || 0 : k === 'bazooka' ? h.rockets || 0 : k === 'mine' ? h.mines || 0 : k === 'bomb' ? h.bombs || 0 : 0; }
+const HAND_NAMES = { grenade: 'Граната', molotov: 'Коктейль Молотова', bazooka: 'Базука', mine: 'Міна', bomb: 'Фугас' };
 function nextThrow(h, cur, skipNull) {
   const order = [null, ...THROW_KINDS];
   for (let k = 1; k <= order.length; k++) { const t = order[(order.indexOf(cur) + k) % order.length]; if (t === null ? !skipNull : throwCount(h, t) > 0) return t; }
@@ -63,6 +63,7 @@ function cycleThrow(h) {
   if (h.throwSel && !was) h.aimA = -0.55; // типовий кут кидка
   const L = (a) => h.player.ctrl.label(a);
   if (h.throwSel === 'bazooka') { h.aimA = -0.35; tipOnce(h, 'Базука: тримай ' + L('fire') + ' — сила, відпусти — постріл; ' + L('aim') + ' — кут; ' + L('build') + ' — точка прильоту (' + L('aim') + '+стрілки — навести, ' + L('fire') + ' — постріл)'); }
+  else if (h.throwSel === 'bomb') tipOnce(h, 'Фугас: у тунелі ' + L('fire') + ' — закласти (' + BOMB_SET_T + ' с); вибух через ' + BOMB_TIME + ' с або ' + L('special') + ' — підірвати. Тікай подалі!');
   else if (h.throwSel === 'mine') tipOnce(h, 'Міна: ' + L('fire') + ' — закласти попереду (' + MINE_PLACE_T + ' с), ' + L('slot1') + ' — зброя');
   else if (h.throwSel) tipOnce(h, HAND_NAMES[h.throwSel] + ' в руці: ' + L('fire') + ' — кинути (без прицілу — якнайдалі), ' + L('aim') + ' — під кутом, ' + L('slot1') + ' — зброя');
   else if (!was && !throwCount(h, 'grenade') && !throwCount(h, 'molotov')) tipOnce(h, 'Гранат і коктейлів немає');
@@ -71,6 +72,7 @@ function cycleThrow(h) {
 function handItemFire(h, c, dt) {
   if (h.throwSel === 'bazooka') { bazookaInput(h, c, dt); return; }
   if (h.throwSel === 'mine') { startPlaceMine(h); h.fireLock = true; return; }
+  if (h.throwSel === 'bomb') { startPlantBomb(h); h.fireLock = true; return; }
   if (!h.aiming) h.aimA = -Math.PI / 4; // не цілячись — під 45°, найдальша траєкторія
   throwSelected(h); h.fireLock = true;
 }
@@ -487,6 +489,7 @@ function tickWork(h, c, dt) {
     if (D.t >= D.dur) { h.working = null; buildDigDown(h, D); Sfx.click(); }
     return;
   }
+  if (D.kind === 'bombset') { h.vx = 0; if (D.t < D.dur) return; h.working = null; plantCharge(h); Sfx.click(); return; }
   if (D.kind === 'demine' || D.kind === 'mineset') {
     h.vx = 0;
     if (D.kind === 'demine' && !G.mines.includes(D.mine)) { h.working = null; return; } // уже вибухнула чи забрали
