@@ -48,10 +48,11 @@ function dropCarry(h) {
 function throwAngle(h) { return h.aiming ? aimWorld(h) : h.facing > 0 ? -0.55 : Math.PI + 0.55; }
 function handPos(h) { return { x: h.x + h.facing * 8, y: h.y - HUMAN_DIM[h.stance].h * 0.82 - trenchLift(h) }; }
 // чи можна зараз цілитися гранатою (затиснута кнопка гранати)
-function canGrenAim(h) { return !!h.throwSel && throwCount(h, h.throwSel) > 0 && !h.carry && !h.canister && !h.mount && !h.vehicle && h.grenadeCd <= 0; }
+function canGrenAim(h) { return !!h.throwSel && throwCount(h, h.throwSel) > 0 && !h.carry && !h.canister && !h.mount && !h.vehicle; }
 // що можна кинути: граната, коктейль Молотова
-const THROW_KINDS = ['grenade', 'molotov'];
-function throwCount(h, k) { return k === 'grenade' ? h.grenades : k === 'molotov' ? h.molotovs || 0 : 0; }
+const THROW_KINDS = ['grenade', 'molotov', 'bazooka', 'mine'];
+function throwCount(h, k) { return k === 'grenade' ? h.grenades : k === 'molotov' ? h.molotovs || 0 : k === 'bazooka' ? h.rockets || 0 : k === 'mine' ? h.mines || 0 : 0; }
+const HAND_NAMES = { grenade: 'Граната', molotov: 'Коктейль Молотова', bazooka: 'Базука', mine: 'Міна' };
 function nextThrow(h, cur, skipNull) {
   const order = [null, ...THROW_KINDS];
   for (let k = 1; k <= order.length; k++) { const t = order[(order.indexOf(cur) + k) % order.length]; if (t === null ? !skipNull : throwCount(h, t) > 0) return t; }
@@ -60,8 +61,116 @@ function nextThrow(h, cur, skipNull) {
 function cycleThrow(h) {
   const was = h.throwSel; h.throwSel = nextThrow(h, h.throwSel, false);
   if (h.throwSel && !was) h.aimA = -0.55; // типовий кут кидка
-  if (h.throwSel) tipOnce(h, (h.throwSel === 'grenade' ? 'Граната' : 'Коктейль Молотова') + ' в руці: ' + h.player.ctrl.label('fire') + ' — кинути, ' + h.player.ctrl.label('slot1') + ' — зброя');
+  const L = (a) => h.player.ctrl.label(a);
+  if (h.throwSel === 'bazooka') { h.aimA = -0.35; tipOnce(h, 'Базука: тримай ' + L('fire') + ' — сила, відпусти — постріл; ' + L('aim') + ' — кут; ' + L('build') + ' — точка прильоту (' + L('aim') + '+стрілки — навести, ' + L('fire') + ' — постріл)'); }
+  else if (h.throwSel === 'mine') tipOnce(h, 'Міна: ' + L('fire') + ' — закласти попереду (' + MINE_PLACE_T + ' с), ' + L('slot1') + ' — зброя');
+  else if (h.throwSel) tipOnce(h, HAND_NAMES[h.throwSel] + ' в руці: ' + L('fire') + ' — кинути (без прицілу — якнайдалі), ' + L('aim') + ' — під кутом, ' + L('slot1') + ' — зброя');
   else if (!was && !throwCount(h, 'grenade') && !throwCount(h, 'molotov')) tipOnce(h, 'Гранат і коктейлів немає');
+}
+// вогонь із предметом у руці
+function handItemFire(h, c, dt) {
+  if (h.throwSel === 'bazooka') { bazookaInput(h, c, dt); return; }
+  if (h.throwSel === 'mine') { startPlaceMine(h); h.fireLock = true; return; }
+  if (!h.aiming) h.aimA = -Math.PI / 4; // не цілячись — під 45°, найдальша траєкторія
+  throwSelected(h); h.fireLock = true;
+}
+// ---------- Базука: кут і сила (тримати — сила, відпустити — постріл) або точка прильоту ----------
+const ROCKET_MAX = 3, ROCKET_G = 520, ROCKET_V0 = 280, ROCKET_V1 = 980, BAZ_CHARGE = 1.3;
+function bazookaInput(h, c, dt) {
+  if (h.rocketCd > 0) h.rocketCd -= dt;
+  if (!(h.rockets > 0) || h.hidden || h.vehicle) { h.bzCharge = 0; return; }
+  if (h.bzPoint && h.aiming) { // точка прильоту: ракета сама летить туди
+    if (c.pressed('fire') && !(h.rocketCd > 0) && !h.fireLock) { const s = rocketSolve(h, h.bzMark.x, h.bzMark.y); fireRocket(h, s.a, s.v); }
+    return;
+  }
+  if (c.held('fire') && !h.fireLock && !(h.rocketCd > 0)) {
+    h.bzCharge = (h.bzCharge || 0) + dt;
+    if (h.bzCharge >= BAZ_CHARGE) bazookaRelease(h, c);
+  } else if (h.bzCharge > 0) bazookaRelease(h, c);
+}
+function bazookaRelease(h, c) {
+  const k = clamp(h.bzCharge / BAZ_CHARGE, 0, 1);
+  h.bzCharge = 0;
+  if (!h.aiming && c.cur.aimAngle !== undefined) setAimWorld(h, c.cur.aimAngle);
+  fireRocket(h, aimWorld(h), ROCKET_V0 + (ROCKET_V1 - ROCKET_V0) * k);
+}
+// маркер точки прильоту: стрілки рухають його (людина стоїть)
+function bazookaMarker(h, c, dt) {
+  if (!h.bzMark) h.bzMark = { x: h.x + h.facing * 320, off: 0 };
+  const mx = (c.held('right') ? 1 : 0) - (c.held('left') ? 1 : 0), my = (c.held('down') ? 1 : 0) - (c.held('up') ? 1 : 0);
+  h.bzMark.x = clamp(h.bzMark.x + mx * 420 * dt, h.x - 1400, h.x + 1400);
+  h.bzMark.off = clamp((h.bzMark.off || 0) + my * 260 * dt, -600, 0); // ↑ — вище над землею (вікно, дрон), ↓ — назад до землі
+  h.bzMark.y = landSurface(h.bzMark.x, G.W.ground ? gAt(G.W, h.bzMark.x) - 40 : h.y) - 2 + h.bzMark.off; // маркер іде по рельєфу
+  h.facing = h.bzMark.x >= h.x ? 1 : -1;
+  setAimWorld(h, rocketSolve(h, h.bzMark.x, h.bzMark.y).a);
+}
+// кут і швидкість, щоб влучити в точку (низька дуга; не дістає — 45° на повну)
+function rocketSolve(h, tx, ty) {
+  const p = handPos(h), dx = tx - p.x, dy = p.y - ty, g = ROCKET_G, X = Math.abs(dx);
+  for (let v = 380; v <= ROCKET_V1; v += 40) {
+    const disc = v * v * v * v - g * (g * X * X + 2 * dy * v * v);
+    if (disc < 0) continue;
+    const th = Math.atan((v * v - Math.sqrt(disc)) / (g * X || 1));
+    return { a: dx >= 0 ? -th : Math.PI + th, v };
+  }
+  return { a: dx >= 0 ? -Math.PI / 4 : Math.PI + Math.PI / 4, v: ROCKET_V1 };
+}
+function fireRocket(h, ang, spd) {
+  if (!(h.rockets > 0)) return;
+  const p = handPos(h);
+  h.rockets--; h.rocketCd = 1.1; h.fireLock = true; h.reveal = 2;
+  (G.rockets || (G.rockets = [])).push({ x: p.x + Math.cos(ang) * 20, y: p.y + Math.sin(ang) * 20, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd, owner: h, t: 0 });
+  for (let i = 0; i < 8; i++) G.parts.push({ type: 'smoke', x: p.x - Math.cos(ang) * 22, y: p.y - Math.sin(ang) * 22, vx: -Math.cos(ang) * rand(60, 160) + rand(-30, 30), vy: -Math.sin(ang) * rand(60, 160) + rand(-30, 10), life: 1.2, max: 1.2, size: rand(8, 14), light: true });
+  Sfx.noise_(0.45, 0.4, 500, 'lowpass');
+  if (!h.rockets) { h.throwSel = nextThrow(h, 'bazooka', true); h.bzPoint = false; }
+}
+function updateRockets(dt) {
+  if (!G.rockets || !G.rockets.length) return;
+  const W = G.W;
+  for (const r of G.rockets) {
+    r.t += dt;
+    r.vy += ROCKET_G * dt;
+    const steps = Math.max(1, Math.ceil(Math.hypot(r.vx, r.vy) * dt / 6));
+    let hit = null, hd = null;
+    for (let s = 0; s < steps && !hit; s++) {
+      r.x += r.vx * dt / steps; r.y += r.vy * dt / steps;
+      if (r.x < 0 || r.x > W.width || r.t > 9) { r.dead = true; break; }
+      if (pointSolid(W, r.x, r.y, solidsNear(W, r.x - 4, r.x + 4)) || dirtNormal(W, r.x, r.y, 2)) { hit = 'wall'; break; }
+      for (const d of G.drones) if (!d.dead && dist(r.x, r.y, d.x, d.y) < DRONE_R + 5 && !ally(r.owner, d)) { hit = 'drone'; hd = d; break; }
+      if (!hit) for (const h of G.humans) {
+        if (h.dead || h.saved || covered(h) || (h === r.owner && r.t < 0.25)) continue;
+        if (rectDist(r.x, r.y, humanRect(h)) < 3) { hit = 'h'; break; }
+      }
+      if (!hit) for (const v of W.vehicles) if (!v.dead && rectDist(r.x, r.y, vehRect(v)) < 2) { hit = 'v'; break; }
+      if (!hit && G.ugvs) for (const u of G.ugvs) if (!u.dead && rectDist(r.x, r.y, ugvRect(u)) < 2) { hit = 'u'; break; }
+    }
+    if (RND() < 0.8) G.parts.push({ type: 'smoke', x: r.x - r.vx * 0.02, y: r.y - r.vy * 0.02, vx: rand(-10, 10), vy: rand(-20, 0), life: 0.9, max: 0.9, size: rand(5, 9), light: true });
+    if (!hit) continue;
+    r.dead = true;
+    G.blastBy = r.owner ? r.owner.player : null;
+    SND_SRC = { x: r.x, y: r.y };
+    if (hd) shootDownDrone(hd, r.owner);
+    explosion(r.x, r.y, 85, 95);
+    G.blastBy = null;
+  }
+  G.rockets = G.rockets.filter((r) => !r.dead);
+}
+// ---------- Міни: розмінувати (у рюкзак) і закласти ----------
+const DEMINE_T = 4, MINE_PLACE_T = 2.5;
+function nearMine(h) {
+  if (h.vehicle || h.hidden || !h.onGround) return null;
+  return G.mines.find((m) => m.arm <= 0 && Math.abs(m.x - h.x) < MINE_TRIGGER + 32 && Math.abs(m.y - h.y) < 26) || null;
+}
+function startDemine(h, mi) {
+  if (packUsed(h) >= PACK_CAP) { tipOnce(h, 'Рюкзак повний — міну нікуди покласти'); return; }
+  h.working = { kind: 'demine', t: 0, dur: DEMINE_T * (h.stance === 'stand' ? 1.5 : 1), mine: mi }; h.vx = 0;
+  feed(h.player.name + ' розміновує…', '#c9a227');
+}
+function startPlaceMine(h) {
+  if (!(h.mines > 0) || !h.onGround || h.hidden || h.vehicle || h.working) return;
+  const x = clamp(h.x + h.facing * (MINE_TRIGGER + 16), 20, G.W.width - 20);
+  if (pipeAt(G.W, x, h.y) && !pipeAt(G.W, x, gAt(G.W, x))) { /* у тунелі — на підлогу тунелю */ }
+  h.working = { kind: 'mineset', t: 0, dur: MINE_PLACE_T, x, y: landSurface(x, h.y - 20) }; h.vx = 0;
 }
 function throwSelected(h) { if (h.throwSel === 'molotov') throwMolotov(h, aimWorld(h)); else throwGrenade(h, aimWorld(h)); }
 // коктейль Молотова: розбивається об будь-що й розливає вогонь
@@ -376,6 +485,24 @@ function tickWork(h, c, dt) {
   if (D.kind === 'down') {
     h.digT = 0.2; digDirt(h.x + D.dir * 12, h.y);
     if (D.t >= D.dur) { h.working = null; buildDigDown(h, D); Sfx.click(); }
+    return;
+  }
+  if (D.kind === 'demine' || D.kind === 'mineset') {
+    h.vx = 0;
+    if (D.kind === 'demine' && !G.mines.includes(D.mine)) { h.working = null; return; } // уже вибухнула чи забрали
+    if (D.t < D.dur) return;
+    h.working = null;
+    if (D.kind === 'demine') {
+      G.mines = G.mines.filter((m) => m !== D.mine);
+      h.mines = (h.mines || 0) + 1;
+      feed(h.player.name + ' розмінував міну — вона в рюкзаку (' + h.mines + ')', '#c9a227');
+    } else if (h.mines > 0) {
+      h.mines--;
+      G.mines.push({ x: D.x, y: D.y + 3, arm: 3, seed: Math.random() * 10, player: h.player, hand: true });
+      feed(h.player.name + ' заклав міну', '#c9a227');
+      if (!h.mines) h.throwSel = nextThrow(h, 'mine', true);
+    }
+    Sfx.click();
     return;
   }
   if (D.kind === 'kit' || D.kind === 'ditch' || D.kind === 'bridge' || D.kind === 'fill') {

@@ -284,32 +284,44 @@ function initSupply() {
 }
 function baseX(t) { return t ? G.W.start2.x : G.W.start.x; }
 // НРК виїжджає із захопленого об'єкта й їде до своєї бази
-function spawnUgv(t, quiet, x) {
-  const W = G.W;
-  G.ugvs.push({ team: t, player: { team: t }, x, y: gAt(W, x), dir: Math.sign(baseX(t) - x) || (t ? 1 : -1), hp: UGV_HP, ang: 0, wheel: 0 });
-  if (!quiet) feed('НРК ' + TEAMS[t].gen + ' виїхав із підвозом', TEAMS[t].col);
+function spawnUgv(t, stops) {
+  const W = G.W, x = baseX(t);
+  G.ugvs.push({ team: t, player: { team: t }, x, y: gAt(W, x), dir: Math.sign(stops[0].x - x) || (t ? -1 : 1), hp: UGV_HP, ang: 0, wheel: 0, stops: stops.slice(), wait: 0 });
 }
+// де зупинитися біля об'єкта
+function ugvStopX(o) { return o.kind === 'bld' && o.ref ? o.ref.x + o.ref.w / 2 : o.x; }
 function ugvRect(u) { return { x: u.x - 24, y: u.y - 20, w: 48, h: 20 }; }
 function updateSupply(dt) {
   const W = G.W;
   for (const t of [0, 1]) if ((G.ugvT[t] -= dt) <= 0) {
-    // їздять лише від захоплених об'єктів (не від бази й не впритул до неї)
-    const src = G.objs.filter((o) => o.owner === t && o.kind !== 'base' && Math.abs(o.x - baseX(t)) > 300);
-    if (!src.length) { G.ugvT[t] = 3; continue; }
-    G.ugvT[t] = UGV_EVERY; spawnUgv(t, true, pick(src).x);
+    // з бази — по черзі до кожного захопленого об'єкта (від ближчого до дальшого)
+    const bx = baseX(t), stops = G.objs.filter((o) => o.owner === t && o.kind !== 'base' && Math.abs(o.x - bx) > 300).sort((a, b) => Math.abs(a.x - bx) - Math.abs(b.x - bx));
+    if (!stops.length) { G.ugvT[t] = 3; continue; }
+    G.ugvT[t] = UGV_EVERY;
+    baseResupply(t);
+    spawnUgv(t, stops);
+    feed('НРК ' + TEAMS[t].gen + ' виїхав із бази з припасами (зупинок: ' + stops.length + ')', TEAMS[t].col);
   }
   for (const u of G.ugvs) {
     if (u.dead) continue;
-    u.x += u.dir * UGV_SPD * dt; u.wheel += dt * 10;
+    if (u.wait > 0) { u.wait -= dt; continue; }
+    while (u.stops.length && u.stops[0].owner !== u.team) u.stops.shift(); // об'єкт уже втрачено — далі
+    const goal = u.stops[0], gx = goal ? ugvStopX(goal) : baseX(u.team);
+    if (Math.abs(gx - u.x) < 6) {
+      if (goal) { deliverStop(u, goal); u.stops.shift(); u.wait = 2.5; }
+      else u.dead = true; // повернувся на базу
+      continue;
+    }
+    u.dir = Math.sign(gx - u.x);
+    u.x += u.dir * Math.min(UGV_SPD * dt, Math.abs(gx - u.x)); u.wheel += dt * 10;
     u.y = gAt(W, u.x);
     u.ang = Math.atan2(gAt(W, u.x + 14) - gAt(W, u.x - 14), 28);
-    if ((baseX(u.team) - u.x) * u.dir <= 0) deliverUgv(u);
   }
   G.ugvs = G.ugvs.filter((u) => !u.dead);
 }
-function deliverUgv(u) {
-  const t = u.team, W = G.W, bx = baseX(t);
-  u.dead = true;
+// база отримує з тилу дрони й трохи зброї — коли НРК вирушає
+function baseResupply(t) {
+  const W = G.W, bx = baseX(t);
   const got = Math.min(UGV_DRONES, STOCK_MAX - G.stock[t]);
   G.stock[t] += got;
   // зброя й припаси біля бази (не більше 4 штук, щоб не завалити)
@@ -318,17 +330,20 @@ function deliverUgv(u) {
     const x = basePickupX(t);
     W.pickups.push({ type: weighted({ rifle: 0.7, shotgun: 0.5, ammo: 1.5, grenade: 1, medkit: 1 }), x, y: gAt(W, x) });
   }
-  // і в кожному захопленому будинку та бліндажі (тунелі) — по одиниці зброї чи припасів
-  for (const o of G.objs) {
-    if (o.owner !== t || (o.kind !== 'bld' && o.kind !== 'tunnel') || !o.ref) continue;
+}
+// зупинка НРК біля об'єкта: зброя й припаси в будинок, у тунель чи поруч
+function deliverStop(u, o) {
+  const W = G.W;
+  for (let i = 0; i < 2; i++) {
     let x, y;
-    if (o.kind === 'bld') { const b = o.ref; if (b.ruined) continue; x = b.x + b.w * rand(0.25, 0.75); y = b.y + b.h; }
-    else { const sp = o.ref; if (sp.b - sp.a < 40) continue; x = rand(sp.a + 20, sp.b - 20); y = tunFloor(W, sp, x); }
-    if (W.pickups.filter((p) => !p.taken && Math.abs(p.x - x) < 120 && Math.abs(p.y - y) < 60).length >= 2) continue;
-    W.pickups.push({ type: weighted({ rifle: 1, shotgun: 0.7, mg: 0.3, grenade: 0.4, ammo: 0.3 }), x, y });
+    if (o.kind === 'bld' && o.ref) { const b = o.ref; if (b.ruined) break; x = b.x + b.w * rand(0.25, 0.75); y = b.y + b.h; }
+    else if (o.kind === 'tunnel' && o.ref && o.ref.b - o.ref.a >= 40) { const sp = o.ref; x = rand(sp.a + 20, sp.b - 20); y = tunFloor(W, sp, x); }
+    else { x = clamp(o.x + rand(-40, 40), 20, W.width - 20); y = gAt(W, x); }
+    if (W.pickups.filter((p) => !p.taken && Math.abs(p.x - x) < 120 && Math.abs(p.y - y) < 60).length >= 3) break;
+    W.pickups.push({ type: weighted({ rifle: 1, shotgun: 0.7, mg: 0.3, grenade: 0.6, ammo: 0.8, medkit: 0.6, bazooka: 0.15 }), x, y });
   }
-  feed('НРК ' + TEAMS[t].gen + ' доставив ' + got + ' дрони, зброю — на базу, у будинки й бліндажі', TEAMS[t].col);
-  Sfx.tone(520, 0.12, 0.08);
+  feed('НРК ' + TEAMS[u.team].gen + ' привіз припаси: ' + (o.name || ({ bld: 'будинок', tunnel: 'тунель', bunker: 'бліндаж' }[o.kind] || 'позиція')), TEAMS[u.team].col);
+  SND_SRC = { x: u.x, y: u.y }; Sfx.tone(520, 0.12, 0.08);
 }
 function hurtUgv(u, dmg, by) {
   if (u.dead || dmg <= 0) return;

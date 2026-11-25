@@ -33,17 +33,17 @@ function rectDist(px, py, r) {
 
 // ===== Керування =====
 const Keys = {};
-const ACTIONS = ['left', 'right', 'up', 'down', 'sprint', 'interact', 'dig', 'fire', 'special', 'aim', 'slot1', 'slot2', 'slot3', 'drop', 'build', 'roll'];
+const ACTIONS = ['left', 'right', 'up', 'down', 'sprint', 'interact', 'dig', 'fire', 'special', 'aim', 'slot1', 'slot2', 'slot3', 'drop', 'build', 'roll', 'mount'];
 // Одна клавіатура = один гравець. Ліва рука на WASD, великий палець на пробілі.
 // Стрілки дублюють WASD (рух і кут прицілу).
 const KB_SCHEMES = {
   kb: { name: 'Клавіатура', short: 'WASD', keys: {
     left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'], up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'],
     sprint: ['ShiftLeft', 'ShiftRight'], interact: ['KeyE'], dig: ['KeyR'], fire: ['KeyF', 'KeyJ'], special: ['KeyQ'], aim: ['Space'],
-    slot1: ['Digit1', 'Numpad1'], slot2: ['Digit2', 'Numpad2'], slot3: ['Digit3', 'Numpad3'], drop: ['KeyG'], build: ['KeyB'], roll: ['KeyC'],
+    slot1: ['Digit1', 'Numpad1'], slot2: ['Digit2', 'Numpad2'], slot3: ['Digit3', 'Numpad3'], drop: ['KeyG'], build: ['KeyB'], roll: ['KeyC'], mount: ['KeyV'],
   } },
 };
-const GP_LABELS = { left: '←', right: '→', up: '↑/A', down: '↓/B', sprint: 'LB', interact: 'X', dig: 'Start', fire: 'RB', special: 'Y', aim: 'LT', slot1: 'Back', slot2: 'L3', slot3: 'R3', drop: '—', build: '—', roll: '—' };
+const GP_LABELS = { left: '←', right: '→', up: '↑/A', down: '↓/B', sprint: 'LB', interact: 'X', dig: 'Start', fire: 'RB', special: 'Y', aim: 'LT', slot1: 'Back', slot2: 'L3', slot3: 'R3', drop: '—', build: '—', roll: '—', mount: '—' };
 const LOBBY_CODES = ['Escape', 'Enter'];
 const USED_CODES = new Set(LOBBY_CODES);
 for (const s of Object.values(KB_SCHEMES)) for (const cs of Object.values(s.keys)) for (const c of cs) USED_CODES.add(c);
@@ -135,8 +135,9 @@ const GlobalKeys = {
 };
 
 // ===== Звук (синтез через WebAudio) =====
+let SND_SRC = null; // звідки звук: { x, y, p } — гравець, що його спричинив
 const Sfx = {
-  ctx: null,
+  ctx: null, k: 1,
   unlock() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     try {
@@ -168,7 +169,8 @@ const Sfx = {
     const ctx = this.ctx, t = ctx.currentTime;
     const src = ctx.createBufferSource(); src.buffer = this.noise;
     const f = ctx.createBiquadFilter(); f.type = type || 'lowpass'; f.frequency.value = freq;
-    const g = ctx.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    if (this.k < 0.02) return;
+    const g = ctx.createGain(); g.gain.setValueAtTime(vol * this.k, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     src.connect(f); f.connect(g); g.connect(this.master);
     src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.05);
   },
@@ -176,7 +178,8 @@ const Sfx = {
     if (!this.ctx) return;
     const ctx = this.ctx, t = ctx.currentTime;
     const o = ctx.createOscillator(); o.type = type || 'square'; o.frequency.value = freq;
-    const g = ctx.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    if (this.k < 0.02) return;
+    const g = ctx.createGain(); g.gain.setValueAtTime(vol * this.k, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + 0.05);
   },
   shot() { this.noise_(0.09, 0.3, 2200, 'highpass'); },

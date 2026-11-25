@@ -59,7 +59,7 @@ function botShootTarget(h, drone, td, L) {
     const dd = dist(h.x, h.y - 30, o.x, o.y - 25);
     if (dd < bd && Math.abs(o.x - h.x) > 30 && lineOfSight(G.W, h.x, h.y - 34, o.x, o.y - 25)) { bd = dd; best = o; }
   }
-  return best ? { x: best.x, y: best.y - HUMAN_DIM[best.stance].h * 0.55, vx: best.vx, vy: best.vy } : null;
+  return best ? { x: best.x, y: best.y - HUMAN_DIM[best.stance].h * 0.55, vx: best.vx, vy: best.vy, ref: best } : null;
 }
 // стати на драбину вгору чи вниз (лише одна кнопка в кадрі, без кроку вбік)
 function botLadderTap(b, s, go) { s.left = s.right = s.aim = s.fire = false; s.up = s.down = false; b.tap(s, go < 0 ? 'up' : 'down'); }
@@ -74,7 +74,15 @@ function botMountTarget(h, mt, drone) {
     const ty = o.y - HUMAN_DIM[o.stance].h * 0.55, dd = dist(ox, oy, o.x, ty);
     if (dd < bd && ok(o.x, ty) && lineOfSight(G.W, ox + mt.dir * 14, oy, o.x, ty)) { bd = dd; best = o; }
   }
-  return best ? { x: best.x, y: best.y - HUMAN_DIM[best.stance].h * 0.55, vx: best.vx, vy: best.vy } : null;
+  return best ? { x: best.x, y: best.y - HUMAN_DIM[best.stance].h * 0.55, vx: best.vx, vy: best.vy, ref: best } : null;
+}
+// ціль помічають не миттєво: спершу розгледіти (далі — довше, поранений — швидше), лише потім наводити й стріляти
+function botSpot(b, key, dd, dt) {
+  const m = b.m, h = b.p.ent;
+  if (m.spotK !== key || G.time - (m.spotSeen || -9) > 3) { m.spotK = key; m.spotT = 0; m.spotNeed = 0.45 - 0.2 * b.L.react + dd / 1600 + Math.random() * 0.3; }
+  m.spotSeen = G.time;
+  m.spotT += dt * (h.hurtT > 0 ? 2.5 : 1);
+  return m.spotT >= m.spotNeed;
 }
 function thinkHuman(b, s, dt) {
   const h = b.p.ent, m = b.m, L = b.L, W = G.W;
@@ -105,10 +113,10 @@ function thinkHuman(b, s, dt) {
       if (m.stuck > 2) { b.tap(s, 'interact'); m.stuck = 0; m.progX = null; m.noVehT = 8; }
       if (danger && td < 280 && h.reb > 0 && Math.random() < L.react) b.tap(s, 'special');
     } else {
-      if (visibleThreat && td < WEAPONS.mg.range && v.mgAmmo > 0) {
+      if (visibleThreat && td < WEAPONS.mg.range && v.mgAmmo > 0 && botSpot(b, threat, td, dt)) {
         const T = VEH[v.type];
         s.aimAngle = botAim(b, v.x - v.dir * T.len * 0.15, v.y - T.h - 14, threat, WEAPONS.mg.speed);
-        if (m.aimT > 0.25) s.fire = true;
+        if (m.aimT > 0.45) s.fire = true;
         m.aimT += dt;
       } else m.aimT = 0;
       if (!v.driver || v.mgAmmo <= 0) b.tap(s, 'interact');
@@ -120,10 +128,10 @@ function thinkHuman(b, s, dt) {
   if (h.mount) {
     const mt = h.mount, ox = mt.x, oy = mt.y - (mt.gy || 38);
     const t = botMountTarget(h, mt, visibleThreat ? threat : null);
-    if (t && mt.ammo > 0) {
+    if (t && mt.ammo > 0 && botSpot(b, t.ref || t, dist(ox, oy, t.x, t.y), dt)) {
       s.aimAngle = botAim(b, ox, oy, t, WEAPONS.mrifle.speed);
       m.aimT += dt; m.mCalm = 0;
-      if (m.aimT > 0.3 - 0.12 * L.react) s.fire = true;
+      if (m.aimT > 0.45 - 0.15 * L.react) s.fire = true;
     } else {
       m.aimT = 0; m.mCalm = (m.mCalm || 0) + dt;
       const sideThreat = threat && (threat.x - mt.x) * mt.dir < 0 && td < 300; // дрон зайшов зі спини — тікати від кулемета
@@ -144,11 +152,11 @@ function thinkHuman(b, s, dt) {
     // з нори — відстрілюватися, визираючи з отвору
     const pa = canPeek(sp) && !h.hideAnim && h.weapon && visibleThreat ? botAim(b, sp.x, sp.y - (sp.type === 'bunker' ? 16 : 7), threat, WEAPONS[h.weapon.type].speed) : null;
     const inSector = pa != null && aimRel(pa) >= AIM_SECTOR[sp.type][0] && aimRel(pa) <= AIM_SECTOR[sp.type][1];
-    if (inSector && td < WEAPONS[h.weapon.type].range * (0.55 + 0.3 * L.aim)) {
+    if (inSector && td < WEAPONS[h.weapon.type].range * (0.55 + 0.3 * L.aim) && botSpot(b, threat, td, dt)) {
       s.aim = true;
       s.aimAngle = pa;
       m.aimT += dt;
-      if (m.aimT > 0.35 - 0.15 * L.react) s.fire = true;
+      if (m.aimT > 0.42 - 0.17 * L.react) s.fire = true;
       m.hideT = 0;
       return;
     }
@@ -188,7 +196,7 @@ function thinkHuman(b, s, dt) {
     if (h.reb > 0 && td < 300 && Math.random() < L.react * 0.5) b.tap(s, 'special');
     // схованка поруч?
     if (m.hideCd <= 0) {
-      if (nearHide(h) && !nearPickup(h) && !nearVehicle(h)) { b.tap(s, 'interact'); return; }
+      if (nearHide(h) && (interactTarget(h) || {}).kind === 'hide') { b.tap(s, 'interact'); return; }
       let best = null, bd = 220;
       for (const sp of W.hides) {
         if (sp.ruined) continue;
@@ -208,14 +216,14 @@ function thinkHuman(b, s, dt) {
   // каністра заважає стріляти — викинути, якщо є зброя й загроза
   if (h.canister && h.weapon && visibleThreat) b.tap(s, 'slot1');
   // перев'язка, коли спокійно
-  if (h.hp < 55 && h.medkits > 0 && !danger && h.onGround && h.healT <= 0) b.tap(s, 'slot2');
+  if (h.hp < 55 && h.medkits > 0 && !danger && h.onGround && h.healT <= 0 && !(G.time - (m.spotSeen || -9) < 2) && !(m.healCd > G.time)) { b.tap(s, 'slot2'); m.healCd = G.time + 3; } // ворог на очах — не перев'язуватися; перервали — не одразу знову
   if (h.healT > 0 && !danger) stop = true;
 
   // бонус «Альоша»: увімкнути, коли дрон близько; далі автонаведення — просто стріляти
   if (h.alCharges > 0 && h.alT <= 0 && threat && td < 450 && h.onGround) { s.aim = true; b.tap(s, 'special'); }
   if (h.alT > 0) { s.fire = G.drones.some((d) => dist(d.x, d.y, h.x, h.y - 30) < 900); stop = false; }
   // стрільба: по дрону, а в командах — і по ворожій людині
-  else if (h.weapon && h.onGround && (shootT = botShootTarget(h, visibleThreat ? threat : null, td, L))) {
+  else if (h.weapon && h.onGround && (shootT = botShootTarget(h, visibleThreat ? threat : null, td, L)) && botSpot(b, shootT.ref || shootT, dist(h.x, h.y - 30, shootT.x, shootT.y), dt)) {
     stop = true;
     // для точності — присісти перед стрільбою (досвідчені боти)
     if (h.stance === 'stand' && L.aim >= 0.8 && td > 200) { if (Math.abs(h.vx) < 140) b.tap(s, 'down'); }
@@ -223,7 +231,7 @@ function thinkHuman(b, s, dt) {
     const mz = muzzle(h);
     s.aimAngle = botAim(b, mz.x, mz.y, shootT, WEAPONS[h.weapon.type].speed);
     m.aimT += dt;
-    if (m.aimT > 0.35 - 0.15 * L.react) s.fire = true;
+    if (m.aimT > 0.42 - 0.17 * L.react) s.fire = true;
   } else m.aimT = 0;
   // ---- оборона: ворожа піхота в полі зору — укриття, вогонь з-за нього; поранений відходить. Кожен хоче вижити ----
   const foe = isTeam() ? visibleFoe(h, 560) : null;
@@ -297,7 +305,7 @@ function thinkHuman(b, s, dt) {
 
   // підбір і техніка
   const pk = nearPickup(h);
-  if (pk && botWants(h, pk)) b.tap(s, 'interact');
+  if (pk && botWants(h, pk) && (interactTarget(h) || {}).kind === 'pickup') b.tap(s, 'interact');
   else if (!isTeam() && m.noVehT <= 0 && nearVehicle(h)) {
     const v = nearVehicle(h);
     if (v.driver || v.fuel > 1.5 || h.cans > 0) b.tap(s, 'interact');
@@ -342,7 +350,7 @@ function thinkHuman(b, s, dt) {
     } else if (h.guard && calm && h.stance === 'stand') {
       // 2) охоронець спокійно — ставить кулемет на виході (і у вікні, якщо виходів уже прикрито)
       const mt = mountTarget(h);
-      if (mt && !mt.bad && (mt.gp.door || (mt.b.mounts || 0) >= 1) && Math.random() < dt * 2) { s.aim = true; b.tap(s, 'interact'); m.mountCd = 3; return; }
+      if (mt && !mt.bad && (mt.gp.door || (mt.b.mounts || 0) >= 1) && Math.random() < dt * 2) { b.tap(s, 'mount'); m.mountCd = 3; return; }
     }
   }
   // 3) латати діри в перекриттях фанерою — лише коли спокійно (бій попереду важливіший)
